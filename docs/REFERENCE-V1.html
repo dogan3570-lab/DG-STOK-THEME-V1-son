@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="tr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DG STOK V5.0 - Enterprise Entegrasyon Paneli</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: 'var(--primary-color)',
+                        primaryHover: 'var(--primary-hover)',
+                        darkBg: 'var(--dark-bg)',
+                        darkPanel: 'var(--dark-panel)',
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #6366f1;
+            --primary-hover: #4f46e5;
+            --dark-bg: #090d16;
+            --dark-panel: #111827;
+        }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        
+        /* Light Mod: Göz yormayan, sade ve net kurumsal görünüm */
+        .panel-theme {
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02);
+            transition: all 0.2s ease-in-out;
+        }
+        
+        /* Dark Mod: Derin, modern ve göz almayan koyu paneller */
+        .dark .panel-theme {
+            background-color: var(--dark-panel);
+            border-color: #1f2937;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+        }
+        
+        .active-nav {
+            background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
+            color: white !important;
+            box-shadow: 0 8px 20px -4px color-mix(in srgb, var(--primary-color) 40%, transparent);
+        }
+        
+        /* Özel Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+        .dark ::-webkit-scrollbar-thumb { background: #374151; }
+    </style>
+</head>
+<body class="bg-slate-100 dark:bg-darkBg text-slate-700 dark:text-slate-100 transition-colors duration-300 antialiased overflow-hidden">
+
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <aside class="w-64 panel-theme m-4 rounded-2xl flex flex-col justify-between shrink-0 hidden lg:flex">
+            <div>
+                <!-- Logo & Version -->
+                <div class="h-20 flex items-center gap-3 px-6 border-b border-slate-100 dark:border-slate-800/60">
+                    <div class="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-white shadow-lg shadow-primary/30">
+                        <i class="fa-solid fa-cubes-stacked text-lg"></i>
+                    </div>
+                    <div>
+                        <h1 class="font-bold text-sm tracking-wide text-slate-900 dark:text-white">DG STOK</h1>
+                        <span class="text-[10px] text-primary font-bold tracking-widest uppercase">V5.0 Enterprise</span>
+                    </div>
+                </div>
+
+                <!-- Navigation Links -->
+                <nav class="p-4 space-y-1.5 text-sm font-medium">
+                    <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl active-nav transition-all">
+                        <i class="fa-solid fa-chart-pie w-5"></i> Kontrol Paneli
+                    </a>
+                    <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all">
+                        <i class="fa-solid fa-box-archive w-5"></i> Ürün & Stok
+                    </a>
+                    <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all">
+                        <i class="fa-solid fa-arrows-rotate w-5"></i> Entegrasyonlar
+                    </a>
+                    <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all">
+                        <i class="fa-solid fa-receipt w-5"></i> Sipariş Yönetimi
+                    </a>
+                    <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all">
+                        <i class="fa-solid fa-sliders w-5"></i> Sistem Ayarları
+                    </a>
+                </nav>
+            </div>
+
+            <!-- Sistem Durum Özeti -->
+            <div class="p-4 m-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+                <div class="flex items-center gap-2.5">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span class="text-xs font-semibold text-slate-600 dark:text-slate-300">API Gateway</span>
+                </div>
+                <span class="text-[10px] bg-emerald-500/10 text-emerald-500 px-2 py-0.5 rounded font-bold">Stabil</span>
+            </div>
+        </aside>
+
+        <!-- Main Body Wrapper -->
+        <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
+            <!-- Top Navbar -->
+            <header class="h-20 panel-theme mx-4 mt-4 px-6 rounded-2xl flex items-center justify-between shrink-0">
+                <div class="flex items-center gap-4">
+                    <div class="relative hidden sm:block">
+                        <i class="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-slate-400 text-xs"></i>
+                        <input type="text" placeholder="SKU, Barkod veya Ürün Adı Ara..." class="bg-slate-100 dark:bg-slate-800/50 text-xs pl-10 pr-4 py-2.5 rounded-xl w-72 focus:outline-none focus:ring-2 focus:ring-primary/50 border-none transition-all text-slate-800 dark:text-slate-100">
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <!-- Kişiselleştirme Modal Butonu -->
+                    <button onclick="toggleCustomizer()" class="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-primary transition-all shadow-sm">
+                        <i class="fa-solid fa-palette text-sm"></i>
+                    </button>
+
+                    <!-- Dark / Light Mod Toggle -->
+                    <button onclick="toggleTheme()" class="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-primary transition-all shadow-sm">
+                        <i id="theme-icon" class="fa-solid fa-sun text-sm"></i>
+                    </button>
+
+                    <!-- Tam Ekran Modu -->
+                    <button onclick="toggleFullScreen()" class="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-primary transition-all shadow-sm hidden sm:flex">
+                        <i class="fa-solid fa-expand text-sm"></i>
+                    </button>
+
+                    <!-- Kullanıcı Bilgisi -->
+                    <div class="flex items-center gap-3 pl-4 border-l border-slate-200 dark:border-slate-800">
+                        <div class="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center font-bold text-xs shadow-md shadow-primary/20">
+                            DG
+                        </div>
+                        <div class="hidden md:block">
+                            <div class="text-xs font-bold leading-none text-slate-800 dark:text-slate-100">Doğan Gılavuz</div>
+                            <div class="text-[10px] text-slate-400 mt-1">Sistem Yöneticisi</div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Scrollable Content Area -->
+            <main class="flex-1 overflow-y-auto p-4 space-y-6">
+                
+                <!-- Page Greeting & Actions -->
+                <div class="panel-theme p-6 rounded-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div>
+                        <h2 class="text-xl font-bold tracking-tight text-slate-900 dark:text-white">Entegrasyon Performans Merkezi</h2>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Trendyol, n11 ve Körfez Mikro İhracat verileriniz anlık senkronize edilmektedir.</p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button class="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-semibold rounded-xl transition-all flex items-center gap-2">
+                            <i class="fa-solid fa-rotate text-primary"></i> Manuel Senkronize Et
+                        </button>
+                        <button class="px-4 py-2.5 bg-primary hover:bg-primaryHover text-white text-xs font-semibold rounded-xl shadow-lg shadow-primary/25 transition-all flex items-center gap-2">
+                            <i class="fa-solid fa-plus"></i> Yeni Ürün Aktar
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stats Metric Cards -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div class="panel-theme p-5 rounded-2xl flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">Toplam Stok Havuzu</span>
+                            <div class="w-9 h-9 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center text-sm">
+                                <i class="fa-solid fa-boxes-stacked"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 flex items-baseline gap-2">
+                            <span class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">24,892</span>
+                            <span class="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">%4.2 Artış</span>
+                        </div>
+                    </div>
+                    
+                    <div class="panel-theme p-5 rounded-2xl flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">Aktif Siparişler</span>
+                            <div class="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center text-sm">
+                                <i class="fa-solid fa-cart-shopping"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 flex items-baseline gap-2">
+                            <span class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">142</span>
+                            <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-md">12 Yeni Sipariş</span>
+                        </div>
+                    </div>
+
+                    <div class="panel-theme p-5 rounded-2xl flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">Pazaryeri Sağlığı</span>
+                            <div class="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center text-sm">
+                                <i class="fa-solid fa-circle-nodes"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 flex items-baseline gap-2">
+                            <span class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">%99.8</span>
+                            <span class="text-[10px] font-bold text-slate-400">Kusursuz Bağlantı</span>
+                        </div>
+                    </div>
+
+                    <div class="panel-theme p-5 rounded-2xl flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">Mikro İhracat Havuzu</span>
+                            <div class="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-500 flex items-center justify-center text-sm">
+                                <i class="fa-solid fa-earth-americas"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 flex items-baseline gap-2">
+                            <span class="text-lg font-bold tracking-tight text-purple-600 dark:text-purple-400">Körfez Bölgesi</span>
+                            <span class="text-[10px] font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-md">Aktif</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Modern Data Table -->
+                <div class="panel-theme rounded-2xl overflow-hidden">
+                    <div class="p-6 border-b border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
+                        <div>
+                            <h3 class="font-bold text-sm text-slate-900 dark:text-white">Son Entegre Edilen Ürünler</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">Pazar yeri fiyat ve stok güncellemelerinin anlık dökümü.</p>
+                        </div>
+                        <button class="text-xs text-primary font-bold hover:underline">Tümünü İncele</button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-xs">
+                            <thead>
+                                <tr class="bg-slate-50 dark:bg-slate-800/30 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-100 dark:border-slate-800/60">
+                                    <th class="py-3.5 px-6 font-semibold">Ürün Adı & SKU</th>
+                                    <th class="py-3.5 px-6 font-semibold">Pazar Yeri</th>
+                                    <th class="py-3.5 px-6 font-semibold">Stok</th>
+                                    <th class="py-3.5 px-6 font-semibold">Satış Fiyatı</th>
+                                    <th class="py-3.5 px-6 font-semibold">Durum</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 dark:divide-slate-800/60">
+                                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+                                    <td class="py-4 px-6">
+                                        <div class="font-bold text-slate-900 dark:text-white">Modern Mutfak Seti (6 Parça)</div>
+                                        <div class="text-[11px] text-slate-400 mt-0.5 font-mono">SKU: HBT-MUT-01</div>
+                                    </td>
+                                    <td class="py-4 px-6"><span class="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20">Trendyol</span></td>
+                                    <td class="py-4 px-6 font-bold text-slate-800 dark:text-slate-200">45 Adet</td>
+                                    <td class="py-4 px-6 font-bold font-mono text-slate-800 dark:text-slate-200">1,250.00 ₺</td>
+                                    <td class="py-4 px-6"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Yayında</span></td>
+                                </tr>
+                                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+                                    <td class="py-4 px-6">
+                                        <div class="font-bold text-slate-900 dark:text-white">Dekoratif Cam Vazo Organizer</div>
+                                        <div class="text-[11px] text-slate-400 mt-0.5 font-mono">SKU: HBT-DEC-08</div>
+                                    </td>
+                                    <td class="py-4 px-6"><span class="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">n11</span></td>
+                                    <td class="py-4 px-6 font-bold text-slate-800 dark:text-slate-200">12 Adet</td>
+                                    <td class="py-4 px-6 font-bold font-mono text-slate-800 dark:text-slate-200">480.00 ₺</td>
+                                    <td class="py-4 px-6"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Yayında</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- GELİŞMİŞ KİŞİSELLEŞTİRME MODALI -->
+    <div id="customizer-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="panel-theme w-full max-w-md p-6 rounded-3xl space-y-6 relative shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
+                <h3 class="font-bold text-base flex items-center gap-2 text-slate-900 dark:text-white"><i class="fa-solid fa-wand-magic-sparkles text-primary"></i> Arayüz Kişiselleştirme</h3>
+                <button onclick="toggleCustomizer()" class="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <!-- Vurgu Rengi Seçimi -->
+            <div>
+                <label class="text-xs font-bold text-slate-400 block mb-3">Kurumsal Vurgu Rengi</label>
+                <div class="grid grid-cols-5 gap-3">
+                    <button onclick="setThemeColor('#6366f1', '#4f46e5')" class="h-10 rounded-xl bg-indigo-500 hover:scale-105 transition-transform shadow-md shadow-indigo-500/20"></button>
+                    <button onclick="setThemeColor('#06b6d4', '#0891b2')" class="h-10 rounded-xl bg-cyan-500 hover:scale-105 transition-transform shadow-md shadow-cyan-500/20"></button>
+                    <button onclick="setThemeColor('#22c55e', '#16a34a')" class="h-10 rounded-xl bg-emerald-500 hover:scale-105 transition-transform shadow-md shadow-emerald-500/20"></button>
+                    <button onclick="setThemeColor('#f59e0b', '#d97706')" class="h-10 rounded-xl bg-amber-500 hover:scale-105 transition-transform shadow-md shadow-amber-500/20"></button>
+                    <button onclick="setThemeColor('#ec4899', '#db2777')" class="h-10 rounded-xl bg-pink-500 hover:scale-105 transition-transform shadow-md shadow-pink-500/20"></button>
+                </div>
+            </div>
+
+            <!-- Özel HEX Renk Paleti -->
+            <div>
+                <label class="text-xs font-bold text-slate-400 block mb-2">Özel Renk Seç (HEX)</label>
+                <div class="flex items-center gap-3">
+                    <input type="color" id="custom-color-input" onchange="setThemeColor(this.value, this.value)" class="w-12 h-10 rounded-xl cursor-pointer bg-transparent border border-slate-200 dark:border-slate-700 p-1">
+                    <span class="text-xs text-slate-500">İstediğiniz kurumsal tonu doğrudan seçebilirsiniz.</span>
+                </div>
+            </div>
+
+            <!-- Dark Arka Plan Tonu Ayarı -->
+            <div>
+                <label class="text-xs font-bold text-slate-400 block mb-3">Koyu Mod Arka Plan Yoğunluğu</label>
+                <div class="grid grid-cols-3 gap-2">
+                    <button onclick="setDarkBg('#090d16', '#111827')" class="py-2.5 rounded-xl bg-[#090d16] border border-slate-700 text-xs font-bold text-slate-300">Derin Siyah</button>
+                    <button onclick="setDarkBg('#0f172a', '#1e293b')" class="py-2.5 rounded-xl bg-[#0f172a] border border-slate-700 text-xs font-bold text-slate-300">Grafit</button>
+                    <button onclick="setDarkBg('#18181b', '#27272a')" class="py-2.5 rounded-xl bg-[#18181b] border border-slate-700 text-xs font-bold text-slate-300">Kömür</button>
+                </div>
+            </div>
+
+            <button onclick="toggleCustomizer()" class="w-full py-3 bg-primary text-white rounded-xl text-xs font-bold shadow-lg shadow-primary/25 hover:opacity-90 transition-opacity">Değişiklikleri Uygula</button>
+        </div>
+    </div>
+
+    <!-- JavaScript Fonksiyonları -->
+    <script>
+        function toggleTheme() {
+            const html = document.documentElement;
+            const icon = document.getElementById('theme-icon');
+            if (html.classList.contains('dark')) {
+                html.classList.remove('dark');
+                icon.classList.remove('fa-moon');
+                icon.classList.add('fa-sun');
+                localStorage.setItem('theme', 'light');
+            } else {
+                html.classList.add('dark');
+                icon.classList.remove('fa-sun');
+                icon.classList.add('fa-moon');
+                localStorage.setItem('theme', 'dark');
+            }
+        }
+
+        function toggleCustomizer() {
+            const modal = document.getElementById('customizer-modal');
+            modal.classList.toggle('hidden');
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        function setThemeColor(color, hoverColor) {
+            document.documentElement.style.setProperty('--primary-color', color);
+            document.documentElement.style.setProperty('--primary-hover', hoverColor);
+            localStorage.setItem('primaryColor', color);
+            localStorage.setItem('primaryHover', hoverColor);
+        }
+
+        function setDarkBg(bg, panel) {
+            document.documentElement.style.setProperty('--dark-bg', bg);
+            document.documentElement.style.setProperty('--dark-panel', panel);
+            localStorage.setItem('darkBg', bg);
+            localStorage.setItem('darkPanel', panel);
+        }
+
+        // Sayfa Yüklendiğinde Kayıtlı Tercihleri Yükle
+        window.addEventListener('DOMContentLoaded', () => {
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            const savedColor = localStorage.getItem('primaryColor') || '#6366f1';
+            const savedHover = localStorage.getItem('primaryHover') || '#4f46e5';
+            const savedDarkBg = localStorage.getItem('darkBg') || '#090d16';
+            const savedDarkPanel = localStorage.getItem('darkPanel') || '#111827';
+
+            if (savedTheme === 'light') {
+                document.documentElement.classList.remove('dark');
+                document.getElementById('theme-icon').classList.replace('fa-moon', 'fa-sun');
+            } else {
+                document.documentElement.classList.add('dark');
+                document.getElementById('theme-icon').classList.replace('fa-sun', 'fa-moon');
+            }
+
+            setThemeColor(savedColor, savedHover);
+            setDarkBg(savedDarkBg, savedDarkPanel);
+        });
+    </script>
+</body>
+</html>

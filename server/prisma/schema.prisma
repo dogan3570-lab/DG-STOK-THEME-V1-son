@@ -1,0 +1,570 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String     @id @default(uuid())
+  email       String     @unique
+  password    String
+  role        String     @default("OPERATOR")
+  name        String?
+  createdAt   DateTime   @default(now())
+  preferences String?
+  auditLogs   AuditLog[]
+}
+
+model Marketplace {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  name      String
+  apiKey    String?
+  apiSecret String?
+  apiUrl    String?
+  apiStatus String   @default("unknown")
+  active    Boolean  @default(true)
+  merchantId String?
+  storeId   String?
+  settings  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+  productMarketplaceStates ProductMarketplaceState[]
+  categoryMappings CategoryMapping[]
+  templates ListingTemplate[]
+  pricingRules MarketplacePricingRule[]
+}
+
+model XmlSource {
+  id                      String            @id @default(uuid())
+  name                    String
+  company                 String?
+  sourceType              String            @default("MANUAL")
+  url                     String?
+  username                String?
+  password                String?
+  currency                String            @default("TRY")
+  vatRate                 Float             @default(20)
+  updateStock             Boolean           @default(true)
+  updatePrice             Boolean           @default(true)
+  updateImages            Boolean           @default(true)
+  active                  Boolean           @default(true)
+  scheduleIntervalMinutes Int               @default(60)
+  cronExpression          String?
+  lastRunAt               DateTime?
+  lastSuccessAt           DateTime?
+  lastError               String?
+  connectionStatus        String            @default("unknown")
+  purchasePriceVatStatus  String            @default("dahil")
+  pricingRules            String?
+  fieldMapping            String?
+  purchasePriceField      String?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  products                Product[]
+  importRuns              XmlImportRun[]
+}
+
+model Product {
+  id              String     @id @default(uuid())
+  xmlKey          String     @unique
+  title           String?
+  seoTitle        String?
+  seoDescription  String?
+  description     String?
+  technicalSpecs  String?
+  images          String?
+  sku             String?
+  barcode         String?
+  categoryId      String?
+  brandId         String?
+  categoryMatch   Boolean    @default(false)
+  variantMatch    Boolean    @default(false)
+  variantStatus   String     @default("WAITING_AI")
+  brandMatch      Boolean    @default(false)
+  templateMatch   Boolean    @default(false)
+  stock           Int        @default(0)
+  minStock        Int        @default(0)
+  purchasePrice   Float?
+  salePrice       Float?
+  vatRate         Float?
+  profitMargin    Float?
+  status          String     @default("XML")
+  errorMessage    String?
+  xmlSourceId     String?
+  link            String?
+  unit            String?
+  currency        String?
+  detail          String?
+  supplierCategory String?
+  brandUsageType  String     @default("XML_BRAND")
+  customBrandName String?
+  xmlBrandName    String?
+  originalTitle   String?
+  computedTitle   String?
+  prefixEnabled   Boolean    @default(false)
+  aiSuggestedCategoryId String?
+  aiScore         Float?
+  matchedBy       String?
+  lastMatchDate   DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  xmlSource       XmlSource?  @relation(fields: [xmlSourceId], references: [id])
+  brand           Brand?      @relation(fields: [brandId], references: [id])
+  category        Category?   @relation(fields: [categoryId], references: [id])
+  variants        Variant[]
+  marketplaceStates ProductMarketplaceState[]
+  workflowState   WorkflowState?
+  workflowTimelines WorkflowTimeline[]
+
+  @@index([xmlSourceId])
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([status])
+  @@index([sku])
+  @@index([barcode])
+  @@index([variantMatch])
+  @@index([categoryMatch, brandMatch, variantMatch, templateMatch])
+}
+
+model VariantAnalysis {
+  id               String   @id @default(uuid())
+  productId        String
+  confidence       Int
+  source           String
+  status           String
+  reason           String?
+  parentSku        String?
+  groupId          String?
+  xmlHasParent     Boolean  @default(false)
+  checkResults     String?
+  autoFixAttempted Boolean  @default(false)
+  autoFixResult    String?
+  validationPassed Boolean  @default(false)
+  familyId         String?
+  profileApplied   Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([productId])
+  @@index([status])
+  @@index([confidence])
+  @@index([familyId])
+}
+
+model ProductMarketplaceState {
+  id            String      @id @default(uuid())
+  productId     String
+  marketplaceId String
+  status        String      @default("XML")
+  listingId     String?
+  listingUrl    String?
+  lastActionAt  DateTime?
+  externalRef   String?
+  price         Float?
+  stock         Int?
+  errorMessage  String?
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+  product       Product     @relation(fields: [productId], references: [id])
+
+  @@unique([productId, marketplaceId])
+  @@index([marketplaceId])
+  @@index([status])
+}
+
+model XmlImportRun {
+  id              String                @id @default(uuid())
+  sourceId        String
+  startedAt       DateTime              @default(now())
+  finishedAt      DateTime?
+  durationMs      Int?
+  status          String                @default("running")
+  totalProducts   Int                   @default(0)
+  newProducts     Int                   @default(0)
+  updatedProducts Int                   @default(0)
+  failedProducts  Int                   @default(0)
+  skippedProducts Int                   @default(0)
+  deletedProducts Int                   @default(0)
+  errorDetail     String?
+  itemResults     XmlImportItemResult[]
+  source          XmlSource             @relation(fields: [sourceId], references: [id])
+
+  @@index([sourceId])
+  @@index([startedAt])
+}
+
+model XmlImportItemResult {
+  id          String       @id @default(uuid())
+  importRunId String
+  xmlKey      String
+  sku         String?
+  outcome     String       @default("created")
+  errorDetail String?
+  createdAt   DateTime     @default(now())
+  importRun   XmlImportRun @relation(fields: [importRunId], references: [id])
+
+  @@index([importRunId])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorUserId String?
+  action      String
+  entity      String?
+  entityId    String?
+  meta        String?
+  details     String?
+  ipAddress   String?
+  duration    Int?
+  success     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  actorUser   User?    @relation(fields: [actorUserId], references: [id])
+
+  @@index([createdAt])
+  @@index([entity, action])
+}
+
+model Category {
+  id              String     @id @default(uuid())
+  name            String     @unique
+  externalId      String?
+  parentId        String?
+  variantRequired Boolean    @default(true)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  parent          Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children        Category[] @relation("CategoryHierarchy")
+  mappings        CategoryMapping[]
+  products        Product[]
+}
+
+model Brand {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  externalId String?
+  logo      String?
+  prefixEnabled Boolean @default(false)
+  prefixFormat  String @default("MARKA® {title}")
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  brandMappings BrandMapping[]
+  products  Product[]
+}
+
+model Variant {
+  id        String   @id @default(uuid())
+  name      String
+  value     String
+  productId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  product   Product  @relation(fields: [productId], references: [id])
+
+  @@unique([productId, name, value])
+  @@index([name])
+  @@index([productId])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  type      String
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  userId    String?
+  createdAt DateTime @default(now())
+}
+
+model Order {
+  id            String      @id @default(uuid())
+  orderNo       String      @unique
+  channel       String
+  marketplaceId String?
+  customerName  String
+  customerEmail String?
+  customerPhone String?
+  status        String      @default("new")
+  total         Float
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  marketplace   Marketplace? @relation(fields: [marketplaceId], references: [id])
+
+  @@index([marketplaceId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CategoryMapping {
+  id            String       @id @default(uuid())
+  categoryId    String
+  marketplaceId String?
+  externalId    String?
+  externalName  String?
+  externalPath  String?
+  source        String       @default("manual")
+  confidence    Float?
+  active        Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  marketplace   Marketplace? @relation(fields: [marketplaceId], references: [id])
+  category      Category     @relation(fields: [categoryId], references: [id])
+
+  @@unique([categoryId, marketplaceId, source])
+}
+
+model BrandMapping {
+  id            String   @id @default(uuid())
+  xmlBrandName  String   @unique
+  marketplaceKey String?
+  dgBrandId     String
+  confidence    Float?
+  isAuto        Boolean  @default(false)
+  productCount  Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  dgBrand       Brand    @relation(fields: [dgBrandId], references: [id])
+}
+
+model BrandLog {
+  id            String   @id @default(uuid())
+  action        String
+  xmlBrandName  String?
+  dgBrandId     String?
+  dgBrandName   String?
+  oldValue      String?
+  newValue      String?
+  prefixChanged Boolean  @default(false)
+  productCount  Int      @default(0)
+  details       String?
+  actorUserId   String?
+  createdAt     DateTime @default(now())
+}
+
+model ListingTemplate {
+  id                   String       @id @default(uuid())
+  name                 String
+  marketplaceId        String?
+  titleFormat          String?
+  description          String?
+  priceFormula         String?
+  commissionRate       Float?
+  vatRate              Float?
+  cargoSettings        String?
+  imageSettings        String?
+  productId            String?
+  categoryId           String?
+  brandId              String?
+  variantSettings      String?
+  active               Boolean      @default(true)
+  priceSource          String       @default("XML_PURCHASE")
+  vatMode              String       @default("INCLUDED")
+  priceMultiplier      Float        @default(1.0)
+  priceFixedAmount     Float        @default(0)
+  priceRangeRules      String?
+  excludeRules         String?
+  titleVariables       String?
+  titleMaxLength       Int?
+  titleSeoMaxLength    Int?
+  descriptionBlocks    String?
+  descriptionMaxLength Int?
+  imageMinCount        Int?
+  imageMaxCount        Int?
+  imageOrder           String?
+  imageWatermark       String?
+  imageBackground      String?
+  imageMinSize         Int?
+  imageFormat          String?
+  stockMultiplier      Int?
+  stockMinValue        Int?
+  stockMaxValue        Int?
+  stockHide            Boolean      @default(false)
+  stockAutoDeactivate  Boolean      @default(false)
+  barcodePrefix        String?
+  barcodeSuffix        String?
+  barcodeAutoGenerate  Boolean      @default(false)
+  validationRules      String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  marketplace          Marketplace? @relation(fields: [marketplaceId], references: [id])
+}
+
+model WorkflowState {
+  id           String   @id @default(uuid())
+  productId    String   @unique
+  status       String   @default("IMPORTED")
+  readiness    Int      @default(0)
+  stepCategory String?
+  stepBrand    String?
+  stepVariant  String?
+  stepTitle    String?
+  stepSeo      String?
+  stepPrice    String?
+  stepImage    String?
+  stepBarcode  String?
+  stepStock    String?
+  errorCount   Int      @default(0)
+  lastError    String?
+  aiSuggested  Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  product      Product  @relation(fields: [productId], references: [id])
+}
+
+model WorkflowTimeline {
+  id          String   @id @default(uuid())
+  productId   String
+  event       String
+  details     String?
+  actorUserId String?
+  createdAt   DateTime @default(now())
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@index([productId])
+}
+
+model Setting {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+}
+
+model ForbiddenWord {
+  id           String   @id @default(uuid())
+  word         String   @unique
+  category     String   @default("OTHER")
+  riskLevel    String   @default("HIGH")
+  marketplaces String?
+  isActive     Boolean  @default(true)
+  autoFix      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model MarketplaceVariantRule {
+  id                   String   @id @default(uuid())
+  marketplaceKey       String   @unique
+  marketplaceName      String
+  requiredAttributes   String
+  optionalAttributes   String
+  maxVariantsPerGroup  Int      @default(100)
+  variantGroupRequired Boolean  @default(true)
+  colorMapping         String?
+  sizeMapping          String?
+  attributeRules       String?
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model MarketplaceTitleConfig {
+  id           String   @id @default(uuid())
+  key          String   @unique
+  name         String
+  logo         String?
+  maxLength    Int      @default(150)
+  seoMaxLength Int      @default(70)
+  createdAt    DateTime @default(now())
+}
+
+model AIKnowledge {
+  id          String    @id @default(uuid())
+  module      String
+  input       String
+  output      String
+  confidence  Float     @default(0)
+  useCount    Int       @default(0)
+  acceptCount Int       @default(0)
+  rejectCount Int       @default(0)
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([module, input, output])
+}
+
+model AIDecisionLog {
+  id          String   @id @default(uuid())
+  productId   String
+  module      String
+  suggestion  String
+  confidence  Float
+  reason      String?
+  autoApplied Boolean  @default(false)
+  accepted    Boolean?
+  actorUserId String?
+  createdAt   DateTime @default(now())
+}
+
+model AIProviderConfig {
+  id                String    @id @default(uuid())
+  provider          String    @unique
+  displayName       String
+  apiKeyEncrypted   String?
+  apiKeyIv          String?
+  apiKeyTag         String?
+  baseUrl           String
+  model             String?
+  priority          Int       @default(1)
+  active            Boolean   @default(false)
+  lastStatus        String    @default("unknown")
+  lastError         String?
+  totalRequests     Int       @default(0)
+  successfulRequests Int      @default(0)
+  failedRequests    Int       @default(0)
+  lastUsedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+model VariantThreshold {
+  key       String   @id
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+model MarketplacePricingRule {
+  id             String   @id @default(uuid())
+  marketplaceId  String
+  productId      String?
+  categoryId     String?
+  minPrice       Float    @default(0)
+  maxPrice       Float    @default(0)
+  applyVat       Boolean  @default(true)
+  profitMargin   Float    @default(0)
+  rounding       String   @default("NORMAL")
+  active         Boolean  @default(true)
+  priority       Int      @default(3)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id])
+
+  @@index([marketplaceId])
+  @@index([productId])
+  @@index([categoryId])
+}
+
+model ListingLog {
+  id               String   @id @default(uuid())
+  productId        String
+  marketplaceId    String
+  ruleId           String?
+  ruleType         String   @default("NONE")
+  purchasePrice    Float    @default(0)
+  vatIncludedPrice Float    @default(0)
+  profitMargin     Float    @default(0)
+  rounding         String   @default("NORMAL")
+  calculatedPrice  Float    @default(0)
+  status           String   @default("SUCCESS")
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+
+  @@index([productId])
+  @@index([marketplaceId])
+  @@index([createdAt])
+}

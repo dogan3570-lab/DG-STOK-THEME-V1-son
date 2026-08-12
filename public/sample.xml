@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<products>
+  <product>
+    <xmlKey>DGTEST-MUT-001</xmlKey>
+    <name>Modern Mutfak Seti (6 Parça)</name>
+    <sku>DGTEST-MUT-01</sku>
+    <barcode>8680000001</barcode>
+    <stock>45</stock>
+    <minStock>5</minStock>
+    <price>1250.00</price>
+    <listPrice>1499.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>HomBoard</brand>
+    <top_category>Ev &amp; Yaşam</top_category>
+    <main_category>Mutfak</main_category>
+    <sub_category>Mutfak Takımları</sub_category>
+    <category>Modern Mutfak Seti</category>
+    <description>6 parçadan oluşan modern mutfak seti. İlk kalite malzeme ile üretilmiştir.</description>
+    <images>https://img.samplecdn.com/DGTEST-mut-01-1.jpg,https://img.samplecdn.com/DGTEST-mut-01-2.jpg,https://img.samplecdn.com/DGTEST-mut-01-3.jpg</images>
+    <link>https://example.com/urun/DGTEST-mut-01</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-MUT-002</xmlKey>
+    <name>Dekoratif Tabak Seti (12 Parça)</name>
+    <sku>DGTEST-MUT-02</sku>
+    <barcode>8680000002</barcode>
+    <stock>120</stock>
+    <minStock>10</minStock>
+    <price>480.00</price>
+    <listPrice>590.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>HomBoard</brand>
+    <top_category>Ev &amp; Yaşam</top_category>
+    <main_category>Mutfak</main_category>
+    <sub_category>Tabak Setleri</sub_category>
+    <category>Tabak Seti</category>
+    <description>12 parça dekoratif tabak seti. Seramik yapıda, bulaşık makinesinde yıkanabilir.</description>
+    <images>https://img.samplecdn.com/DGTEST-mut-02-1.jpg,https://img.samplecdn.com/DGTEST-mut-02-2.jpg</images>
+    <link>https://example.com/urun/DGTEST-mut-02</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-DEC-008</xmlKey>
+    <name>Dekoratif Cam Vazo Organizer</name>
+    <sku>DGTEST-DEC-08</sku>
+    <barcode>8680000008</barcode>
+    <stock>12</stock>
+    <minStock>3</minStock>
+    <price>180.00</price>
+    <listPrice>240.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>DekoLine</brand>
+    <top_category>Ev &amp; Yaşam</top_category>
+    <main_category>Ev Dekorasyonu</main_category>
+    <sub_category>Vazolar</sub_category>
+    <category>Cam Vazo</category>
+    <description>Dekoratif cam vazo ve organizer. Şık ve fonksiyonel ev aksesuarı.</description>
+    <images>https://img.samplecdn.com/DGTEST-dec-08-1.jpg,https://img.samplecdn.com/DGTEST-dec-08-2.jpg</images>
+    <link>https://example.com/urun/DGTEST-dec-08</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-ELE-010</xmlKey>
+    <name>Bluetooth Kulaklık Pro Max</name>
+    <sku>DGTEST-ELE-10</sku>
+    <barcode>8680000010</barcode>
+    <stock>0</stock>
+    <minStock>20</minStock>
+    <price>899.00</price>
+    <listPrice>1199.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>SoundMax</brand>
+    <top_category>Elektronik</top_category>
+    <main_category>Elektronik</main_category>
+    <sub_category>Kulaklıklar</sub_category>
+    <category>Bluetooth Kulaklık</category>
+    <description>Gürültü engelleme özellikli bluetooth kulaklık. 30 saat pil ömrü.</description>
+    <images>https://img.samplecdn.com/DGTEST-ele-10-1.jpg,https://img.samplecdn.com/DGTEST-ele-10-2.jpg</images>
+    <link>https://example.com/urun/DGTEST-ele-10</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-ELE-011</xmlKey>
+    <name>Akıllı Saat Sport 42mm</name>
+    <sku>DGTEST-ELE-11</sku>
+    <barcode>8680000011</barcode>
+    <stock>64</stock>
+    <minStock>8</minStock>
+    <price>1450.00</price>
+    <listPrice>1700.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>SoundMax</brand>
+    <top_category>Elektronik</top_category>
+    <main_category>Elektronik</main_category>
+    <sub_category>Akıllı Saatler</sub_category>
+    <category>Akıllı Saat</category>
+    <description>Kalp ritmi, adım sayar ve su geçirmezlik özellikli akıllı saat.</description>
+    <images>https://img.samplecdn.com/DGTEST-ele-11-1.jpg</images>
+    <link>https://example.com/urun/DGTEST-ele-11</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-GRD-015</xmlKey>
+    <name>Piknik Seti Deluxe</name>
+    <sku>DGTEST-GRD-15</sku>
+    <barcode>8680000015</barcode>
+    <stock>88</stock>
+    <minStock>6</minStock>
+    <price>690.00</price>
+    <listPrice>850.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>OutdoorMax</brand>
+    <top_category>Bahçe &amp; Outdoor</top_category>
+    <main_category>Bahçe</main_category>
+    <sub_category>Piknik Setleri</sub_category>
+    <category>Piknik Seti</category>
+    <description>4 kişilik deluxe piknik seti. Katlanabilir sandalye ve soğutucu çanta dahil.</description>
+    <images>https://img.samplecdn.com/DGTEST-grd-15-1.jpg,https://img.samplecdn.com/DGTEST-grd-15-2.jpg,https://img.samplecdn.com/DGTEST-grd-15-3.jpg</images>
+    <link>https://example.com/urun/DGTEST-grd-15</link>
+    <unit>Takım</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-TXT-020</xmlKey>
+    <name>Tekstil Koltuğu Krem</name>
+    <sku>DGTEST-TXT-20</sku>
+    <barcode>8680000020</barcode>
+    <stock>27</stock>
+    <minStock>4</minStock>
+    <price>3250.00</price>
+    <listPrice>3900.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>MobilyaDunyasi</brand>
+    <top_category>Ev &amp; Yaşam</top_category>
+    <main_category>Dekorasyon</main_category>
+    <sub_category>Koltuklar</sub_category>
+    <category>Tekstil Koltuk</category>
+    <description>Krem renk tekstil koltuk. Rahat oturum, premium kumaş döşeme.</description>
+    <images>https://img.samplecdn.com/DGTEST-txt-20-1.jpg,https://img.samplecdn.com/DGTEST-txt-20-2.jpg</images>
+    <link>https://example.com/urun/DGTEST-txt-20</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-TXT-021</xmlKey>
+    <name>Koltuk Beden Seçenekleri Standart</name>
+    <sku>DGTEST-TXT-21-L</sku>
+    <barcode>8680000021</barcode>
+    <stock>34</stock>
+    <minStock>4</minStock>
+    <price>3800.00</price>
+    <listPrice>4200.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>MobilyaDunyasi</brand>
+    <top_category>Ev &amp; Yaşam</top_category>
+    <main_category>Dekorasyon</main_category>
+    <sub_category>Koltuklar</sub_category>
+    <category>Tekstil Koltuk</category>
+    <description>Standart beden tekstil koltuk seçeneği.</description>
+    <images>https://img.samplecdn.com/DGTEST-txt-21-1.jpg</images>
+    <link>https://example.com/urun/DGTEST-txt-21</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-TXT-022</xmlKey>
+    <name>Koltuk Beden Seçenekleri Kral</name>
+    <sku>DGTEST-TXT-21-XL</sku>
+    <barcode>8680000022</barcode>
+    <stock>18</stock>
+    <minStock>4</minStock>
+    <price>4400.00</price>
+    <listPrice>4900.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>MobilyaDunyasi</brand>
+    <top_category>Ev &amp; Yaşam</top_category>
+    <main_category>Dekorasyon</main_category>
+    <sub_category>Koltuklar</sub_category>
+    <category>Tekstil Koltuk</category>
+    <description>Kral beden tekstil koltuk seçeneği.</description>
+    <images>https://img.samplecdn.com/DGTEST-txt-22-1.jpg</images>
+    <link>https://example.com/urun/DGTEST-txt-22</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-OFT-025</xmlKey>
+    <name>Ergonomik Ofis Koltuğu</name>
+    <sku>DGTEST-OFT-25</sku>
+    <barcode>8680000025</barcode>
+    <stock>0</stock>
+    <minStock>10</minStock>
+    <price>850.00</price>
+    <listPrice>1050.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>OfficePro</brand>
+    <top_category>Ofis</top_category>
+    <main_category>Ofis Mobilyaları</main_category>
+    <sub_category>Ofis Koltukları</sub_category>
+    <category>Ofis Koltuğu</category>
+    <description>Bel desteği ve yükseklik ayarlı ergonomik ofis koltuğu.</description>
+    <images>https://img.samplecdn.com/DGTEST-oft-25-1.jpg,https://img.samplecdn.com/DGTEST-oft-25-2.jpg</images>
+    <link>https://example.com/urun/DGTEST-oft-25</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-LGT-030</xmlKey>
+    <name>Led Şerit Aydınlatma 5m RGB</name>
+    <sku>DGTEST-LGT-30</sku>
+    <barcode>8680000030</barcode>
+    <stock>210</stock>
+    <minStock>20</minStock>
+    <price>349.00</price>
+    <listPrice>429.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>LightLab</brand>
+    <top_category>Ev &amp; Yaşam</top_category>
+    <main_category>Aydınlatma</main_category>
+    <sub_category>Led Şerit</sub_category>
+    <category>Led Şerit</category>
+    <description>RGB led şerit aydınlatma, 5 metre, uzaktan kumandalı.</description>
+    <images>https://img.samplecdn.com/DGTEST-lgt-30-1.jpg,https://img.samplecdn.com/DGTEST-lgt-30-2.jpg</images>
+    <link>https://example.com/urun/DGTEST-lgt-30</link>
+    <unit>Metre</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-SHG-035</xmlKey>
+    <name>Üniversal Telefon Kılıfı Standart Siyah</name>
+    <sku>DGTEST-SHG-35-BLK</sku>
+    <barcode>8680000035</barcode>
+    <stock>300</stock>
+    <minStock>50</minStock>
+    <price>89.00</price>
+    <listPrice>120.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>ShieldCase</brand>
+    <top_category>Elektronik</top_category>
+    <main_category>Aksesuar</main_category>
+    <sub_category>Kılıflar</sub_category>
+    <category>Telefon Kılıfı</category>
+    <description>Siyah mat üniversal telefon kılıfı, darbe korumalı.</description>
+    <images>https://img.samplecdn.com/DGTEST-shg-35-1.jpg</images>
+    <link>https://example.com/urun/DGTEST-shg-35</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+  <product>
+    <xmlKey>DGTEST-SHG-036</xmlKey>
+    <name>Üniversal Telefon Kılıfı Standart Mavi</name>
+    <sku>DGTEST-SHG-35-BLU</sku>
+    <barcode>8680000036</barcode>
+    <stock>260</stock>
+    <minStock>50</minStock>
+    <price>89.00</price>
+    <listPrice>120.00</listPrice>
+    <tax>20</tax>
+    <currency>TRY</currency>
+    <brand>ShieldCase</brand>
+    <top_category>Elektronik</top_category>
+    <main_category>Aksesuar</main_category>
+    <sub_category>Kılıflar</sub_category>
+    <category>Telefon Kılıfı</category>
+    <description>Mavi mat üniversal telefon kılıfı, darbe korumalı.</description>
+    <images>https://img.samplecdn.com/DGTEST-shg-36-1.jpg</images>
+    <link>https://example.com/urun/DGTEST-shg-36</link>
+    <unit>Adet</unit>
+    <active>1</active>
+  </product>
+</products>
