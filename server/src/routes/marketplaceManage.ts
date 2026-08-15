@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
-import { requireAuth } from '../auth/authMiddleware.ts';
+import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
 
 const router = Router();
 
 // GET / - List marketplaces with stats
-router.get('/', requireAuth, async (_req: Request, res: Response) => {
+router.get('/', requireAuth, requireRole(['ADMIN']), async (_req: Request, res: Response) => {
   try {
     const items = await prisma.marketplace.findMany({
       orderBy: { createdAt: 'desc' },
@@ -41,7 +41,7 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
 });
 
 // POST / - Create marketplace
-router.post('/', requireAuth, async (req: Request, res: Response) => {
+router.post('/', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
     const { key, name, apiUrl, apiKey, apiSecret, merchantId, sellerId, storeId, settings, active } = req.body || {};
     if (!key || !name) {
@@ -74,9 +74,13 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
 });
 
 // PUT /:id - Update marketplace
-router.put('/:id', requireAuth, async (req: Request, res: Response) => {
+router.put('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id ?? '');
+    // Validate UUID format
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz marketplace ID formatı' } });
+    }
     const data: Record<string, unknown> = {};
     if (req.body?.name !== undefined) data.name = req.body.name;
     if (req.body?.apiUrl !== undefined) data.apiUrl = req.body.apiUrl;
@@ -97,39 +101,63 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
 
     const mp = await prisma.marketplace.update({ where: { id }, data });
     res.json({ ok: true, item: mp });
-  } catch (error) {
+  } catch (error: any) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+    }
     console.error('Error updating marketplace:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update marketplace' } });
   }
 });
 
-// DELETE /:id - Delete marketplace
-router.delete('/:id', requireAuth, async (req: Request, res: Response) => {
+// DELETE /:id - Delete marketplace (ilişkili kayıtlarla birlikte)
+router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id ?? '');
-    await prisma.marketplace.delete({ where: { id } });
+    const existing = await prisma.marketplace.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+    }
+
+    // FK kısıtlarını aşmak için önce ilişkili kayıtları sil, sonra marketplace'i sil
+    await prisma.$transaction(async (tx) => {
+      await tx.productMarketplaceState.deleteMany({ where: { marketplaceId: id } });
+      await tx.categoryMapping.deleteMany({ where: { marketplaceId: id } });
+      await tx.listingTemplate.deleteMany({ where: { marketplaceId: id } });
+      await tx.marketplacePricingRule.deleteMany({ where: { marketplaceId: id } });
+      await tx.order.deleteMany({ where: { marketplaceId: id } });
+      await tx.marketplace.delete({ where: { id } });
+    });
+
     res.json({ ok: true, message: 'Pazaryeri silindi' });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === 'P2025') {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+    }
     console.error('Error deleting marketplace:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to delete marketplace' } });
   }
 });
 
 // POST /:id/test - Test connection
-router.post('/:id/test', requireAuth, async (req: Request, res: Response) => {
+router.post('/:id/test', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id ?? '');
     const mp = await prisma.marketplace.findUnique({ where: { id }, select: { id: true, name: true, apiUrl: true } });
     if (!mp) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
     }
-    // Simulate connection test - in real impl would call marketplace API
-    const success = mp.apiUrl != null && mp.apiUrl.length > 0;
+    // Gerçek pazaryeri API entegrasyonu bulunmuyor; bu uç simülasyon yapmaz,
+    // yalnızca "yapılandırılmadı" durumunu dürüstçe bildirir.
     await prisma.marketplace.update({
       where: { id },
-      data: { apiStatus: success ? 'connected' : 'error' },
+      data: { apiStatus: 'unknown' },
     });
-    res.json({ ok: success, message: success ? 'Bağlantı başarılı' : 'Bağlantı başarısız — API URL tanımlı değil' });
+    res.json({
+      ok: false,
+      simulated: true,
+      message: 'Gerçek pazaryeri API entegrasyonu yapılandırılmadı (NOT CONFIGURED) — bu uç simülasyon değildir',
+    });
   } catch (error) {
     console.error('Error testing marketplace:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Connection test failed' } });

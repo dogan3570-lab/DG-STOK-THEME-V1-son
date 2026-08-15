@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
-import { requireAuth } from '../auth/authMiddleware.ts';
+import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
 import { invalidateDashboardStatsCache } from './dashboard.ts';
 import { fetchXmlFromUrl, importXmlProducts, parseXmlImportPayload, cancelSync, isSyncLocked } from '../services/xmlImport.ts';
 
@@ -71,7 +71,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 // GET /xml-sources/:id - Get single XML source with full details
 router.get('/:id', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const source = await prisma.xmlSource.findUnique({
       where: { id },
       include: {
@@ -86,7 +86,9 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'XML source not found' } });
     }
 
-    res.json(source);
+    const { password, ...safeSource } = source;
+    void password;
+    res.json(safeSource);
   } catch (error) {
     console.error('Error fetching XML source:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch XML source' } });
@@ -94,7 +96,7 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
 });
 
 // POST /xml-sources - Create new XML source (supplier)
-router.post('/', requireAuth, async (req: Request, res: Response) => {
+router.post('/', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
     const {
       name, company, sourceType, url, username, password,
@@ -139,9 +141,9 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
 });
 
 // PUT /xml-sources/:id - Update XML source
-router.put('/:id', requireAuth, async (req: Request, res: Response) => {
+router.put('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const {
       name, company, sourceType, url, username, password,
       currency, vatRate, active, scheduleIntervalMinutes, cronExpression,
@@ -185,9 +187,9 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
 });
 
 // DELETE /xml-sources/:id - Delete XML source (products kept, xmlSourceId cleared)
-router.delete('/:id', requireAuth, async (req: Request, res: Response) => {
+router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
 
     await prisma.xmlImportItemResult.deleteMany({
       where: { importRun: { sourceId: id } },
@@ -213,7 +215,7 @@ router.delete('/:id', requireAuth, async (req: Request, res: Response) => {
 // POST /xml-sources/:id/test - Test XML connection
 router.post('/:id/test', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const source = await prisma.xmlSource.findUnique({ where: { id } });
 
     if (!source) {
@@ -298,7 +300,7 @@ router.post('/:id/test', requireAuth, async (req: Request, res: Response) => {
 // POST /xml-sources/:id/analyze - Detailed XML analysis
 router.post('/:id/analyze', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const source = await prisma.xmlSource.findUnique({ where: { id } });
 
     if (!source) {
@@ -442,7 +444,7 @@ async function runSyncInBackground(sourceId: string, sourceUrl: string, sourceNa
 // POST /xml-sources/:id/sync - Manual sync trigger (runs in background)
 router.post('/:id/sync', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const source = await prisma.xmlSource.findUnique({ where: { id } });
 
     if (!source) {
@@ -500,7 +502,7 @@ router.post('/sync-all', requireAuth, async (req: Request, res: Response) => {
 // POST /xml-sources/:id/cancel - Cancel a running sync
 router.post('/:id/cancel', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const source = await prisma.xmlSource.findUnique({ where: { id } });
 
     if (!source) {
@@ -530,7 +532,7 @@ router.post('/:id/cancel', requireAuth, async (req: Request, res: Response) => {
 // GET /xml-sources/:id/history - Get sync history
 router.get('/:id/history', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const { limit = 20 } = req.query;
 
     const runs = await prisma.xmlImportRun.findMany({
@@ -549,7 +551,7 @@ router.get('/:id/history', requireAuth, async (req: Request, res: Response) => {
 // GET /xml-sources/:id/products - Get products imported from a specific XML source
 router.get('/:id/products', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const search = String(req.query?.search ?? '').trim();
     const page = Math.max(1, Number(req.query?.page ?? 1));
     const limit = Math.min(100, Math.max(10, Number(req.query?.limit ?? 50)));

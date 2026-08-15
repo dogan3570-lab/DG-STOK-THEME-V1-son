@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url';
 import { prisma } from './db/prisma.ts';
 import { env } from './env.ts';
 import { attachRoutes } from './routes/index.ts';
-import { ensureDefaultAdminUser, seedDefaultMarketplaces, seedDefaultAIProviders } from './bootstrap.ts';
+import { ensureDefaultAdminUser, seedDefaultMarketplaces, seedDefaultAIProviders, ensureDefaultListingTemplates } from './bootstrap.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,7 +62,7 @@ export function buildServer() {
         if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) return callback(null, true);
         if (corsWhitelist.includes(origin)) return callback(null, true);
         console.warn(`[CORS] Blocked origin: ${origin}`);
-        return callback(new Error('Not allowed by CORS'));
+        return callback(null, false);
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -127,10 +127,12 @@ export function buildServer() {
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) return res.status(401).json({ ok: false, error: 'invalid_credentials' });
 
+    const usesDefaultPassword = await bcrypt.compare('admin123', user.password);
+
     const token = jwt.sign(
       { role: user.role, sub: user.id },
       env.JWT_SECRET,
-      env.JWT_EXPIRES_IN ? ({ expiresIn: env.JWT_EXPIRES_IN } as jwt.SignOptions) : undefined
+      ({ expiresIn: env.JWT_EXPIRES_IN ?? '8h' } as jwt.SignOptions)
     );
 
     res.cookie('token', token, {
@@ -143,6 +145,7 @@ export function buildServer() {
     return res.json({
       ok: true,
       token,
+      mustChangePassword: usesDefaultPassword,
       user: { id: user.id, email: user.email, role: user.role },
     });
   });
@@ -184,6 +187,60 @@ export function buildServer() {
     }
   });
 
+  app.post('/auth/change-password', authLimiter, async (req, res) => {
+    let token = req.cookies?.token;
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+      }
+    }
+    if (!token) {
+      const xToken = req.headers['x-auth-token'] || req.headers['x-token'];
+      if (xToken) token = String(xToken);
+    }
+    if (!token) {
+      return res.status(401).json({ ok: false, error: { code: 'UNAUTHORIZED', message: 'unauthorized' } });
+    }
+
+    let decoded: jwt.JwtPayload & { sub?: string };
+    try {
+      decoded = jwt.verify(token, env.JWT_SECRET) as jwt.JwtPayload & { sub?: string };
+    } catch {
+      return res.status(401).json({ ok: false, error: { code: 'UNAUTHORIZED', message: 'invalid token' } });
+    }
+    if (!decoded?.sub) {
+      return res.status(401).json({ ok: false, error: { code: 'UNAUTHORIZED', message: 'unauthorized' } });
+    }
+
+    const currentPassword = String(req.body?.currentPassword ?? '');
+    const newPassword = String(req.body?.newPassword ?? '');
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ ok: false, error: 'current_password_and_new_password_required' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ ok: false, error: 'new_password_too_short' });
+    }
+    if (newPassword === 'admin123') {
+      return res.status(400).json({ ok: false, error: 'new_password_is_default' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: String(decoded.sub) } });
+    if (!user) {
+      return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'User not found' } });
+    }
+
+    const valid = await bcrypt.compare(currentPassword, user.password);
+    if (!valid) {
+      return res.status(401).json({ ok: false, error: 'invalid_current_password' });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({ where: { id: user.id }, data: { password: hashed } });
+
+    return res.json({ ok: true, message: 'password_changed' });
+  });
+
   attachRoutes(app);
 
   // Serve frontend static files (both dev and production)
@@ -208,6 +265,11 @@ export function buildServer() {
     console.log(`[server] Serving frontend from: ${webDistPath}`);
     app.use(express.static(webDistPath));
 
+    // API 404: SPA catch-all'dan önce /api/* isteklerine JSON 404 döndür
+    app.use('/api/*', (_req, res) => {
+      res.status(404).json({ error: 'API endpoint not found' });
+    });
+
     app.get('*', (_req, res) => {
       res.sendFile(path.join(webDistPath, 'index.html'));
     });
@@ -230,9 +292,11 @@ if (process.env.NODE_ENV !== 'test') {
 
     try {
       await ensureDefaultAdminUser();
-      console.log('[server] admin user ready (admin@dgstok.com / admin123)');
+      console.log('[server] admin user ready');
       await seedDefaultMarketplaces();
       console.log('[server] default marketplaces seeded');
+      await ensureDefaultListingTemplates();
+      console.log('[server] default listing templates ensured');
       await seedDefaultAIProviders();
       console.log('[server] default AI providers seeded');
     } catch (error) {

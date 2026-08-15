@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
-import { requireAuth } from '../auth/authMiddleware.ts';
+import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
 
 const router = Router();
 
@@ -21,7 +21,7 @@ router.get('/', requireAuth, async (_req: Request, res: Response) => {
 });
 
 // PUT /settings - Save settings
-router.put('/', requireAuth, async (req: Request, res: Response) => {
+router.put('/', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
     const data = req.body?.settings;
     if (!data || typeof data !== 'object') {

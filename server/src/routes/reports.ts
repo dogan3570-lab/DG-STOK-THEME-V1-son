@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth } from '../auth/authMiddleware.ts';
+import { READY_FILTER } from '../services/readiness.ts';
 
 const router = Router();
 
@@ -29,7 +30,7 @@ router.get('/dashboard', requireAuth, async (_req: Request, res: Response) => {
       statusCounts,
     ] = await Promise.all([
       prisma.product.count(),
-      prisma.product.count({ where: { status: 'READY', categoryMatch: true, brandMatch: true, templateMatch: true } }),
+      prisma.product.count({ where: READY_FILTER }),
       prisma.product.count({ where: { status: 'ERROR' } }),
       prisma.order.count(),
       prisma.order.count({ where: { createdAt: { gte: todayStart } } }),
@@ -78,7 +79,7 @@ router.get('/products', requireAuth, async (req: Request, res: Response) => {
   try {
     const [totalProducts, readyProducts, errorProducts, lowStock, missingCategory, missingBrand, missingTemplate, xmlSourceStats] = await Promise.all([
       prisma.product.count(),
-      prisma.product.count({ where: { status: 'READY', categoryMatch: true, brandMatch: true, templateMatch: true } }),
+      prisma.product.count({ where: READY_FILTER }),
       prisma.product.count({ where: { status: 'ERROR' } }),
       prisma.product.count({ where: { stock: { lte: 0 } } }),
       prisma.product.count({ where: { categoryMatch: false } }),

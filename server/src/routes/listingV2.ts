@@ -147,11 +147,31 @@ router.delete('/rules/:id', requireAuth, requireRole(['ADMIN']), async (req: Aut
 
 router.post('/calculate', requireAuth, async (req: AuthedRequest, res: any) => {
   try {
-    const { purchasePrice, vatRate, profitMargin, rounding, applyVat } = req.body;
-    const result = calculatePriceV5(
-      Number(purchasePrice), Number(vatRate || 20),
-      { profitMargin: Number(profitMargin || 0), rounding: rounding || 'none', applyVat: applyVat !== false, minPrice: 0, maxPrice: 999999 }
-    );
+    const { purchasePrice, vatRate, profitMargin, rounding, applyVat } = req.body || {};
+
+    // Validate required fields
+    if (purchasePrice === undefined || purchasePrice === null) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'purchasePrice zorunludur' } });
+    }
+    if (vatRate === undefined || vatRate === null) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'vatRate zorunludur' } });
+    }
+
+    const pp = Number(purchasePrice);
+    const vr = Number(vatRate);
+
+    if (!Number.isFinite(pp) || pp < 0) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz purchasePrice' } });
+    }
+    if (!Number.isFinite(vr) || vr < 0) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz vatRate' } });
+    }
+
+    const profitM = profitMargin !== undefined ? Number(profitMargin) : 0;
+    const round = rounding || 'none';
+    const apply = applyVat !== false;
+
+    const result = calculatePriceV5(pp, vr, { profitMargin: profitM, rounding: round, applyVat: apply, minPrice: 0, maxPrice: 999999 });
     res.json({ vatIncluded: result.vatIncludedPrice, beforeRounding: result.calculatedPrice, finalPrice: result.roundedPrice });
   } catch (e) { handleRouteError(res, e); }
 });

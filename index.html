@@ -23,315 +23,7 @@
     </script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --primary-color: #6366f1;
-            --primary-hover: #4f46e5;
-            --dark-bg: #090d16;
-            --dark-panel: #111827;
-        }
-        body { font-family: 'Plus Jakarta Sans', sans-serif; }
-
-        /* ============ LIGHT THEME PRESETS ============ */
-        /* Classic (default) */
-        .light-preset-classic {
-            --light-page-bg: #f1f5f9;
-            --light-panel-bg: #ffffff;
-            --light-surface: #f8fafc;
-            --light-border-strong: #b8c4d1;
-            --light-border-soft: #d0d8e2;
-            --light-divider: #e2e8f0;
-            --light-table-header: #f8fafc;
-            --light-table-border: #e2e8f0;
-            --light-text-primary: #0f172a;
-            --light-text-secondary: #64748b;
-            --light-hover: #f0f0ff;
-        }
-        /* Ocean */
-        .light-preset-ocean {
-            --light-page-bg: #f0f7ff;
-            --light-panel-bg: #ffffff;
-            --light-surface: #f5faff;
-            --light-border-strong: #b0cce6;
-            --light-border-soft: #c8ddf0;
-            --light-divider: #d4e6f6;
-            --light-table-header: #f0f7ff;
-            --light-table-border: #d4e6f6;
-            --light-text-primary: #0c1929;
-            --light-text-secondary: #4a6a8a;
-            --light-hover: #e8f4ff;
-        }
-        /* Emerald */
-        .light-preset-emerald {
-            --light-page-bg: #f0fdf4;
-            --light-panel-bg: #ffffff;
-            --light-surface: #f5fef8;
-            --light-border-strong: #b0dcc4;
-            --light-border-soft: #c8e8d6;
-            --light-divider: #d6f0e0;
-            --light-table-header: #f0fdf4;
-            --light-table-border: #d6f0e0;
-            --light-text-primary: #0a1f14;
-            --light-text-secondary: #3d7a5a;
-            --light-hover: #ecfdf5;
-        }
-        /* Violet */
-        .light-preset-violet {
-            --light-page-bg: #f5f3ff;
-            --light-panel-bg: #ffffff;
-            --light-surface: #faf8ff;
-            --light-border-strong: #c4b8e6;
-            --light-border-soft: #d6ccf0;
-            --light-divider: #e0d8f6;
-            --light-table-header: #f5f3ff;
-            --light-table-border: #e0d8f6;
-            --light-text-primary: #110a29;
-            --light-text-secondary: #6a4a8a;
-            --light-hover: #ede9fe;
-        }
-        /* Warm */
-        .light-preset-warm {
-            --light-page-bg: #fef7ee;
-            --light-panel-bg: #ffffff;
-            --light-surface: #fffbf5;
-            --light-border-strong: #dcc4b0;
-            --light-border-soft: #e8d6c8;
-            --light-divider: #f0e0d6;
-            --light-table-header: #fef7ee;
-            --light-table-border: #f0e0d6;
-            --light-text-primary: #1f140a;
-            --light-text-secondary: #7a5a3d;
-            --light-hover: #fff7ed;
-        }
-
-        /* ============ BORDER STRENGTH ============ */
-        .border-strength-soft {
-            --light-border-strong: #d0d8e2;
-            --light-border-soft: #e2e8f0;
-            --light-divider: #e8ecf0;
-            --light-table-border: #e8ecf0;
-        }
-        .border-strength-strong {
-            --light-border-strong: #94a3b8;
-            --light-border-soft: #b0bcc8;
-            --light-divider: #bcc8d4;
-            --light-table-border: #bcc8d4;
-        }
-
-        /* ============ LIGHT MODE PROFESSIONAL SaaS UI ============ */
-        :root {
-            --hover-pastel: #f0f0ff;
-            --light-border-strong: #b8c4d1;
-            --light-border-soft: #d0d8e2;
-            --light-panel-bg: #ffffff;
-            --light-panel-subtle: #f8fafc;
-            --light-page-bg: #f1f5f9;
-            --light-divider: #e2e8f0;
-            --light-input-border: #b8c4d1;
-            --light-input-focus: var(--primary-color);
-            --light-shadow-sm: 0 1px 3px rgba(16,24,40,0.04), 0 1px 2px rgba(16,24,40,0.06);
-            --light-shadow-md: 0 4px 6px -1px rgba(16,24,40,0.05), 0 2px 4px -2px rgba(16,24,40,0.05);
-            --light-shadow-lg: 0 10px 15px -3px rgba(16,24,40,0.06), 0 4px 6px -4px rgba(16,24,40,0.04);
-            --light-table-header: #f8fafc;
-            --light-table-border: #e2e8f0;
-            --light-kpi-blue: #eff6ff;
-            --light-kpi-red: #fef2f2;
-            --light-kpi-green: #f0fdf4;
-            --light-kpi-amber: #fffbeb;
-            --light-kpi-purple: #faf5ff;
-        }
-        .dark {
-            --hover-pastel: rgba(51, 65, 85, 0.30);
-        }
-
-        /* --- PANEL THEME: Light Mode SaaS Look --- */
-        .panel-theme {
-            background-color: var(--light-panel-bg);
-            border: 1px solid var(--light-border-strong);
-            box-shadow: var(--light-shadow-md);
-            transition: all 0.2s ease-in-out;
-        }
-        .dark .panel-theme {
-            background-color: var(--dark-panel);
-            border-color: #1f2937;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-        }
-
-        /* --- TEXT CONTRAST: Light Mode --- */
-        :root:not(.dark) body { color: #1e293b; }
-        :root:not(.dark) .text-slate-900 { color: #0f172a; }
-        :root:not(.dark) .text-slate-800 { color: #1e293b; }
-        :root:not(.dark) .text-slate-700 { color: #334155; }
-        :root:not(.dark) .text-slate-600 { color: #475569; }
-        :root:not(.dark) .text-slate-500 { color: #64748b; }
-        :root:not(.dark) .text-slate-400 { color: #94a3b8; }
-        :root:not(.dark) .text-slate-300 { color: #cbd5e1; }
-
-        /* --- BORDERS: Soft but visible --- */
-        :root:not(.dark) .border-slate-100 { border-color: var(--light-divider); }
-        :root:not(.dark) .border-slate-200 { border-color: var(--light-border-strong); }
-        :root:not(.dark) .border-slate-700 { border-color: #94a3b8; }
-        :root:not(.dark) .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: var(--light-divider); }
-
-        /* --- TABLE STYLING: Light Mode --- */
-        :root:not(.dark) table thead th {
-            background-color: var(--light-table-header);
-            border-bottom: 2px solid var(--light-table-border);
-            color: #64748b;
-            font-size: 0.65rem;
-            letter-spacing: 0.05em;
-            text-transform: uppercase;
-        }
-        :root:not(.dark) table tbody tr {
-            border-bottom: 1px solid var(--light-divider);
-        }
-        :root:not(.dark) table tbody tr:last-child {
-            border-bottom: none;
-        }
-
-        /* --- INPUT / SELECT FIELDS --- */
-        .field-input {
-            background-color: #ffffff;
-            border: 1.5px solid var(--light-input-border);
-            color: #1e293b;
-            transition: border-color 0.15s ease, box-shadow 0.15s ease;
-        }
-        .field-input:focus {
-            border-color: var(--light-input-focus);
-            box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 15%, transparent);
-        }
-        .dark .field-input {
-            background-color: #1f2937;
-            border-color: #374151;
-            color: #e2e8f0;
-        }
-        .dark .field-input:focus {
-            border-color: var(--primary-color);
-            box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 20%, transparent);
-        }
-
-        /* --- BUTTON SYSTEM: Meaning-based colors --- */
-        .btn-primary-style {
-            background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
-            color: #ffffff;
-            box-shadow: 0 2px 8px color-mix(in srgb, var(--primary-color) 30%, transparent);
-            transition: all 0.15s ease;
-        }
-        .btn-primary-style:hover {
-            box-shadow: 0 4px 12px color-mix(in srgb, var(--primary-color) 40%, transparent);
-            transform: translateY(-0.5px);
-        }
-        .btn-primary-style:active {
-            transform: translateY(0);
-        }
-        .dark .btn-primary-style {
-            box-shadow: 0 2px 8px color-mix(in srgb, var(--primary-color) 20%, transparent);
-        }
-
-        /* --- KPI CARDS: Colored left accent --- */
-        :root:not(.dark) .panel-theme.p-5.rounded-2xl.flex.flex-col {
-            border-left: 3px solid transparent;
-        }
-
-        /* --- SATIR HOVER --- */
-        .hover-row { transition: background-color 0.15s ease-in-out; }
-        .hover-row:hover { background-color: var(--hover-pastel); }
-
-        /* --- ÜRÜN KÜÇÜK GÖRSELİ --- */
-        .product-thumb {
-            width: 44px; height: 44px; border-radius: 0.6rem;
-            object-fit: cover; flex-shrink: 0;
-            border: 1px solid var(--light-border-soft);
-            background-color: #ffffff;
-        }
-        .product-thumb-ph {
-            width: 44px; height: 44px; border-radius: 0.6rem;
-            display: flex; align-items: center; justify-content: center;
-            background-color: #f1f5f9; color: #94a3b8;
-            border: 1.5px dashed var(--light-border-strong); flex-shrink: 0;
-        }
-        .dark .product-thumb { border-color: #1f2937; background-color: #0f172a; }
-        .dark .product-thumb-ph { color: #475569; background-color: #1e293b; border-color: #374151; }
-
-        /* --- ACTIVE NAV --- */
-        .active-nav {
-            background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
-            color: white !important;
-            box-shadow: 0 8px 20px -4px color-mix(in srgb, var(--primary-color) 40%, transparent);
-        }
-
-        /* --- SCROLLBAR --- */
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
-        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-        .dark ::-webkit-scrollbar-thumb { background: #374151; }
-
-        /* --- DENSITY: Compact Mode --- */
-        .density-compact .panel-theme { padding: 0.75rem !important; }
-        .density-compact table td { padding-top: 0.4rem !important; padding-bottom: 0.4rem !important; }
-        .density-compact .space-y-6 > * + * { margin-top: 0.75rem !important; }
-        .density-compact nav a { padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; }
-
-        /* --- PANEL STYLE: Soft Mode --- */
-        .panel-style-soft .panel-theme {
-            border: none !important;
-            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
-            box-shadow: var(--light-shadow-sm) !important;
-        }
-        .dark .panel-style-soft .panel-theme {
-            background: linear-gradient(135deg, var(--dark-panel) 0%, #1a2332 100%) !important;
-            border: 1px solid #1f2937 !important;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
-        }
-
-        /* --- PANEL STYLE: Bordered Mode --- */
-        .panel-style-bordered .panel-theme {
-            border-width: 2px !important;
-            border-color: var(--light-border-strong) !important;
-            box-shadow: none !important;
-        }
-        .dark .panel-style-bordered .panel-theme {
-            border-color: #2d3748 !important;
-        }
-
-        /* --- BADGE IMPROVED --- */
-        :root:not(.dark) .rounded-md.bg-emerald-100,
-        :root:not(.dark) .rounded-lg.bg-emerald-500\/10 {
-            border: 1px solid rgba(16,185,129,0.15);
-        }
-
-        /* --- NAV SIDEBAR: Better hover contrast --- */
-        :root:not(.dark) nav a:not(.active-nav):hover {
-            background-color: #f1f5f9;
-            color: #334155;
-        }
-
-        /* ===== ÜRÜN HAVUZU: sticky kolonlar + drawer ===== */
-        .pool-table { border-collapse: separate; border-spacing: 0; }
-        .pool-table thead th { position: sticky; top: 0; z-index: 5; background: #fff; }
-        .dark .pool-table thead th { background: var(--dark-panel); }
-        .pool-sticky { position: sticky; left: 0; z-index: 3; background: #fff; }
-        .dark .pool-sticky { background: var(--dark-panel); }
-        .pool-sticky-chk { left: 0; min-width: 46px; width: 46px; z-index: 4; }
-        .pool-sticky-img { left: 46px; min-width: 68px; width: 68px; }
-        .pool-sticky-title { left: 114px; min-width: 230px; }
-        .pool-table thead th.pool-sticky-img { left: 46px; }
-        .pool-table thead th.pool-sticky-title { left: 114px; }
-        .pool-table tbody tr:hover .pool-sticky,
-        .pool-table tbody tr.hover-row:hover .pool-sticky { background: var(--hover-pastel); }
-        #product-drawer-overlay { transition: opacity 0.2s ease; }
-        #product-drawer-overlay > div:last-child { animation: drawerSlideIn 0.22s ease; }
-        @keyframes drawerSlideIn { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-        #products-pagination button:focus, #pool-limits button:focus { outline: none; }
-
-        /* --- CUSTOMIZER ACTIVE INDICATOR --- */
-        .color-swatch-active {
-            ring: 2px solid var(--primary-color);
-            outline: 2px solid var(--primary-color);
-            outline-offset: 2px;
-        }
-    </style>
+    <link rel="stylesheet" href="/theme.css">
 </head>
 <body class="bg-slate-100 dark:bg-darkBg text-slate-700 dark:text-slate-100 transition-colors duration-300 antialiased overflow-hidden">
 
@@ -426,9 +118,30 @@
             <!-- Top Navbar -->
             <header class="h-20 panel-theme mx-4 mt-4 px-6 rounded-2xl flex items-center justify-between shrink-0">
                 <div class="flex items-center gap-4">
-                    <div class="relative hidden sm:block">
+                    <div class="relative hidden sm:block" style="display:none">
                         <i class="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-slate-400 text-xs"></i>
                         <input type="text" id="global-search-input" placeholder="SKU, Barkod veya Ürün Adı Ara..." class="bg-slate-100 dark:bg-slate-800/50 text-xs pl-10 pr-4 py-2.5 rounded-xl w-72 focus:outline-none focus:ring-2 focus:ring-primary/50 border-none transition-all text-slate-800 dark:text-slate-100">
+                    </div>
+                    <!-- Context Selector (üst bordürden kaldırıldı) -->
+                    <div id="context-selector" class="hidden sm:flex items-center gap-2.5 ml-4 pl-4 border-l border-slate-200 dark:border-slate-800" style="display:none">
+                        <div class="flex items-center gap-2">
+                            <label class="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Context:</label>
+                            <select id="context-xml-source" class="field-input text-xs py-2 px-3 rounded-xl w-40" onchange="onContextXmlSourceChange()">
+                                <option value="">XML Kaynağı</option>
+                            </select>
+                            <select id="context-marketplace" class="field-input text-xs py-2 px-3 rounded-xl w-40" onchange="onContextMarketplaceChange()" disabled>
+                                <option value="">Pazaryeri</option>
+                            </select>
+                        </div>
+                        <div id="context-indicator" class="hidden items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary border border-primary/20">
+                            <i class="fa-solid fa-link text-xs"></i>
+                            <span id="context-label" class="text-xs font-semibold"></span>
+                            <button onclick="clearContext()" class="ml-1 p-1 rounded hover:bg-primary/20" title="Context Temizle"><i class="fa-solid fa-xmark text-[10px]"></i></button>
+                        </div>
+                        <div id="context-required" class="hidden items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                            <i class="fa-solid fa-triangle-exclamation text-xs"></i>
+                            <span class="text-xs font-semibold">Context seçilmedi</span>
+                        </div>
                     </div>
                 </div>
 
@@ -483,7 +196,7 @@
                     <!-- Pazaryeri API Bağlantıları -->
                     <div class="panel-theme p-6 rounded-2xl">
                         <div class="flex items-center justify-between mb-4">
-                            <h3 class="text-sm font-bold text-slate-900 dark:text-white">PAZARYERİ API BA�?LANTILARI</h3>
+                            <h3 class="text-sm font-bold text-slate-900 dark:text-white">PAZARYERİ API BAĞLANTILARI</h3>
                             <span id="mp-count" class="text-xs font-semibold text-slate-500 dark:text-slate-400">-</span>
                         </div>
                         <div id="mp-container" class="flex flex-wrap gap-3">
@@ -948,6 +661,7 @@
                             <span class="font-medium">İşleme devam etmek için lütfen yukarıdan <b>Tedarikçi (XML)</b> ve <b>Pazaryeri</b> seçiniz.</span>
                         </div>
 
+                        <div id="cat-content" class="hidden">
                         <div class="mb-4 flex items-center gap-4">
                             <div class="flex-1">
                                 <div class="mb-1 flex items-center justify-between text-xs">
@@ -1030,20 +744,7 @@
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </div>
-
-                <!-- KATEGORİ UYARI MODALI -->
-                <div id="cat-warning-modal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-                    <div class="panel-theme p-6 max-w-sm w-full mx-4 rounded-2xl">
-                        <div class="flex items-start gap-3">
-                            <span class="text-2xl">🚨</span>
-                            <div>
-                                <h3 class="text-base font-bold text-slate-900 dark:text-white mb-1">Eksik Seçim</h3>
-                                <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">Lütfen eşleştirme yapabilmek için hem <b>Tedarikçi (XML)</b> hem de <b>Pazaryeri</b> seçiniz.</p>
-                            </div>
                         </div>
-                        <button onclick="catCloseWarning()" class="mt-4 w-full py-2.5 bg-primary hover:bg-primaryHover text-white font-semibold rounded-xl transition duration-150 text-sm">Anladım</button>
                     </div>
                 </div>
 
@@ -1092,8 +793,8 @@
                             </div>
                             <div class="min-w-[160px]">
                                 <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Pazaryeri</label>
-                                <select id="br-marketplace" onchange="prepBrandCheckMatchBtn()" class="field-input w-full text-xs px-3 py-2.5 rounded-xl">
-                                    <option value="">Tümü (Genel)</option>
+                                <select id="br-marketplace" onchange="prepBrandOnMarketplaceChange()" class="field-input w-full text-xs px-3 py-2.5 rounded-xl">
+                                    <option value="">Pazaryeri Seç...</option>
                                 </select>
                             </div>
                             <div class="min-w-[160px]">
@@ -1190,10 +891,10 @@
 
                     <!-- TEDARIKCI + PAZARYERI SECIM -->
                     <div class="mb-4 flex flex-wrap items-center justify-center gap-3">
-                        <select id="var-xml-source" class="field-input rounded-xl px-4 py-2 text-sm font-medium min-w-[200px]">
+                        <select id="var-xml-source" onchange="prepVariantOnSourceChange()" class="field-input rounded-xl px-4 py-2 text-sm font-medium min-w-[200px]">
                             <option value="">📦 Tedarikçi / XML Seçiniz...</option>
                         </select>
-                        <select id="var-marketplace" class="field-input rounded-xl px-4 py-2 text-sm font-medium min-w-[200px]">
+                        <select id="var-marketplace" onchange="prepVariantOnMpChange()" class="field-input rounded-xl px-4 py-2 text-sm font-medium min-w-[200px]">
                             <option value="">🛒 Pazaryeri Seçiniz...</option>
                         </select>
                     </div>
@@ -1421,8 +1122,14 @@
                         </div>
                         <div>
                             <label class="text-[10px] uppercase tracking-wider font-bold text-slate-500 dark:text-slate-400 block mb-1.5">XML Kaynağı</label>
-                            <select id="rts-source" onchange="rtsLoad()" class="field-input text-xs px-3 py-2.5 rounded-xl min-w-[160px] focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">
+                            <select id="rts-source" onchange="rtsOnSourceChange()" class="field-input text-xs px-3 py-2.5 rounded-xl min-w-[160px] focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">
                                 <option value="">Tüm XML</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-[10px] uppercase tracking-wider font-bold text-slate-500 dark:text-slate-400 block mb-1.5">Pazaryeri Seç</label>
+                            <select id="rts-marketplace" onchange="rtsOnMarketplaceChange()" class="field-input text-xs px-3 py-2.5 rounded-xl min-w-[160px] focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">
+                                <option value="">Tüm Pazaryerleri</option>
                             </select>
                         </div>
                         <div>
@@ -2040,6 +1747,171 @@
         var currentProductsPage = 1;
         var srcProductsPage = 1;
 
+        /* ===================== GLOBAL CONTEXT (CONTEXT-001) ===================== */
+        var contextState = {
+            xmlSourceId: '',
+            xmlSourceName: '',
+            marketplaceId: '',
+            marketplaceName: '',
+            isValid: false
+        };
+
+        function getContextParams() {
+            var params = '';
+            if (contextState.xmlSourceId) params += (params ? '&' : '') + 'xmlSourceId=' + encodeURIComponent(contextState.xmlSourceId);
+            if (contextState.marketplaceId) params += (params ? '&' : '') + 'marketplaceId=' + encodeURIComponent(contextState.marketplaceId);
+            return params;
+        }
+
+        function apiWithContext(url, opts) {
+            var options = opts || {};
+            var separator = url.includes('?') ? '&' : '?';
+            var contextParams = getContextParams();
+            if (contextParams) url = url + separator + contextParams;
+            return api(url, options);
+        }
+
+        function isContextValid() {
+            return contextState.isValid && contextState.xmlSourceId && contextState.marketplaceId;
+        }
+
+        function updateContextUI() {
+            var indicator = document.getElementById('context-indicator');
+            var required = document.getElementById('context-required');
+            var label = document.getElementById('context-label');
+            var xmlSel = document.getElementById('context-xml-source');
+            var mpSel = document.getElementById('context-marketplace');
+
+            if (isContextValid()) {
+                if (indicator) indicator.classList.remove('hidden');
+                if (required) required.classList.add('hidden');
+                if (label) label.textContent = contextState.xmlSourceName + ' + ' + contextState.marketplaceName;
+                if (xmlSel) xmlSel.value = contextState.xmlSourceId;
+                if (mpSel) { mpSel.value = contextState.marketplaceId; mpSel.disabled = false; }
+            } else if (contextState.xmlSourceId) {
+                if (indicator) indicator.classList.add('hidden');
+                if (required) required.classList.remove('hidden');
+                if (xmlSel) xmlSel.value = contextState.xmlSourceId;
+                if (mpSel) mpSel.disabled = false;
+            } else {
+                if (indicator) indicator.classList.add('hidden');
+                if (required) required.classList.remove('hidden');
+                if (xmlSel) xmlSel.value = '';
+                if (mpSel) { mpSel.value = ''; mpSel.disabled = true; }
+            }
+            contextState.isValid = !!(contextState.xmlSourceId && contextState.marketplaceId);
+        }
+
+        function clearContext() {
+            contextState.xmlSourceId = '';
+            contextState.xmlSourceName = '';
+            contextState.marketplaceId = '';
+            contextState.marketplaceName = '';
+            contextState.isValid = false;
+            updateContextUI();
+            syncLocalContextSelectors();
+            clearAllPageData();
+            showToast('Context temizlendi', 'success');
+        }
+
+        function clearAllPageData() {
+            var tbody = document.getElementById('hub-xml-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-6 px-6 text-slate-400 text-center" colspan="6">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('xml-src-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="7">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('src-products-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('products-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="10">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('cat-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('br-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="7">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('var-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('li-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
+        }
+
+        async function loadContextSelectors() {
+            try {
+                var [xsRes, mpRes] = await Promise.all([api('/xml-sources'), api('/marketplaces')]);
+                var xmlSel = document.getElementById('context-xml-source');
+                var mpSel = document.getElementById('context-marketplace');
+                if (xmlSel && xsRes.items) {
+                    var html = '<option value="">XML Kaynağı</option>';
+                    xsRes.items.forEach(function(s) { html += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; });
+                    xmlSel.innerHTML = html;
+                }
+                if (mpSel && mpRes.items) {
+                    var html2 = '<option value="">Pazaryeri</option>';
+                    mpRes.items.forEach(function(m) { html2 += '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>'; });
+                    mpSel.innerHTML = html2;
+                }
+            } catch (e) { console.error('loadContextSelectors error:', e); }
+        }
+
+        function syncLocalContextSelectors() {
+            // Otomatik seçim YAPILMAZ — kullanıcı her alt modülün kendi select'inden seçer.
+            if (typeof catRenderGuardWarn === 'function') catRenderGuardWarn();
+            if (typeof prepVariantCheckGuard === 'function') prepVariantCheckGuard();
+            if (typeof prepListGuard === 'function') prepListGuard();
+        }
+
+        function onContextXmlSourceChange() {
+            var sel = document.getElementById('context-xml-source');
+            var mpSel = document.getElementById('context-marketplace');
+            var val = sel.value;
+            if (val) {
+                contextState.xmlSourceId = val;
+                contextState.xmlSourceName = sel.options[sel.selectedIndex].text;
+                if (mpSel) mpSel.disabled = false;
+            } else {
+                contextState.xmlSourceId = '';
+                contextState.xmlSourceName = '';
+                contextState.marketplaceId = '';
+                contextState.marketplaceName = '';
+                if (mpSel) { mpSel.value = ''; mpSel.disabled = true; }
+            }
+            contextState.isValid = !!(contextState.xmlSourceId && contextState.marketplaceId);
+            updateContextUI();
+            syncLocalContextSelectors();
+            clearAllPageData();
+            refreshCurrentPage();
+        }
+
+        function onContextMarketplaceChange() {
+            var sel = document.getElementById('context-marketplace');
+            var val = sel.value;
+            if (val) {
+                contextState.marketplaceId = val;
+                contextState.marketplaceName = sel.options[sel.selectedIndex].text;
+            } else {
+                contextState.marketplaceId = '';
+                contextState.marketplaceName = '';
+            }
+            contextState.isValid = !!(contextState.xmlSourceId && contextState.marketplaceId);
+            updateContextUI();
+            syncLocalContextSelectors();
+            clearAllPageData();
+            refreshCurrentPage();
+        }
+
+        function refreshCurrentPage() {
+            if (currentPage === 'dashboard') loadDashboard();
+            else if (currentPage === 'xml') loadXmlSources();
+            else if (currentPage === 'products') loadProducts();
+            else if (currentPage === 'prep-categories') prepCategoriesLoad();
+            else if (currentPage === 'prep-brands') prepBrandsLoad();
+            else if (currentPage === 'prep-variants') prepVariantsLoad();
+            else if (currentPage === 'prep-listings') prepListingsLoad();
+            else if (currentPage === 'ready-to-ship') loadReadyToShip();
+            else if (currentPage === 'marketplace') loadMarketplace();
+            else if (currentPage === 'orders') loadOrders();
+            else if (currentPage === 'reports') loadReports();
+            else if (currentPage === 'settings') loadSettings();
+        }
+
         function escapeHtml(str) {
             if (str == null) return '';
             return String(str)
@@ -2070,6 +1942,17 @@
             var options = opts || {};
             var headers = Object.assign({}, options.headers || {});
             if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+            var contextParams = getContextParams();
+            if (contextParams) {
+                contextParams.split('&').forEach(function (pair) {
+                    var key = pair.split('=')[0];
+                    if (!key) return;
+                    // Aynı parametre URL'de zaten varsa çift ekleme (array -> virgüllü string bug'ını önler)
+                    if (url.indexOf(key + '=') === -1) {
+                        url = url + (url.indexOf('?') === -1 ? '?' : '&') + pair;
+                    }
+                });
+            }
             var res = await fetch(url, {
                 method: options.method || 'GET',
                 credentials: 'include',
@@ -2347,13 +2230,64 @@
                 return;
             }
             try {
-                await api('/auth/login', { method: 'POST', body: { email: email, password: password } });
+                var res = await api('/auth/login', { method: 'POST', body: { email: email, password: password } });
+                if (res && res.mustChangePassword) {
+                    hideLogin();
+                    showChangePassword();
+                    return;
+                }
                 hideLogin();
                 showToast('Giriş başarılı, veriler yükleniyor...', 'success');
                 loadApp();
             } catch (e) {
                 errBox.textContent = e.message || 'Giriş başarısız.';
                 errBox.classList.remove('hidden');
+            }
+        }
+
+        function showChangePassword() {
+            var existing = document.getElementById('change-password-modal');
+            if (existing) { existing.classList.remove('hidden'); return; }
+            var modal = document.createElement('div');
+            modal.id = 'change-password-modal';
+            modal.className = 'fixed inset-0 bg-black/70 backdrop-blur-sm z-[65] flex items-center justify-center p-4';
+            modal.innerHTML = '<div class="panel-theme w-full max-w-sm p-8 rounded-3xl space-y-5 relative shadow-2xl">'
+                + '<div class="text-center"><div class="w-14 h-14 mx-auto rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center"><i class="fa-solid fa-key text-xl"></i></div>'
+                + '<h2 class="mt-3 text-lg font-bold text-slate-900 dark:text-white">Şifre Değişikliği Gerekli</h2>'
+                + '<p class="text-xs text-slate-400 mt-1">Varsayılan şifre ile giriş yaptınız. Güvenliğiniz için yeni bir şifre belirleyin.</p></div>'
+                + '<div class="space-y-3">'
+                + '<div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Mevcut Şifre</label><input type="password" id="cp-current" class="field-input w-full mt-1 text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"></div>'
+                + '<div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Yeni Şifre</label><input type="password" id="cp-new" class="field-input w-full mt-1 text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"></div>'
+                + '<div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Yeni Şifre (Tekrar)</label><input type="password" id="cp-new2" class="field-input w-full mt-1 text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"></div>'
+                + '<div id="cp-error" class="hidden text-xs font-semibold text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"></div>'
+                + '<button type="button" onclick="doChangePassword()" class="w-full py-3 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold shadow-lg shadow-primary/25 transition-all flex items-center justify-center gap-2"><i class="fa-solid fa-floppy-disk"></i> Şifreyi Güncelle</button>'
+                + '</div></div>';
+            document.body.appendChild(modal);
+        }
+
+        function hideChangePassword() {
+            var modal = document.getElementById('change-password-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        async function doChangePassword() {
+            var cur = document.getElementById('cp-current').value;
+            var np = document.getElementById('cp-new').value;
+            var np2 = document.getElementById('cp-new2').value;
+            var err = document.getElementById('cp-error');
+            err.classList.add('hidden');
+            if (!cur || !np) { err.textContent = 'Mevcut ve yeni şifre zorunludur.'; err.classList.remove('hidden'); return; }
+            if (np.length < 8) { err.textContent = 'Yeni şifre en az 8 karakter olmalıdır.'; err.classList.remove('hidden'); return; }
+            if (np !== np2) { err.textContent = 'Yeni şifreler eşleşmiyor.'; err.classList.remove('hidden'); return; }
+            try {
+                await api('/auth/change-password', { method: 'POST', body: { currentPassword: cur, newPassword: np } });
+                hideChangePassword();
+                hideLogin();
+                showToast('Şifre başarıyla değiştirildi', 'success');
+                loadApp();
+            } catch (e) {
+                err.textContent = e.message || 'Şifre değiştirilemedi.';
+                err.classList.remove('hidden');
             }
         }
 
@@ -2384,13 +2318,32 @@
                 nav.classList.toggle('text-slate-600', !on);
                 nav.classList.toggle('dark:text-slate-400', !on);
             });
+
+            var contextRequiredPages = ['ready-to-ship', 'orders'];
+            var needsContext = contextRequiredPages.includes(name);
+if (needsContext && !isContextValid()) {
+                showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning');
+                clearAllPageData();
+
+                // Kategori içerik alanı tamamen gizlenir, SADECE orijinal guard mesajı görünür
+                var catToolbar = document.getElementById('cat-toolbar');
+                if (catToolbar) catToolbar.classList.add('hidden');
+                var catStepper = document.getElementById('cat-stepper');
+                if (catStepper) catStepper.classList.add('hidden');
+                var catContent = document.getElementById('cat-content');
+                if (catContent) catContent.classList.add('hidden');
+                var guard = document.getElementById('cat-guard-warn');
+                if (guard) guard.classList.remove('hidden');
+                return;
+            }
+
             if (name === 'xml') showXmlPage('list');
             if (name === 'products') refreshProducts(currentProductsPage);
             if (name === 'prep-categories') prepCategoriesLoad();
             if (name === 'prep-brands') prepBrandsLoad();
             if (name === 'prep-variants') prepVariantsLoad();
             if (name === 'prep-listings') prepListingsLoad();
-            if (name === 'ready-to-ship') rtsLoad();
+            if (name === 'ready-to-ship') rtsInit();
             if (name === 'marketplace') mpManageLoad();
             if (name === 'orders') ordersLoad();
             if (name === 'reports') reportsLoad();
@@ -3069,7 +3022,6 @@
             var q = '/products?page=' + poolState.page + '&limit=' + poolState.limit + '&includeVariants=true';
             if (poolState.search) q += '&search=' + encodeURIComponent(poolState.search);
             if (poolState.status) q += '&status=' + encodeURIComponent(poolState.status);
-            if (poolState.xmlSourceId) q += '&xmlSourceId=' + encodeURIComponent(poolState.xmlSourceId);
             return q;
         }
 
@@ -3253,10 +3205,13 @@
         function poolOnSourceChange() {
             var sel = document.getElementById('pool-source');
             poolState.xmlSourceId = sel ? sel.value : '';
+            contextState.xmlSourceId = poolState.xmlSourceId;
             poolState.page = 1;
             poolState.selected = {};
             poolLoad();
             poolRenderSelection();
+            updateContextUI();
+            syncLocalContextSelectors();
         }
 
         function poolOnStatusChange() {
@@ -3500,19 +3455,116 @@
         }
 
         async function rtsLoadSources() {
+            var apply = function (items, attempt) {
+                attempt = attempt || 0;
+                var el = document.getElementById('rts-source');
+                if (!el) {
+                    // DOM henüz çizilmediyse güvenli fallback ile tekrar dene
+                    if (attempt < 20) setTimeout(function () { apply(items, attempt + 1); }, 100);
+                    return;
+                }
+
+                var html = '<option value="">Tüm XML</option>';
+                items.forEach(function (s) {
+                    html += '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.name) + ' (' + (s.productCount || 0) + ')</option>';
+                });
+                el.innerHTML = html;
+
+                var current = contextState.xmlSourceId || '';
+                if (!(current && items.some(function (s) { return s.id === current; }))) {
+                    var firstActive = items.find(function (s) { return s.active; }) || items[0];
+                    if (firstActive) {
+                        current = firstActive.id;
+                        contextState.xmlSourceId = firstActive.id;
+                        contextState.xmlSourceName = firstActive.name;
+                    }
+                }
+
+                // Zorunlu DOM senkronizasyonu
+                if (current) el.value = current;
+                console.log('[RTS PROOF] XML select seçenek sayısı:', items.length, 'Seçili XML ID:', el.value);
+            };
+
             try {
                 var data = await api('/xml-sources');
                 var items = (data && data.items) || [];
-                var el = document.getElementById('rts-source');
-                if (!el) return;
-                var val = el.value;
-                var html = '<option value="">Tüm XML</option>';
-                items.forEach(function (s) {
-                    html += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>';
+                apply(items);
+            } catch (e) {
+                console.log('[RTS PROOF] XML Kaynakları yüklenemedi:', e.message);
+            }
+        }
+
+        async function rtsLoadMarketplaces() {
+            var apply = function (items, attempt) {
+                attempt = attempt || 0;
+                var el = document.getElementById('rts-marketplace');
+                if (!el) {
+                    if (attempt < 20) setTimeout(function () { apply(items, attempt + 1); }, 100);
+                    return;
+                }
+
+                var html = '<option value="">Tüm Pazaryerleri</option>';
+                items.forEach(function (m) {
+                    html += '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(m.name || m.key) + '</option>';
                 });
                 el.innerHTML = html;
-                el.value = val;
-            } catch (e) { /* sessiz */ }
+
+                var current = contextState.marketplaceId || '';
+                if (!(current && items.some(function (m) { return m.id === current; }))) {
+                    var firstActive = items.find(function (m) { return m.active; }) || items[0];
+                    if (firstActive) {
+                        current = firstActive.id;
+                        contextState.marketplaceId = firstActive.id;
+                        contextState.marketplaceName = firstActive.name || firstActive.key;
+                    }
+                }
+
+                if (current) el.value = current;
+                console.log('[RTS PROOF] Marketplace select seçenek sayısı:', items.length, 'Seçili Marketplace ID:', el.value);
+            };
+
+            try {
+                var data = await api('/marketplaces');
+                var items = (data && data.items) || [];
+                apply(items);
+            } catch (e) {
+                console.log('[RTS PROOF] Marketplace yüklenemedi:', e.message);
+            }
+        }
+
+        function rtsOnSourceChange() {
+            var el = document.getElementById('rts-source');
+            var val = el ? el.value : '';
+            contextState.xmlSourceId = val;
+            contextState.xmlSourceName = el && el.selectedIndex >= 0 ? el.options[el.selectedIndex].text : '';
+            contextState.isValid = !!(contextState.xmlSourceId && contextState.marketplaceId);
+            rtsState.page = 1;
+            console.log('[RTS PROOF] XML seçildi:', val);
+            rtsLoad();
+        }
+
+        function rtsOnMarketplaceChange() {
+            var el = document.getElementById('rts-marketplace');
+            var val = el ? el.value : '';
+            contextState.marketplaceId = val;
+            contextState.marketplaceName = el && el.selectedIndex >= 0 ? el.options[el.selectedIndex].text : '';
+            contextState.isValid = !!(contextState.xmlSourceId && contextState.marketplaceId);
+            rtsState.page = 1;
+            console.log('[RTS PROOF] Marketplace seçildi:', val);
+            rtsLoad();
+        }
+
+        async function rtsInit() {
+            try {
+                await rtsLoadMarketplaces();
+                await rtsLoadSources();
+                contextState.isValid = !!(contextState.xmlSourceId && contextState.marketplaceId);
+                rtsLoadStats();
+                rtsLoad();
+            } catch (e) {
+                console.log('[RTS PROOF] RTS init hatası:', e.message);
+                rtsLoad();
+            }
         }
 
         async function rtsLoadStats() {
@@ -3529,18 +3581,16 @@
         }
 
         async function rtsLoad() {
-            rtsLoadSources();
+            if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); clearAllPageData(); return; }
             rtsLoadStats();
             var tbody = document.getElementById('rts-tbody');
             var search = (document.getElementById('rts-search').value || '').trim();
             var filter = document.getElementById('rts-filter').value;
-            var source = document.getElementById('rts-source').value;
             var missing = document.getElementById('rts-missing').value;
 
             var url = '/ready-to-ship?page=' + rtsState.page + '&limit=' + rtsState.limit;
             if (search) url += '&search=' + encodeURIComponent(search);
             if (filter) url += '&filter=' + filter;
-            if (source) url += '&xmlSourceId=' + source;
             if (missing) url += '&missingReason=' + missing;
 
             try {
@@ -4038,13 +4088,15 @@
                 if (!mp) { showToast('Pazaryeri bulunamadi', 'error'); return; }
                 document.getElementById('mp-edit-id').value = mp.id;
                 document.getElementById('mp-modal-title').innerHTML = '<i class="fa-solid fa-store text-primary"></i> ' + escapeHtml(mp.name) + ' Duzenle';
-                document.getElementById('mp-type').value = mp.key || '';
+                var mpTypeMap = { tt: 'trendyol', he: 'hepsiburada', n11: 'n11' };
+                var mpTypeValue = mpTypeMap[mp.key] || mp.key || '';
+                document.getElementById('mp-type').value = mpTypeValue;
                 document.getElementById('mp-type').disabled = true;
                 document.getElementById('mp-name').value = mp.name || '';
                 document.getElementById('mp-apiUrl').value = mp.apiUrl || '';
                 document.getElementById('mp-active').checked = mp.active;
                 document.getElementById('mp-test-result').classList.add('hidden');
-                if (mpFieldConfig[mp.key]) {
+                if (mpFieldConfig[mpTypeValue]) {
                     mpTypeChanged();
                     setTimeout(function() {
                         var vals = {};
@@ -4171,6 +4223,7 @@
         var ordState = { page: 1, limit: 50 };
 
         async function ordersLoad() {
+            if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); clearAllPageData(); return; }
             var search = (document.getElementById('ord-search') || {}).value || '';
             var status = (document.getElementById('ord-status') || {}).value || '';
             var channel = (document.getElementById('ord-channel') || {}).value || '';
@@ -4343,8 +4396,8 @@
             try {
                 var stats = await api('/products/stats');
                 document.getElementById('aiimg-total').textContent = fmt(stats.totalProducts);
-                document.getElementById('aiimg-excellent').textContent = fmt(Math.round(stats.totalProducts * 0.7));
-                document.getElementById('aiimg-review').textContent = fmt(Math.round(stats.totalProducts * 0.2));
+                document.getElementById('aiimg-excellent').textContent = '—';
+                document.getElementById('aiimg-review').textContent = '—';
                 document.getElementById('aiimg-poor').textContent = fmt(stats.errorProducts || 0);
             } catch (e) { /* sessiz */ }
         }
@@ -4352,31 +4405,25 @@
         function aiImageAnalyze(count) {
             var el = document.getElementById('aiimg-result');
             el.classList.remove('hidden');
-            el.innerHTML = '<div class="rounded-xl border border-blue-500/20 bg-blue-500/10 p-4 text-xs text-blue-600 dark:text-blue-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i> ' + count + ' ürün görseli analiz ediliyor... (AI modülü aktif değil — demo modu)</div>';
-            setTimeout(function () {
-                el.innerHTML = '<div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-xs text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-circle-check mr-2"></i> Analiz tamamlandı: ' + count + ' ürün incelendi, ' + Math.round(count * 0.85) + ' ürün onaylandı.</div>';
-            }, 2000);
+            el.innerHTML = '<div class="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-xs text-amber-600 dark:text-amber-400"><i class="fa-solid fa-triangle-exclamation mr-2"></i> AI Görsel analizi yapılandırılmadı — NOT AVAILABLE. Gerçek analiz için AI Kontrol Merkezinden provider ve API key yapılandırın.</div>';
         }
 
         /* ===================== AI SATIŞ ASİSTANI ===================== */
 
         async function aiSalesLoad() {
             try {
-                var stats = await api('/products/stats');
-                document.getElementById('aisales-total').textContent = fmt(Math.round(stats.totalProducts * 0.15));
-                document.getElementById('aisales-up').textContent = fmt(Math.round(stats.totalProducts * 0.08));
-                document.getElementById('aisales-down').textContent = fmt(Math.round(stats.totalProducts * 0.05));
-                document.getElementById('aisales-risk').textContent = fmt(Math.round(stats.totalProducts * 0.02));
+                await api('/products/stats');
+                document.getElementById('aisales-total').textContent = '—';
+                document.getElementById('aisales-up').textContent = '—';
+                document.getElementById('aisales-down').textContent = '—';
+                document.getElementById('aisales-risk').textContent = '—';
             } catch (e) { /* sessiz */ }
         }
 
         function aiSalesAnalyze(count) {
             var el = document.getElementById('aisales-result');
             el.classList.remove('hidden');
-            el.innerHTML = '<div class="rounded-xl border border-blue-500/20 bg-blue-500/10 p-4 text-xs text-blue-600 dark:text-blue-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i> ' + count + ' ürün fiyatı analiz ediliyor... (AI modülü aktif değil — demo modu)</div>';
-            setTimeout(function () {
-                el.innerHTML = '<div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-xs text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-circle-check mr-2"></i> Fiyat analizi tamamlandı: ' + Math.round(count * 0.12) + ' fiyat artırımı, ' + Math.round(count * 0.06) + ' fiyat düşürme önerisi.</div>';
-            }, 2000);
+            el.innerHTML = '<div class="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-xs text-amber-600 dark:text-amber-400"><i class="fa-solid fa-triangle-exclamation mr-2"></i> AI Satış analizi yapılandırılmadı — NOT AVAILABLE. Gerçek analiz için AI Kontrol Merkezinden provider ve API key yapılandırın.</div>';
         }
 
         /* ===================== AI COPILOT ===================== */
@@ -4397,22 +4444,8 @@
             input.value = '';
             var msgs = document.getElementById('ai-copilot-messages');
             msgs.innerHTML += '<div class="flex items-start gap-3 justify-end"><div class="panel-theme p-3 rounded-xl text-xs text-slate-700 dark:text-slate-300 max-w-[70%]">' + escapeHtml(q) + '</div></div>';
-            msgs.innerHTML += '<div class="flex items-start gap-3"><div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0"><i class="fa-solid fa-robot text-sm"></i></div><div class="panel-theme p-3 rounded-xl text-xs text-slate-500 dark:text-slate-400" id="ai-copilot-typing"><i class="fa-solid fa-spinner fa-spin mr-1"></i> Düşünüyorum...</div></div>';
+            msgs.innerHTML += '<div class="flex items-start gap-3"><div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0"><i class="fa-solid fa-robot text-sm"></i></div><div class="panel-theme p-3 rounded-xl text-xs text-slate-500 dark:text-slate-400">AI Copilot yapılandırılmadı — NOT AVAILABLE. Gerçek yanıt için AI Kontrol Merkezinden bir provider ve API key yapılandırın.</div></div>';
             msgs.scrollTop = msgs.scrollHeight;
-            setTimeout(function () {
-                var typing = document.getElementById('ai-copilot-typing');
-                if (typing) {
-                    var responses = {
-                        'stokta': 'Stokta olmayan ürünleri buldum. Toplam ' + Math.floor(Math.random() * 50 + 10) + ' ürünün stok miktarı sıfır. Bu ürünleri "Ürün Havuzu"ndan filtreleyerek görebilirsiniz.',
-                        'satış': 'En çok satan ürünler raporu oluşturuluyor. Bu veriler henüz demo modundadır.',
-                        'kategori': 'Kategorisiz ürünleri taradım. ' + Math.floor(Math.random() * 1000 + 100) + ' ürün kategorisiz durumda. Kategori Eşleştirme modülünden eşleştirebilirsiniz.',
-                        'default': 'Talebiniz işlendi. AI modülü目前 demo modundadır. Gerçek AI entegrasyonu için API anahtarı ayarlarından yapılandırma yapınız.'
-                    };
-                    var key = Object.keys(responses).find(function (k) { return q.toLowerCase().indexOf(k) !== -1; });
-                    typing.outerHTML = '<div class="panel-theme p-3 rounded-xl text-xs text-slate-700 dark:text-slate-300 max-w-[70%]">' + (responses[key] || responses['default']) + '</div>';
-                    msgs.scrollTop = msgs.scrollHeight;
-                }
-            }, 1500);
         }
 
         /* ===================== AI KONTROL MERKEZİ ===================== */
@@ -4469,6 +4502,7 @@
                         + '<div class="flex items-center gap-2">'
                         + '<input type="password" id="aictl-key-' + p.provider + '" placeholder="' + keyPlaceholder + '" class="field-input flex-1 text-xs px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all font-mono">'
                         + keyStatus
+                        + (p.apiKeyConfigured ? '<button type="button" onclick="aiCardDeleteKey(\'' + p.provider + '\')" title="API Keyi Sil" class="px-2 py-2 bg-red-500/10 text-red-500 hover:bg-red-500/20 rounded-lg text-[10px] font-semibold shrink-0"><i class="fa-solid fa-trash-can"></i></button>' : '')
                         + '</div>'
                         + '</div>'
                         + '<div class="grid grid-cols-2 gap-3">'
@@ -4480,7 +4514,12 @@
                             + '<option value="Nemotron Ultra 253B"' + (p.model === 'Nemotron Ultra 253B' ? ' selected' : '') + '>Nemotron Ultra 253B</option>'
                             + '<option value="Nemotron 3 Ultra"' + (p.model === 'Nemotron 3 Ultra' ? ' selected' : '') + '>Nemotron 3 Ultra</option>'
                           + '</select>'
-                          : '<input type="text" id="aictl-model-' + p.provider + '" value="' + escapeHtml(p.model || '') + '" class="field-input w-full text-xs px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all font-mono">')
+                          : p.provider === 'openrouter'
+                            ? '<div class="flex items-center gap-2">'
+                              + '<select id="aictl-model-openrouter" data-current="' + escapeHtml(p.model || '') + '" class="field-input flex-1 text-xs px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"><option value="">Modelleri yükleyin</option></select>'
+                              + '<button type="button" onclick="loadOpenRouterModels()" title="Free modelleri yükle" class="px-2 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[10px] font-semibold rounded-lg shrink-0"><i class="fa-solid fa-rotate"></i></button>'
+                              + '</div>'
+                            : '<input type="text" id="aictl-model-' + p.provider + '" value="' + escapeHtml(p.model || '') + '" class="field-input w-full text-xs px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all font-mono">')
                         + '</div>'
                         + '<div><label class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block mb-1">Öncelik</label>'
                         + '<input type="number" id="aictl-priority-' + p.provider + '" value="' + (p.priority || 1) + '" min="1" max="10" class="field-input w-full text-xs px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"></div>'
@@ -4514,7 +4553,10 @@
             el.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Test ediliyor...';
             el.className = 'text-[10px] text-blue-500';
             try {
-                var result = await api('/ai-settings/' + provider + '/test', { method: 'POST' });
+                var modelEl = document.getElementById('aictl-model-' + provider);
+                var modelVal = modelEl ? modelEl.value : '';
+                var body = modelVal ? { model: modelVal } : {};
+                var result = await api('/ai-settings/' + provider + '/test', { method: 'POST', body: body });
                 if (result.ok) {
                     el.innerHTML = '<i class="fa-solid fa-circle-check mr-1"></i> Başarılı — ' + result.model + ' — ' + result.latencyMs + 'ms';
                     el.className = 'text-[10px] text-emerald-600 dark:text-emerald-400 font-bold';
@@ -4541,11 +4583,42 @@
             } catch (e) { showToast('Hata: ' + e.message, 'error'); }
         }
 
+        async function aiCardDeleteKey(provider) {
+            try {
+                await api('/ai-settings/' + provider + '/key', { method: 'DELETE' });
+                showToast(provider + ' API key silindi', 'success');
+                aiControlLoad();
+            } catch (e) { showToast('Hata: ' + e.message, 'error'); }
+        }
+
+        async function loadOpenRouterModels() {
+            var sel = document.getElementById('aictl-model-openrouter');
+            if (sel) sel.innerHTML = '<option value="">Yükleniyor...</option>';
+            try {
+                var data = await api('/ai-settings/openrouter/models');
+                var items = (data && data.items) || [];
+                if (sel) {
+                    if (items.length === 0) {
+                        sel.innerHTML = '<option value="">Free model bulunamadı</option>';
+                    } else {
+                        sel.innerHTML = '<option value="">Model seçin (' + items.length + ' free)</option>'
+                            + items.map(function (m) { return '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(m.name || m.id) + '</option>'; }).join('');
+                        var current = sel.getAttribute('data-current');
+                        if (current) sel.value = current;
+                    }
+                }
+                if (items.length > 0) showToast(items.length + ' free model yüklendi', 'success');
+            } catch (e) {
+                if (sel) sel.innerHTML = '<option value="">' + escapeHtml(e.message || 'Katalog alınamadı') + '</option>';
+                showToast('Model kataloğu alınamadı: ' + e.message, 'error');
+            }
+        }
+
         /* ===================== APP START ===================== */
 
         async function loadApp() {
             try {
-                await Promise.all([refreshDashboard(), refreshMarketplaces(), refreshXmlSources()]);
+                await Promise.all([refreshDashboard(), refreshMarketplaces(), refreshXmlSources(), loadContextSelectors()]);
                 if (currentPage === 'products') refreshProducts(1);
                 else showPage('dashboard');
             } catch (e) { /* hata halinde modal zaten gösterildi */ }
@@ -4567,7 +4640,8 @@
             xmlSources: [],
             pageSize: 50,
             currentPage: 1,
-            xmlSupplierId: (function () { try { return localStorage.getItem('dg_active_supplier_id') || ''; } catch (e) { return ''; } })(),
+            xmlSupplierId: '',
+            marketplaceId: '',
             autoMatchRunning: false,
             autoMatchLive: null,
             pollTimer: null,
@@ -4589,20 +4663,29 @@
         }
 
         async function prepCategoriesLoad() {
+            await catLoadSelectOptions();
+            catRenderGuardWarn();
+            var hasXml = !!catGetXmlSourceId();
+            var hasMp = !!catGetMarketplaceId();
+            if (!hasXml || !hasMp) return;
             catState.loading = true;
-            catRenderStepper();
             catShowLoading();
-            try {
-                var mpRes = api('/marketplaces');
-                var xsRes = api('/xml-sources');
-                var mpData = await mpRes;
-                var xsData = await xsRes;
-                catState.marketplaces = (mpData && mpData.items) || [];
-                catState.xmlSources = (xsData && xsData.items) || [];
-                catRenderXmlSourceOptions();
-                catRenderMarketplaceOptions();
-            } catch (e) { /* ilk yüklemede hata olabilir */ }
             await catFetchAll();
+        }
+
+        async function catLoadSelectOptions() {
+            try {
+                var [xsRes, mpRes] = await Promise.all([api('/xml-sources'), api('/marketplaces')]);
+                catState.xmlSources = (xsRes && xsRes.items) || [];
+                catState.marketplaces = (mpRes && mpRes.items) || [];
+            } catch (e) { /* sessiz */ }
+            catRenderXmlSourceOptions();
+            catRenderMarketplaceOptions();
+        }
+
+        function catGetXmlSourceId() {
+            var sel = document.getElementById('cat-xml-source');
+            return sel ? sel.value : (catState.xmlSupplierId || '');
         }
 
         function catRenderXmlSourceOptions() {
@@ -4629,8 +4712,9 @@
         function catOnXmlSourceChange() {
             var sel = document.getElementById('cat-xml-source');
             catState.xmlSupplierId = sel ? sel.value : '';
-            try { localStorage.setItem('dg_active_supplier_id', catState.xmlSupplierId); } catch (e) { /* */ }
-            catFetchAll();
+            catRenderGuardWarn();
+            if (catGetXmlSourceId() && catGetMarketplaceId()) catFetchAll();
+            else catRenderAll();
         }
 
         function catGetMarketplaceId() {
@@ -4640,7 +4724,10 @@
 
         function catOnMarketplaceChange() {
             var sel = document.getElementById('cat-marketplace');
-            if (sel && typeof selectMarketplace === 'function') selectMarketplace(sel.value);
+            catState.marketplaceId = sel ? sel.value : '';
+            catRenderGuardWarn();
+            if (catGetXmlSourceId() && catGetMarketplaceId()) catFetchAll();
+            else catRenderAll();
         }
 
         async function catFetchAll() {
@@ -4648,9 +4735,13 @@
             catShowLoading();
             try {
                 var params = new URLSearchParams({ limit: '1000' });
-                if (catState.xmlSupplierId) params.append('xmlSourceId', catState.xmlSupplierId);
+                var catXmlId = catGetXmlSourceId();
+                if (catXmlId) params.append('xmlSourceId', catXmlId);
+                var catMpId = catGetMarketplaceId();
+                if (catMpId) params.append('marketplaceId', catMpId);
+                params.append('status', 'XML');
                 var pr = api('/categories/products?' + params.toString());
-                var tr = api('/categories/tree');
+                var tr = api('/categories/tree?' + params.toString());
                 var prData = await pr;
                 var trData = await tr;
                 if (prData) {
@@ -4714,6 +4805,11 @@
         }
 
         function catRenderAll() {
+            var hasContext = !!catGetXmlSourceId() && !!catGetMarketplaceId();
+            if (!hasContext) {
+                catRenderGuardWarn();
+                return;
+            }
             var filteredGroups = catGetFilteredGroups();
             var totalPages = Math.max(1, Math.ceil(filteredGroups.length / catState.pageSize));
             catState.currentPage = Math.min(catState.currentPage, totalPages);
@@ -4959,9 +5055,26 @@
         function catRenderGuardWarn() {
             var el = document.getElementById('cat-guard-warn');
             if (!el) return;
-            var mpId = catGetMarketplaceId();
-            if (!catState.xmlSupplierId || !mpId) el.classList.remove('hidden');
-            else el.classList.add('hidden');
+            var content = document.getElementById('cat-content');
+            var hasXml = !!catGetXmlSourceId();
+            var hasMp = !!catGetMarketplaceId();
+            if (!hasXml || !hasMp) {
+                el.classList.remove('hidden');
+                // Hide category content when context is empty - only original message stays
+                if (content) content.classList.add('hidden');
+                var toolbar = document.getElementById('cat-toolbar');
+                if (toolbar) toolbar.classList.add('hidden');
+                var stepper = document.getElementById('cat-stepper');
+                if (stepper) stepper.classList.add('hidden');
+            } else {
+                el.classList.add('hidden');
+                // Show category content when context is valid
+                if (content) content.classList.remove('hidden');
+                var toolbar = document.getElementById('cat-toolbar');
+                if (toolbar) toolbar.classList.remove('hidden');
+                var stepper = document.getElementById('cat-stepper');
+                if (stepper) stepper.classList.remove('hidden');
+            }
         }
 
         function catShowLoading() {
@@ -4970,19 +5083,18 @@
         }
 
         function catRequireMarketplace() {
-            var mpId = catGetMarketplaceId();
-            if (!catState.xmlSupplierId || !mpId) {
-                var modal = document.getElementById('cat-warning-modal');
-                if (modal) modal.classList.remove('hidden');
+            if (!catGetXmlSourceId() || !catGetMarketplaceId()) {
+                // Guard warning already shows the original "İşleme devam etmek..." message.
+                // No modal, no duplicate warnings. Blocks the action.
+                catRenderGuardWarn();
                 return false;
             }
+            // Context is valid
+            catRenderGuardWarn();
             return true;
         }
 
-        function catCloseWarning() {
-            var modal = document.getElementById('cat-warning-modal');
-            if (modal) modal.classList.add('hidden');
-        }
+        function catCloseWarning() { /* kaldırıldı - modal yok */ }
 
         /* --- AUTO MATCH --- */
         async function catAutoMatch() {
@@ -4992,7 +5104,8 @@
             showToast('Otomatik eşleştirme başlatılıyor...', 'info');
             try {
                 var mpId = catGetMarketplaceId();
-                var res = await api('/categories/auto-match-all/start', { method: 'POST', body: { marketplaceId: mpId } });
+                var xsId = catGetXmlSourceId();
+                var res = await api('/categories/auto-match-all/start', { method: 'POST', body: { marketplaceId: mpId, xmlSourceId: xsId } });
                 if (res && res.ok !== false) {
                     showToast(res.message || 'Otomatik eşleştirme başlatıldı', 'success');
                     var total = (res.progress && res.progress.totalProducts) || 0;
@@ -5037,7 +5150,7 @@
                     if (!p.categoryMatch) productIds.push(p.id);
                 });
                 if (productIds.length === 0) { showToast('Eşleşmemiş ürün bulunamadı', 'error'); catState.aiRunning = false; return; }
-                var res = await api('/categories/ai-match', { method: 'POST', body: { productIds: productIds, marketplaceId: mpId } });
+                var res = await api('/categories/ai-match', { method: 'POST', body: { productIds: productIds, marketplaceId: mpId, xmlSourceId: catGetXmlSourceId() } });
                 if (res && res.matchedCount != null) {
                     showToast(res.message || 'AI eşleştirme tamamlandı', 'success');
                     catState.step = 2;
@@ -5084,7 +5197,7 @@
             if (!group || !group.suggestionId || group.aiProductIds.length === 0) return;
             var mpId = catGetMarketplaceId();
             try {
-                var res = await api('/categories/match', { method: 'POST', body: { categoryId: group.suggestionId, productIds: group.aiProductIds, marketplaceId: mpId } });
+                var res = await api('/categories/match', { method: 'POST', body: { categoryId: group.suggestionId, productIds: group.aiProductIds, marketplaceId: mpId, xmlSourceId: catGetXmlSourceId() } });
                 if (res && res.ok !== false) {
                     showToast('"' + (group.suggestionLeaf || '') + '" onaylandı (' + group.aiProductIds.length + ' ürün)', 'success');
                     catFetchAll();
@@ -5245,7 +5358,7 @@
             try {
                 if (catState.modalBulk) {
                     var matches = targetGroups.map(function (g) { return { xmlCategoryPath: g.xmlPath, systemCategoryId: catPickerState.selectedCatId }; });
-                    var res = await api('/categories/bulk-match', { method: 'POST', body: { matches: matches } });
+                    var res = await api('/categories/bulk-match', { method: 'POST', body: { matches: matches, xmlSourceId: catGetXmlSourceId() } });
                     if (res && (res.ok !== false || res.matchedCount != null)) {
                         showToast((res.message || res.matchedCount + ' ürün eşleştirildi'), 'success');
                         catClosePicker();
@@ -5254,7 +5367,7 @@
                         showToast((res && res.message) || 'Toplu eşleştirme başarısız', 'error');
                     }
                 } else {
-                    var res2 = await api('/categories/match', { method: 'POST', body: { categoryId: catPickerState.selectedCatId, productIds: targetGroups[0].productIds } });
+                    var res2 = await api('/categories/match', { method: 'POST', body: { categoryId: catPickerState.selectedCatId, productIds: targetGroups[0].productIds, xmlSourceId: catGetXmlSourceId() } });
                     if (res2 && (res2.ok !== false || res2.matchedCount != null)) {
                         showToast('"' + catPickerState.selectedCatName + '" kategorisine ' + targetGroups[0].total + ' ürün eşleştirildi', 'success');
                         catClosePicker();
@@ -5274,33 +5387,43 @@
 
         var prepBrandState = {
             xmlSources: [], xmlBrands: [], products: [], marketplaces: [],
-            selectedXmlSource: '', selectedXmlBrandName: '', selectedMarketplaceKey: '',
+            selectedXmlSource: '', selectedXmlBrandName: '', selectedMarketplaceKey: '', selectedMarketplaceId: '',
             pageSize: 50, currentPage: 1, totalProducts: 0,
             selectedProducts: new Set(), allSelected: false, loading: false,
             previewData: null, matchedCount: 0
         };
 
         async function prepBrandsLoad() {
-            prepBrandState.loading = true;
+            await prepBrandLoadSelects();
+            prepBrandCheckMatchBtn();
+        }
+
+        async function prepBrandLoadSelects() {
             try {
-                var srcRes = await api('/xml-sources');
-                prepBrandState.xmlSources = (srcRes && srcRes.items) || [];
-                var srcEl = document.getElementById('br-xml-source');
-                if (srcEl) {
-                    var h = '<option value="">XML Kaynağı Seç...</option>';
-                    prepBrandState.xmlSources.forEach(function (s) { h += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; });
-                    srcEl.innerHTML = h;
-                }
-                var mpRes = await api('/marketplace-manage');
+                var [xsRes, mpRes] = await Promise.all([api('/xml-sources'), api('/marketplaces')]);
+                prepBrandState.xmlSources = (xsRes && xsRes.items) || [];
                 prepBrandState.marketplaces = (mpRes && mpRes.items) || [];
-                var mpEl = document.getElementById('br-marketplace');
-                if (mpEl) {
-                    var mh = '<option value="">Tümü (Genel)</option>';
-                    prepBrandState.marketplaces.forEach(function (m) { mh += '<option value="' + escapeHtml(m.key) + '">' + escapeHtml(m.name) + '</option>'; });
-                    mpEl.innerHTML = mh;
-                }
             } catch (e) { /* sessiz */ }
-            prepBrandState.loading = false;
+            var srcEl = document.getElementById('br-xml-source');
+            var mpEl = document.getElementById('br-marketplace');
+            if (srcEl) {
+                var h = '<option value="">XML Kaynağı Seç...</option>';
+                prepBrandState.xmlSources.forEach(function (s) { h += '<option value="' + s.id + '"' + (s.id === prepBrandState.selectedXmlSource ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>'; });
+                srcEl.innerHTML = h;
+            }
+            if (mpEl) {
+                var h2 = '<option value="">Pazaryeri Seç...</option>';
+                prepBrandState.marketplaces.forEach(function (m) { h2 += '<option value="' + m.id + '" data-key="' + escapeHtml(m.key || '') + '"' + (m.id === prepBrandState.selectedMarketplaceId ? ' selected' : '') + '>' + escapeHtml(m.name) + '</option>'; });
+                mpEl.innerHTML = h2;
+            }
+        }
+
+        function prepBrandOnMarketplaceChange() {
+            var sel = document.getElementById('br-marketplace');
+            var val = sel ? sel.value : '';
+            prepBrandState.selectedMarketplaceId = val;
+            prepBrandState.selectedMarketplaceKey = (sel && sel.selectedIndex >= 0 && sel.options[sel.selectedIndex]) ? (sel.options[sel.selectedIndex].getAttribute('data-key') || '') : '';
+            prepBrandCheckMatchBtn();
         }
 
         async function prepBrandOnSourceChange() {
@@ -5308,6 +5431,7 @@
             prepBrandState.selectedXmlSource = srcId;
             prepBrandState.selectedXmlBrandName = '';
             var xmlBrandEl = document.getElementById('br-xml-brand');
+            prepBrandCheckMatchBtn();
             if (!srcId) { if (xmlBrandEl) { xmlBrandEl.innerHTML = '<option value="">Önce XML kaynağı seçin</option>'; xmlBrandEl.disabled = true; } return; }
             try {
                 var res = await api('/brands/xml-brands?xmlSourceId=' + srcId);
@@ -5341,18 +5465,21 @@
         function prepBrandCheckMatchBtn() {
             var xmlBrand = prepBrandState.selectedXmlBrandName;
             var manualBrand = (document.getElementById('br-manual-brand').value || '').trim();
-            document.getElementById('br-match-btn').disabled = !(xmlBrand && manualBrand);
+            var ready = !!(prepBrandState.selectedXmlSource && prepBrandState.selectedMarketplaceId && xmlBrand && manualBrand);
+            var btn = document.getElementById('br-match-btn');
+            if (btn) btn.disabled = !ready;
         }
 
         async function prepBrandLoadProducts() {
             var name = prepBrandState.selectedXmlBrandName;
             if (!name) return;
+            if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); return; }
             var sec = document.getElementById('br-products-section');
             sec.classList.remove('hidden');
             var body = document.getElementById('br-products-body');
             body.innerHTML = '<tr><td class="py-10 text-center text-slate-400" colspan="5"><i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Ürünler yükleniyor...</td></tr>';
             try {
-                var res = await api('/brands/products?page=' + prepBrandState.currentPage + '&limit=' + prepBrandState.pageSize + '&xmlBrandName=' + encodeURIComponent(name));
+                var res = await api('/brands/products?page=' + prepBrandState.currentPage + '&limit=' + prepBrandState.pageSize + '&xmlBrandName=' + encodeURIComponent(name) + '&xmlSourceId=' + encodeURIComponent(prepBrandState.selectedXmlSource));
                 prepBrandState.products = (res && res.items) || [];
                 prepBrandState.totalProducts = (res && res.pagination && res.pagination.total) || 0;
                 prepBrandRenderProducts();
@@ -5433,7 +5560,7 @@
         async function prepBrandPreview() {
             var xmlBrand = prepBrandState.selectedXmlBrandName;
             var manualBrand = (document.getElementById('br-manual-brand').value || '').trim();
-            var mpKey = document.getElementById('br-marketplace').value || '';
+            var mpKey = prepBrandState.selectedMarketplaceKey || '';
             if (!xmlBrand || !manualBrand) { showToast('XML markası ve Manuel marka girin', 'error'); return; }
             var btn = document.getElementById('br-match-btn');
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Hesaplanıyor...'; }
@@ -5445,7 +5572,7 @@
                     var cr = await api('/brands', { method: 'POST', body: { name: manualBrand } });
                     if (cr && cr.item) { dgBrandId = cr.item.id; } else { showToast('Marka oluşturulamadı', 'error'); return; }
                 }
-                var previewRes = await api('/brands/preview', { method: 'POST', body: { xmlBrandName: xmlBrand, dgBrandId: dgBrandId, marketplaceKey: mpKey || null } });
+                var previewRes = await api('/brands/preview', { method: 'POST', body: { xmlBrandName: xmlBrand, dgBrandId: dgBrandId, marketplaceKey: mpKey || null, xmlSourceId: prepBrandState.selectedXmlSource || null } });
                 prepBrandState.previewData = { xmlBrandName: xmlBrand, dgBrandId: dgBrandId, marketplaceKey: mpKey, count: previewRes.count, brandName: previewRes.brandName, preview: previewRes.preview };
                 prepBrandState.matchedCount = previewRes.count;
                 var sumEl = document.getElementById('br-summary');
@@ -5470,7 +5597,7 @@
             var btn = document.getElementById('br-save-btn');
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Kaydediliyor...'; }
             try {
-                var r = await api('/brands/match', { method: 'POST', body: { xmlBrandName: pd.xmlBrandName, dgBrandId: pd.dgBrandId, marketplaceKey: pd.marketplaceKey || null } });
+                var r = await api('/brands/match', { method: 'POST', body: { xmlBrandName: pd.xmlBrandName, dgBrandId: pd.dgBrandId, marketplaceKey: pd.marketplaceKey || null, xmlSourceId: prepBrandState.selectedXmlSource || null } });
                 var count = r.matchedCount || 0;
                 var statusEl = document.getElementById('br-sum-status');
                 if (statusEl) { statusEl.innerHTML = '<i class="fa-solid fa-check-circle"></i> Kaydedildi'; statusEl.className = 'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'; }
@@ -5481,7 +5608,7 @@
             if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-floppy-disk mr-1.5"></i>Kaydet'; }
         }
 /* ===================== VARYANT EŞLEŞTİRME V3.1 ===================== */
-        var varState = { step: 1, loading: false, rows: [], stats: null, unmatchedTotal: 0, xmlVariantItems: [], variantRecords: [], aiRunning: false, bulkRunning: false, screenItems: [], screenPage: 1, screenTotal: 0, screenSelected: new Set() };
+        var varState = { step: 1, loading: false, rows: [], stats: null, unmatchedTotal: 0, xmlVariantItems: [], variantRecords: [], aiRunning: false, bulkRunning: false, screenItems: [], screenPage: 1, screenTotal: 0, screenSelected: new Set(), xmlSources: [], marketplaces: [], xmlSourceId: '', marketplaceId: '' };
 
         var VAR_COLOR_MAP = {
             'kırmızı': '#ef4444', 'kirmizi': '#ef4444', 'mavi': '#3b82f6', 'siyah': '#1e293b',
@@ -5503,39 +5630,81 @@
         var VAR_NAME_ORDER = { Renk: 0, Beden: 1, Numara: 2 };
 
         async function prepVariantsLoad() {
-            varState.loading = true;
-            var xmlSourceEl = document.getElementById('var-xml-source');
-            var mpEl = document.getElementById('var-marketplace');
-            if (xmlSourceEl.options.length <= 1) {
-                try { var xs = await api('/xml-sources'); if (xs.items) { xs.items.forEach(function(s) { var o = document.createElement('option'); o.value = s.id; o.textContent = s.name; xmlSourceEl.appendChild(o); }); } } catch(e) {}
-            }
-            if (mpEl.options.length <= 1) {
-                try { var mps = await api('/marketplaces'); if (mps.items) { mps.items.forEach(function(m) { var o = document.createElement('option'); o.value = m.id; o.textContent = m.name; mpEl.appendChild(o); }); } } catch(e) {}
-            }
-            xmlSourceEl.onchange = function() { prepVariantCheckGuard(); };
-            mpEl.onchange = function() { prepVariantCheckGuard(); };
+            await prepVariantLoadSelects();
             prepVariantCheckGuard();
+            if (!prepVariantHasSelection()) { prepVariantRenderEmpty(); return; }
+            varState.loading = true;
             prepVariantFetchAll();
             prepVariantLogs();
             prepVariantLoadScreen();
         }
 
+        async function prepVariantLoadSelects() {
+            try {
+                var [xsRes, mpRes] = await Promise.all([api('/xml-sources'), api('/marketplaces')]);
+                varState.xmlSources = (xsRes && xsRes.items) || [];
+                varState.marketplaces = (mpRes && mpRes.items) || [];
+            } catch (e) { /* sessiz */ }
+            var srcEl = document.getElementById('var-xml-source');
+            var mpEl = document.getElementById('var-marketplace');
+            if (srcEl) {
+                var h = '<option value="">📦 Tedarikçi / XML Seçiniz...</option>';
+                varState.xmlSources.forEach(function (s) { h += '<option value="' + s.id + '"' + (s.id === varState.xmlSourceId ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>'; });
+                srcEl.innerHTML = h;
+            }
+            if (mpEl) {
+                var h2 = '<option value="">🛒 Pazaryeri Seçiniz...</option>';
+                varState.marketplaces.forEach(function (m) { h2 += '<option value="' + m.id + '"' + (m.id === varState.marketplaceId ? ' selected' : '') + '>' + escapeHtml(m.name) + '</option>'; });
+                mpEl.innerHTML = h2;
+            }
+        }
+
+        function prepVariantHasSelection() {
+            var hasXml = varState.xmlSourceId || (document.getElementById('var-xml-source') || {}).value;
+            var hasMp = varState.marketplaceId || (document.getElementById('var-marketplace') || {}).value;
+            return !!(hasXml && hasMp);
+        }
+
+        function prepVariantRenderEmpty() {
+            var flowEl = document.getElementById('var-flow-list');
+            if (flowEl) flowEl.innerHTML = '<div class="flex flex-col items-center justify-center py-16 text-center"><span class="mb-3 text-4xl">🛒</span><p class="text-sm font-medium">Lütfen yukarıdan Tedarikçi (XML) ve Pazaryeri seçiniz.</p></div>';
+            var summary = document.getElementById('var-summary');
+            if (summary) summary.innerHTML = '<div class="px-4 py-3 text-xs text-current/60">Seçim bekleniyor...</div>';
+            var ring = document.getElementById('var-progress-ring');
+            if (ring) ring.innerHTML = '';
+        }
+
+        function prepVariantOnSourceChange() {
+            var sel = document.getElementById('var-xml-source');
+            varState.xmlSourceId = sel ? sel.value : '';
+            prepVariantCheckGuard();
+            if (prepVariantHasSelection()) { varState.loading = true; prepVariantFetchAll(); prepVariantLoadScreen(); }
+            else prepVariantRenderEmpty();
+        }
+
+        function prepVariantOnMpChange() {
+            var sel = document.getElementById('var-marketplace');
+            varState.marketplaceId = sel ? sel.value : '';
+            prepVariantCheckGuard();
+            if (prepVariantHasSelection()) { varState.loading = true; prepVariantFetchAll(); prepVariantLoadScreen(); }
+            else prepVariantRenderEmpty();
+        }
+
         function prepVariantCheckGuard() {
-            var hasXml = document.getElementById('var-xml-source').value;
-            var hasMp = document.getElementById('var-marketplace').value;
+            var hasXml = varState.xmlSourceId || (document.getElementById('var-xml-source') || {}).value;
+            var hasMp = varState.marketplaceId || (document.getElementById('var-marketplace') || {}).value;
             var warn = document.getElementById('var-warning');
             var stepper = document.getElementById('var-stepper');
+            if (warn) warn.classList.toggle('hidden', !!(hasXml && hasMp));
             if (hasXml && hasMp) {
-                warn.classList.add('hidden');
-                stepper.classList.remove('hidden');
+                if (stepper) stepper.classList.remove('hidden');
             } else {
-                warn.classList.remove('hidden');
-                stepper.classList.add('hidden');
+                if (stepper) stepper.classList.add('hidden');
             }
         }
 
         function prepVariantGuard() {
-            if (!document.getElementById('var-xml-source').value || !document.getElementById('var-marketplace').value) {
+            if (!prepVariantHasSelection()) {
                 document.getElementById('var-warning-modal').classList.remove('hidden');
                 return false;
             }
@@ -5544,11 +5713,13 @@
 
         async function prepVariantFetchAll() {
             try {
+                var xsQ = varState.xmlSourceId ? '&xmlSourceId=' + encodeURIComponent(varState.xmlSourceId) : '';
+                var xsQ2 = varState.xmlSourceId ? '?xmlSourceId=' + encodeURIComponent(varState.xmlSourceId) : '';
                 var [varRes, xmlRes, statsRes, unmatchedRes] = await Promise.all([
-                    api('/variants/?limit=1000'),
-                    api('/variants/xml-variants'),
+                    api('/variants/?limit=1000' + xsQ),
+                    api('/variants/xml-variants' + xsQ2),
                     api('/variants/stats'),
-                    api('/variants/unmatched-products?limit=500')
+                    api('/variants/unmatched-products?limit=500' + xsQ)
                 ]);
                 varState.variantRecords = varRes.items || [];
                 varState.xmlVariantItems = xmlRes.items || [];
@@ -5754,7 +5925,7 @@
             var row = prepVariantGetVisibleRows()[idx];
             if (!row || row.productIds.length === 0) {
                 try {
-                    var unmatched = await api('/variants/unmatched-products?limit=500');
+                    var unmatched = await api('/variants/unmatched-products?limit=500' + (varState.xmlSourceId ? '&xmlSourceId=' + encodeURIComponent(varState.xmlSourceId) : ''));
                     var detectedIds = {};
                     varState.xmlVariantItems.forEach(function(i) { detectedIds[i.productId] = true; });
                     var targetIds = (unmatched.items || []).map(function(p) { return p.id; }).filter(function(id) { return !detectedIds[id]; });
@@ -5804,7 +5975,7 @@
         async function prepVariantAutoMatchSelected() {
             if (!prepVariantGuard()) return;
             try {
-                var unmatched = await api('/variants/unmatched-products?limit=500');
+                var unmatched = await api('/variants/unmatched-products?limit=500' + (varState.xmlSourceId ? '&xmlSourceId=' + encodeURIComponent(varState.xmlSourceId) : ''));
                 var ids = (unmatched.items || []).map(function(p) { return p.id; });
                 if (ids.length === 0) { showToast('Eşleştirilecek ürün yok', 'warning'); return; }
                 var r = await api('/variants/auto-match', { method: 'POST', body: { productIds: ids } });
@@ -5820,7 +5991,7 @@
 
         async function prepVariantLoadScreen() {
             try {
-                var d = await api('/variants/screen?page=' + varState.screenPage + '&limit=20');
+                var d = await api('/variants/screen?page=' + varState.screenPage + '&limit=20' + (varState.xmlSourceId ? '&xmlSourceId=' + encodeURIComponent(varState.xmlSourceId) : ''));
                 varState.screenItems = d.items || [];
                 varState.screenTotal = d.total || 0;
                 prepVariantRenderScreen();
@@ -5915,7 +6086,11 @@
 var prepListState = { templates: [], rules: [], logs: [], forbidden: [], xmlSources: [], marketplaces: [], xmlSourceId: '', marketplaceId: '' };
 
 function prepListGuard() {
-    var ready = !!(prepListState.xmlSourceId && prepListState.marketplaceId);
+    var src = (document.getElementById('li-xml-source') || {}).value || '';
+    var mp = (document.getElementById('li-marketplace') || {}).value || '';
+    prepListState.xmlSourceId = src;
+    prepListState.marketplaceId = mp;
+    var ready = !!(src && mp);
     var guardEl = document.getElementById('li-guard-warn');
     var mainEl = document.getElementById('li-main-content');
     if (guardEl) guardEl.classList.toggle('hidden', ready);
@@ -5924,15 +6099,13 @@ function prepListGuard() {
 }
 
 function prepListOnSourceChange() {
-    var sel = document.getElementById('li-xml-source');
-    prepListState.xmlSourceId = sel ? sel.value : '';
+    prepListState.xmlSourceId = (document.getElementById('li-xml-source') || {}).value || '';
     prepListGuard();
     if (prepListGuard()) prepListingsLoadData();
 }
 
 function prepListOnMpChange() {
-    var sel = document.getElementById('li-marketplace');
-    prepListState.marketplaceId = sel ? sel.value : '';
+    prepListState.marketplaceId = (document.getElementById('li-marketplace') || {}).value || '';
     prepListGuard();
     if (prepListGuard()) prepListingsLoadData();
 }
@@ -5946,19 +6119,19 @@ async function prepListLoadSelects() {
         var mpEl = document.getElementById('li-marketplace');
         if (srcEl) {
             var html = '<option value="">📦 Tedarikçi / XML Seçiniz...</option>';
-            prepListState.xmlSources.forEach(function(s) { html += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; });
+            prepListState.xmlSources.forEach(function(s) { html += '<option value="' + s.id + '"' + (s.id === prepListState.xmlSourceId ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>'; });
             srcEl.innerHTML = html;
         }
         if (mpEl) {
             var html2 = '<option value="">🛒 Pazaryeri Seçiniz...</option>';
-            prepListState.marketplaces.forEach(function(m) { html2 += '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>'; });
+            prepListState.marketplaces.forEach(function(m) { html2 += '<option value="' + m.id + '"' + (m.id === prepListState.marketplaceId ? ' selected' : '') + '>' + escapeHtml(m.name) + '</option>'; });
             mpEl.innerHTML = html2;
         }
     } catch (e) { /* silent */ }
 }
 
 async function prepListingsLoad() {
-    await prepListLoadSelects();
+    prepListLoadSelects();
     prepListGuard();
     if (prepListGuard()) prepListingsLoadData();
 }
@@ -6048,7 +6221,7 @@ async function prepListNew() {
     try {
         await api('/listings', {
             method: 'POST',
-            body: { name: name, priceMultiplier: Number(mult) || 1, priceRangeRules: JSON.stringify([{ minPrice: 0, maxPrice: 0, profitMargin: Number(margin) || 0, fixedAmount: 0, rounding: '0.90' }]) }
+            body: { name: name, marketplaceId: prepListState.marketplaceId || null, priceMultiplier: Number(mult) || 1, priceRangeRules: JSON.stringify([{ minPrice: 0, maxPrice: 0, profitMargin: Number(margin) || 0, fixedAmount: 0, rounding: '0.90' }]) }
         });
         showToast('Şablon oluşturuldu', 'success');
         prepListingsLoad();
@@ -6056,9 +6229,9 @@ async function prepListNew() {
 }
 
 async function prepListApplyAll(id) {
-    if (!confirm('Fiyat kuralları tüm ürünlere uygulanacak. Devam edilsin mi?')) return;
+    if (!confirm('Fiyat kuralları seçilen XML kaynağına uygulanacak. Devam edilsin mi?')) return;
     try {
-        var r = await api('/listings/' + id + '/apply-all', { method: 'POST', body: {} });
+        var r = await api('/listings/' + id + '/apply-all', { method: 'POST', body: { xmlSourceId: prepListState.xmlSourceId || null, marketplaceId: prepListState.marketplaceId || null } });
         showToast(r.message || 'Uygulandı', 'success');
     } catch (e) { showToast(e.message, 'error'); }
 }

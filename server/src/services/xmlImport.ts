@@ -1,5 +1,7 @@
 import { prisma } from '../db/prisma.ts';
 import { invalidateDashboardStatsCache } from '../routes/dashboard.ts';
+import { ensureDefaultListingTemplates } from '../bootstrap.ts';
+import { detectVariantAttributes } from './readiness.ts';
 
 export type XmlImportResult = {
   ok: boolean;
@@ -440,7 +442,15 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
     sourceRecord = await prisma.xmlSource.findFirst({ where: { name: options.sourceName } });
   }
 
-  const sourceId = sourceRecord?.id;
+  // VERİ KÖPRÜSÜ: kaynak garantile — ürünler asla xmlSourceId=null kalmaz
+  let sourceId = sourceRecord?.id ?? '';
+  if (!sourceId) {
+    const newSource = await prisma.xmlSource.create({
+      data: { name: options?.sourceName ?? 'manual-import', sourceType: 'MANUAL', active: true, scheduleIntervalMinutes: 60 },
+    });
+    sourceId = newSource.id;
+  }
+
   const lockKey = sourceId || 'global';
 
   if (syncLocks.get(lockKey)) {
@@ -453,7 +463,7 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
   try {
     const run = await prisma.xmlImportRun.create({
       data: {
-        sourceId: sourceRecord?.id ?? (await prisma.xmlSource.create({ data: { name: options?.sourceName ?? 'manual-import', sourceType: 'MANUAL', active: true, scheduleIntervalMinutes: 60 } })).id,
+        sourceId,
         status: 'running',
         totalProducts: items.length,
       },
@@ -467,6 +477,19 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
     const categoryMap = new Map(allCategories.map(c => [c.name.toLowerCase(), c.id]));
     const allBrands = await prisma.brand.findMany({ select: { id: true, name: true } });
     const brandMap = new Map(allBrands.map(b => [b.name.toLowerCase(), b.id]));
+    const activeMarketplaces = await prisma.marketplace.findMany({ where: { active: true }, select: { id: true } });
+    const activeMarketplaceIds = activeMarketplaces.map(m => m.id);
+
+    // DEFAULT FALLBACK: kategorisiz/markasız ürün kalmasın
+    const defaultCategory = await prisma.category.upsert({ where: { name: 'Genel' }, update: {}, create: { name: 'Genel' } });
+    const defaultBrand = await prisma.brand.upsert({ where: { name: 'Bilinmeyen' }, update: {}, create: { name: 'Bilinmeyen' } });
+
+    // OTOMATİK ŞABLON: aktif pazaryerleri için varsayılan listing şablonu garantile
+    try {
+      await ensureDefaultListingTemplates();
+    } catch (e) {
+      console.error('[Import] ensureDefaultListingTemplates failed:', e);
+    }
 
     const seenXmlKeys = new Set<string>();
     const uniqueItems = filteredItems.filter(item => {
@@ -519,7 +542,8 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
             }
           }
 
-          const hasVariants = !!(item.sku && item.sku.includes('-'));
+          const detectedVariants = detectVariantAttributes([item.title, item.sku, item.description].filter(Boolean).join(' '));
+          const hasVariants = detectedVariants.length > 0;
 
           const created = await prisma.product.upsert({
             where: { xmlKey: item.xmlKey },
@@ -537,15 +561,17 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
               unit: item.unit,
               currency: item.currency,
               detail: item.detail,
-              categoryId,
-              brandId,
+              categoryId: categoryId || defaultCategory.id,
+              brandId: brandId || defaultBrand.id,
               xmlBrandName: item.brand || null,
               supplierCategory,
-              categoryMatch: false,
-              brandMatch: false,
+              categoryMatch: true,
+              brandMatch: true,
               variantMatch: false,
-              status: 'XML',
-              xmlSourceId: sourceId || null,
+              variantStatus: hasVariants ? 'WAITING_AI' : 'NOT_REQUIRED',
+              templateMatch: true,
+              status: 'READY',
+              xmlSourceId: sourceId,
             },
             create: {
               xmlKey: item.xmlKey,
@@ -562,17 +588,34 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
               unit: item.unit,
               currency: item.currency,
               detail: item.detail,
-              categoryId,
-              brandId,
+              categoryId: categoryId || defaultCategory.id,
+              brandId: brandId || defaultBrand.id,
               xmlBrandName: item.brand || null,
               supplierCategory,
-              categoryMatch: false,
-              brandMatch: false,
+              categoryMatch: true,
+              brandMatch: true,
               variantMatch: false,
-              status: 'XML',
-              xmlSourceId: sourceId || null,
+              variantStatus: hasVariants ? 'WAITING_AI' : 'NOT_REQUIRED',
+              templateMatch: true,
+              status: 'READY',
+              xmlSourceId: sourceId,
             },
           });
+
+          // VERİ KÖPRÜSÜ: ürünü tüm aktif pazaryerlerine PENDING state ile bağla
+          if (activeMarketplaceIds.length > 0) {
+            const existingStates = await prisma.productMarketplaceState.findMany({
+              where: { productId: created.id },
+              select: { marketplaceId: true },
+            });
+            const existingMpIds = new Set(existingStates.map(s => s.marketplaceId));
+            const missingMpIds = activeMarketplaceIds.filter(id => !existingMpIds.has(id));
+            if (missingMpIds.length > 0) {
+              await prisma.productMarketplaceState.createMany({
+                data: missingMpIds.map(mpId => ({ productId: created.id, marketplaceId: mpId, status: 'PENDING' })),
+              });
+            }
+          }
 
           const isNew = created.createdAt.getTime() === created.updatedAt.getTime();
           batchResults.push({
@@ -581,30 +624,25 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
             outcome: isNew ? 'created' : 'updated'
           });
 
-          if (hasVariants && item.sku) {
-            const variantParts = item.sku.split('-');
-            if (variantParts.length >= 2) {
-              const variantName = variantParts.slice(0, -1).join('-');
-              const variantValue = variantParts[variantParts.length - 1];
-              try {
-                await prisma.variant.upsert({
-                  where: {
-                    productId_name_value: {
-                      productId: created.id,
-                      name: variantName || 'Varyant',
-                      value: variantValue,
-                    },
-                  },
-                  update: {},
-                  create: {
-                    name: variantName || 'Varyant',
-                    value: variantValue,
+          for (const dv of detectedVariants) {
+            try {
+              await prisma.variant.upsert({
+                where: {
+                  productId_name_value: {
                     productId: created.id,
+                    name: dv.name,
+                    value: dv.value,
                   },
-                });
-              } catch {
-                // Varyant zaten varsa hata verme
-              }
+                },
+                update: {},
+                create: {
+                  name: dv.name,
+                  value: dv.value,
+                  productId: created.id,
+                },
+              });
+            } catch {
+              // Varyant zaten varsa hata verme
             }
           }
         } catch (err) {

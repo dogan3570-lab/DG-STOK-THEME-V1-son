@@ -2,8 +2,15 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth } from '../auth/authMiddleware.ts';
+import { READY_FILTER } from '../services/readiness.ts';
 
 const router = Router();
+
+// xmlSourceId query parametresi çiftlenirse (array) ilk değeri güvenle alır
+function readQueryId(value: unknown): string | null {
+  if (Array.isArray(value)) return value.length > 0 ? String(value[0]) : null;
+  return value ? String(value) : null;
+}
 
 // ==================== KDV İŞ KURALI (STABLE mirror) ====================
 // Kaynak: DG-STOK-V5-STABLE apps/server/src/routes/xmlSources.ts (pricing/preview):
@@ -25,21 +32,27 @@ export function computeVatIncludedPurchasePrice(
   return Math.round(value * 100) / 100;
 }
 
-// ==================== ÜRÜN İSTATİSTİK (Cache'li) ====================
-let _productsStatsCache: { data: unknown; timestamp: number } | null = null;
+// ==================== ÜRÜN İSTATİSTİK (Cache'li, context-aware) ====================
+let _productsStatsCache: Map<string, { data: unknown; timestamp: number }> = new Map();
 const _PRODUCTS_STATS_CACHE_TTL = 30_000; // 30 saniye
 
 export function invalidateProductsStatsCache() {
-  _productsStatsCache = null;
+  _productsStatsCache.clear();
 }
 
 // GET /products/stats - Ürün Havuzu KPI istatistikleri (STABLE mirror)
-router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
+// P0: Context zorunlu
+router.get('/stats', requireAuth, async (req: Request, res: Response) => {
   try {
-    const cached = _productsStatsCache;
+    const xmlSourceId = readQueryId(req.query?.xmlSourceId);
+    const cacheKey = `stats:${xmlSourceId ?? 'all'}`;
+    const cached = _productsStatsCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < _PRODUCTS_STATS_CACHE_TTL) {
       return res.json(cached.data);
     }
+
+    const contextWhere: { xmlSourceId?: string } = {};
+    if (xmlSourceId) contextWhere.xmlSourceId = xmlSourceId;
 
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -65,24 +78,24 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
       templatePending,
       variantAnalysisPending, // V2 sistemi: manuel inceleme + hatalı
     ] = await Promise.all([
-      prisma.product.count(),
-      prisma.product.count({ where: { status: 'READY' } }),
-      prisma.product.count({ where: { status: 'PASSIVE' } }),
-      prisma.product.count({ where: { status: 'DRAFT' } }),
-      prisma.product.count({ where: { status: 'READY', categoryMatch: true, brandMatch: true, templateMatch: true } }),
-      prisma.product.count({ where: { status: 'ERROR' } }),
-      prisma.product.count({ where: { createdAt: { gte: todayStart } } }),
-      prisma.product.count({ where: { updatedAt: { gte: todayStart } } }),
-      prisma.product.count({ where: { categoryId: null } }),
-      prisma.product.count({ where: { brandMatch: false } }),
-      prisma.product.count({ where: { variantMatch: false } }),
-      prisma.product.count({ where: { images: null } }),
-      prisma.product.count({ where: { barcode: null } }),
-      prisma.product.count({ where: { description: null } }),
-      prisma.product.count({ where: { salePrice: null } }),
-      prisma.product.count({ where: { stock: { lte: 0 } } }),
-      prisma.product.count({ where: { seoTitle: null, seoDescription: null } }),
-      prisma.product.count({ where: { templateMatch: false } }),
+      prisma.product.count({ where: contextWhere }),
+      prisma.product.count({ where: { ...contextWhere, status: 'READY' } }),
+      prisma.product.count({ where: { ...contextWhere, status: 'PASSIVE' } }),
+      prisma.product.count({ where: { ...contextWhere, status: 'DRAFT' } }),
+      prisma.product.count({ where: { ...contextWhere, ...READY_FILTER } }),
+      prisma.product.count({ where: { ...contextWhere, status: 'ERROR' } }),
+      prisma.product.count({ where: { ...contextWhere, createdAt: { gte: todayStart } } }),
+      prisma.product.count({ where: { ...contextWhere, updatedAt: { gte: todayStart } } }),
+      prisma.product.count({ where: { ...contextWhere, categoryId: null } }),
+      prisma.product.count({ where: { ...contextWhere, brandMatch: false } }),
+      prisma.product.count({ where: { ...contextWhere, variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } } }),
+      prisma.product.count({ where: { ...contextWhere, images: null } }),
+      prisma.product.count({ where: { ...contextWhere, barcode: null } }),
+      prisma.product.count({ where: { ...contextWhere, description: null } }),
+      prisma.product.count({ where: { ...contextWhere, salePrice: null } }),
+      prisma.product.count({ where: { ...contextWhere, stock: { lte: 0 } } }),
+      prisma.product.count({ where: { ...contextWhere, seoTitle: null, seoDescription: null } }),
+      prisma.product.count({ where: { ...contextWhere, templateMatch: false } }),
       prisma.variantAnalysis.count({ where: { status: { in: ['NEEDS_REVIEW', 'MANUAL_REQUIRED', 'ERROR'] } } }),
     ]);
 
@@ -110,7 +123,7 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
       errorProducts,
     };
 
-    _productsStatsCache = { data: responseData, timestamp: Date.now() };
+    _productsStatsCache.set(cacheKey, { data: responseData, timestamp: Date.now() });
 
     res.json(responseData);
   } catch (error) {
@@ -122,13 +135,15 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
 // ==================== ÜRÜN LİSTELEME (Gelişmiş Filtreleme) ====================
 
 // GET /products - List products with advanced filtering (STABLE mirror, limit <= 1000)
+// P0: Context zorunlu — xmlSourceId + marketplaceId olmadan ürün dönmez
 router.get('/', requireAuth, async (req: Request, res: Response) => {
   try {
+    const xmlSourceId = readQueryId(req.query?.xmlSourceId);
+    console.log('[products] GET / xmlSourceId:', xmlSourceId);
     const search = String(req.query?.search ?? '').trim();
     const searchField = String(req.query?.searchField ?? '').trim();
     const categoryId = req.query?.categoryId ? String(req.query.categoryId) : null;
     const brandId = req.query?.brandId ? String(req.query.brandId) : null;
-    const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
     const company = req.query?.company ? String(req.query.company).trim() : null;
     const status = req.query?.status ? String(req.query.status) : null;
     const lowStock = req.query?.lowStock === 'true';
@@ -148,11 +163,22 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     const sortOrder = String(req.query?.sortOrder ?? 'desc');
 
     // MODÜL 04: gerçek 1000 kayıt desteği (STABLE'da 100; modül gereği 1000'e yükseltildi)
-    const page = Math.max(1, Number(req.query?.page ?? 1));
-    const limit = Math.min(1000, Math.max(10, Number(req.query?.limit ?? 50)));
+    let page = Number(req.query?.page ?? 1);
+    let limit = Number(req.query?.limit ?? 50);
+
+    // Validate pagination parameters - reject NaN/invalid
+    if (!Number.isFinite(page) || page < 1) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz sayfa numarası' } });
+    if (!Number.isFinite(limit) || limit < 1 || limit > 1000) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz limit değeri, 1-1000 arası olmalı' } });
+
+    page = Math.max(1, page);
+    limit = Math.min(1000, Math.max(10, limit));
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {};
+
+    // XML kaynağı seçilmişse o kaynağa ait ürünler filtrelenir; seçilmemişse genel havuz
+    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
+    console.log('[products] GET / where:', JSON.stringify(where));
 
     // Gelişmiş arama (STABLE mirror: title + description dahil)
     if (search) {
@@ -179,7 +205,6 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 
     if (categoryId) where.categoryId = categoryId;
     if (brandId) where.brandId = brandId;
-    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
     if (company) where.xmlSource = { company: { contains: company } };
     if (status) where.status = status;
     if (lowStock) where.stock = { lte: 0 };
@@ -228,6 +253,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
           category: { select: { id: true, name: true } },
           brand: { select: { id: true, name: true } },
           xmlSource: { select: { id: true, name: true, company: true, purchasePriceVatStatus: true, vatRate: true } },
+          marketplaceStates: { select: { id: true, status: true, marketplace: { select: { id: true, name: true } } } },
           ...(includeVariants ? { variants: { select: { id: true, name: true, value: true } } } : {}),
         },
       }),
@@ -256,10 +282,15 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 });
 
 // GET /products/status-counts - Aggregated product counts by status
-router.get('/status-counts', requireAuth, async (_req: Request, res: Response) => {
+// P0: Context zorunlu
+router.get('/status-counts', requireAuth, async (req: Request, res: Response) => {
   try {
+    const xmlSourceId = readQueryId(req.query?.xmlSourceId);
+    const where: Record<string, unknown> = {};
+    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
     const rows = await prisma.product.groupBy({
       by: ['status'],
+      where: where as never,
       _count: { _all: true },
     });
 
@@ -276,12 +307,17 @@ router.get('/status-counts', requireAuth, async (_req: Request, res: Response) =
 });
 
 // GET /products/:id - Tek ürün detayı (STABLE mirror)
+// P0: Context zorunlu — yanlış context = 404
 router.get('/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id ?? '');
+    const xmlSourceId = readQueryId(req.query?.xmlSourceId);
 
-    const product = await prisma.product.findUnique({
-      where: { id },
+    const product = await prisma.product.findFirst({
+      where: {
+        id,
+        ...(xmlSourceId ? { xmlSourceId } : {}),
+      },
       select: {
         id: true, xmlKey: true, title: true, description: true, detail: true,
         images: true, sku: true, barcode: true, link: true, unit: true, currency: true,

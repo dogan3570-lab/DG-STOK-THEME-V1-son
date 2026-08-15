@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth } from '../auth/authMiddleware.ts';
+import { READY_FILTER, isReady, isPrepComplete, isVariantComplete } from '../services/readiness.ts';
 
 const router = Router();
 
@@ -14,6 +15,7 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
       notReadyCount,
       missingCategory,
       missingBrand,
+      missingVariant,
       missingTemplate,
       missingImage,
       missingBarcode,
@@ -22,26 +24,11 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
       errorCount,
     ] = await Promise.all([
       prisma.product.count(),
-      prisma.product.count({
-        where: {
-          status: 'READY',
-          categoryMatch: true,
-          brandMatch: true,
-          templateMatch: true,
-        },
-      }),
-      prisma.product.count({
-        where: {
-          OR: [
-            { status: { not: 'READY' } },
-            { categoryMatch: false },
-            { brandMatch: false },
-            { templateMatch: false },
-          ],
-        },
-      }),
+      prisma.product.count({ where: READY_FILTER }),
+      prisma.product.count({ where: { NOT: READY_FILTER } }),
       prisma.product.count({ where: { categoryMatch: false } }),
       prisma.product.count({ where: { brandMatch: false } }),
+      prisma.product.count({ where: { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } } }),
       prisma.product.count({ where: { templateMatch: false } }),
       prisma.product.count({ where: { images: null } }),
       prisma.product.count({ where: { barcode: null } }),
@@ -56,6 +43,7 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
       notReadyCount,
       missingCategory,
       missingBrand,
+      missingVariant,
       missingTemplate,
       missingImage,
       missingBarcode,
@@ -83,33 +71,28 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {};
+    const and: Record<string, unknown>[] = [];
 
     if (search) {
-      where.OR = [
-        { title: { contains: search } },
-        { xmlKey: { contains: search } },
-        { sku: { contains: search } },
-        { barcode: { contains: search } },
-      ];
+      and.push({
+        OR: [
+          { title: { contains: search } },
+          { xmlKey: { contains: search } },
+          { sku: { contains: search } },
+          { barcode: { contains: search } },
+        ],
+      });
     }
 
     if (xmlSourceId) {
       where.xmlSourceId = xmlSourceId;
     }
 
-    // Filter by readiness
+    // Filter by readiness (tek authoritative READY_FILTER)
     if (filter === 'ready') {
-      where.status = 'READY';
-      where.categoryMatch = true;
-      where.brandMatch = true;
-      where.templateMatch = true;
+      and.push(READY_FILTER);
     } else if (filter === 'not-ready') {
-      where.OR = [
-        { status: { not: 'READY' } },
-        { categoryMatch: false },
-        { brandMatch: false },
-        { templateMatch: false },
-      ];
+      and.push({ NOT: READY_FILTER });
     }
 
     // Missing reason filter
@@ -118,6 +101,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
         category: { categoryMatch: false },
         brand: { brandMatch: false },
         template: { templateMatch: false },
+        variant: { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } },
         image: { images: null },
         barcode: { barcode: null },
         price: { salePrice: null },
@@ -125,8 +109,12 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
         error: { status: 'ERROR' },
       };
       if (reasonMap[missingReason]) {
-        Object.assign(where, reasonMap[missingReason]);
+        and.push(reasonMap[missingReason]);
       }
+    }
+
+    if (and.length > 0) {
+      where.AND = and;
     }
 
     const orderBy: Record<string, string> = {};
@@ -155,6 +143,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
           categoryMatch: true,
           brandMatch: true,
           variantMatch: true,
+          variantStatus: true,
           templateMatch: true,
           createdAt: true,
           updatedAt: true,
@@ -166,17 +155,21 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
       prisma.product.count({ where: where as never }),
     ]);
 
-    // Compute readiness and missing reasons for each product
+    // Compute readiness and missing reasons for each product (tek authoritative kural)
     const itemsWithReadiness = items.map((item) => {
-      const isReady =
-        item.status === 'READY' &&
-        item.categoryMatch === true &&
-        item.brandMatch === true &&
-        item.templateMatch === true;
+      const ready = isReady({
+        status: item.status,
+        categoryMatch: item.categoryMatch,
+        brandMatch: item.brandMatch,
+        templateMatch: item.templateMatch,
+        variantMatch: item.variantMatch,
+        variantStatus: item.variantStatus,
+      });
 
       const missingReasons: string[] = [];
       if (!item.categoryMatch) missingReasons.push('Kategori');
       if (!item.brandMatch) missingReasons.push('Marka');
+      if (!isVariantComplete({ variantMatch: item.variantMatch, variantStatus: item.variantStatus })) missingReasons.push('Varyant');
       if (!item.templateMatch) missingReasons.push('Şablon');
       if (!item.images) missingReasons.push('Görsel');
       if (!item.barcode) missingReasons.push('Barkod');
@@ -186,7 +179,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 
       return {
         ...item,
-        isReady,
+        isReady: ready,
         missingReasons,
       };
     });
@@ -218,10 +211,7 @@ router.post('/send', requireAuth, async (req: Request, res: Response) => {
     const readyProducts = await prisma.product.findMany({
       where: {
         id: { in: productIds },
-        status: 'READY',
-        categoryMatch: true,
-        brandMatch: true,
-        templateMatch: true,
+        ...READY_FILTER,
       },
       select: { id: true, title: true },
     });
@@ -263,6 +253,8 @@ router.post('/recheck', requireAuth, async (req: Request, res: Response) => {
         categoryMatch: true,
         brandMatch: true,
         templateMatch: true,
+        variantMatch: true,
+        variantStatus: true,
         images: true,
         barcode: true,
         salePrice: true,
@@ -273,11 +265,14 @@ router.post('/recheck', requireAuth, async (req: Request, res: Response) => {
 
     let updatedCount = 0;
     for (const p of products) {
-      const allReady =
-        p.status !== 'ERROR' &&
-        p.categoryMatch &&
-        p.brandMatch &&
-        p.templateMatch;
+      const allReady = isPrepComplete({
+        status: p.status,
+        categoryMatch: p.categoryMatch,
+        brandMatch: p.brandMatch,
+        templateMatch: p.templateMatch,
+        variantMatch: p.variantMatch,
+        variantStatus: p.variantStatus,
+      });
 
       if (allReady && p.status !== 'READY') {
         await prisma.product.update({
@@ -329,6 +324,7 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
         categoryMatch: true,
         brandMatch: true,
         variantMatch: true,
+        variantStatus: true,
         templateMatch: true,
         createdAt: true,
         updatedAt: true,
@@ -353,15 +349,19 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Ürün bulunamadı' } });
     }
 
-    const isReady =
-      product.status === 'READY' &&
-      product.categoryMatch &&
-      product.brandMatch &&
-      product.templateMatch;
+    const ready = isReady({
+      status: product.status,
+      categoryMatch: product.categoryMatch,
+      brandMatch: product.brandMatch,
+      templateMatch: product.templateMatch,
+      variantMatch: product.variantMatch,
+      variantStatus: product.variantStatus,
+    });
 
     const missingReasons: string[] = [];
     if (!product.categoryMatch) missingReasons.push('Kategori eşleştirilmemiş');
     if (!product.brandMatch) missingReasons.push('Marka eşleştirilmemiş');
+    if (!isVariantComplete({ variantMatch: product.variantMatch, variantStatus: product.variantStatus })) missingReasons.push('Varyant eşleştirilmemiş');
     if (!product.templateMatch) missingReasons.push('Şablon eşleştirilmemiş');
     if (!product.images) missingReasons.push('Görsel eksik');
     if (!product.barcode) missingReasons.push('Barkod eksik');
@@ -371,7 +371,7 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
 
     res.json({
       ...product,
-      isReady,
+      isReady: ready,
       missingReasons,
     });
   } catch (error) {

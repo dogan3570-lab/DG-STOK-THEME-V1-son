@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
+import { matchVariantsWithAI, extractXmlVariantTree, isMarketplaceAttribute, type VariantMapping } from '../services/variantAi.ts';
 
 const router = Router();
 
@@ -65,7 +66,7 @@ router.get('/stats', requireAuth, async (_req, res) => {
       prisma.variant.count(),
       prisma.variant.groupBy({ by: ['name'], _count: { name: true }, orderBy: { _count: { name: 'desc' } } }),
       prisma.product.count({ where: { variantMatch: true } }),
-      prisma.product.count({ where: { variantMatch: false } }),
+      prisma.product.count({ where: { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } } }),
     ]);
     res.json({
       totalVariants,
@@ -85,7 +86,7 @@ router.get('/xml-variants', requireAuth, async (req, res) => {
   try {
     const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
     const search = String(req.query?.search ?? '').trim();
-    const where: any = { variantMatch: false };
+    const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
     if (search) { where.OR = [{ title: { contains: search } }, { xmlKey: { contains: search } }]; }
     const products = await prisma.product.findMany({
@@ -111,10 +112,12 @@ router.get('/unmatched-products', requireAuth, async (req, res) => {
     const search = String(req.query?.search ?? '').trim();
     const limit = Math.min(Number(req.query?.limit) || 100, 500);
     const offset = Number(req.query?.offset) || 0;
-    const where: any = { variantMatch: false };
+    const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
+    const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
     if (search) {
       where.OR = [{ title: { contains: search } }, { xmlKey: { contains: search } }, { sku: { contains: search } }, { barcode: { contains: search } }];
     }
+    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
     const [items, total] = await Promise.all([
       prisma.product.findMany({
         where, take: limit, skip: offset, orderBy: { createdAt: 'desc' },
@@ -161,7 +164,7 @@ router.post('/batch', requireAuth, async (req, res) => {
 router.post('/auto-detect', requireAuth, async (req, res) => {
   try {
     const { productIds } = req.body;
-    const where: any = { variantMatch: false };
+    const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
     if (Array.isArray(productIds) && productIds.length > 0) where.id = { in: productIds };
     const products = await prisma.product.findMany({ where, select: { id: true, title: true, xmlKey: true, description: true }, take: 500 });
     const variantData: Array<{ productId: string; name: string; value: string }> = [];
@@ -238,15 +241,17 @@ router.post('/bulk-match', requireAuth, async (req, res) => {
 });
 
 // ==================== 7. LIST VARIANTS ====================
-router.get('/', async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   try {
     const search = String(req.query?.search ?? '').trim();
     const name = req.query?.name ? String(req.query.name).trim() : null;
     const limit = Math.min(Number(req.query?.limit) || 500, 1000);
     const offset = Number(req.query?.offset) || 0;
+    const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
     const where: any = {};
     if (search) { where.OR = [{ name: { contains: search } }, { value: { contains: search } }]; }
     if (name) where.name = name;
+    if (xmlSourceId) where.product = { xmlSourceId };
     const [items, total] = await Promise.all([
       prisma.variant.findMany({ where, take: limit, skip: offset, orderBy: { updatedAt: 'desc' }, include: { product: { select: { id: true, title: true, xmlKey: true, sku: true, images: true, salePrice: true, stock: true } } } }),
       prisma.variant.count({ where }),
@@ -259,7 +264,7 @@ router.get('/', async (req, res) => {
 });
 
 // ==================== 8. VARIANT TYPES ====================
-router.get('/types', async (_req, res) => {
+router.get('/types', requireAuth, async (_req, res) => {
   try {
     const types = await prisma.variant.groupBy({ by: ['name'], _count: { name: true }, orderBy: { _count: { name: 'desc' } } });
     return res.json({ items: types.map(t => ({ name: t.name, count: t._count.name })) });
@@ -300,7 +305,7 @@ router.post('/ai-suggest', requireAuth, async (req, res) => {
 router.post('/bulk-ai-suggest', requireAuth, async (req, res) => {
   try {
     const { productIds } = req.body;
-    const where: any = { variantMatch: false };
+    const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
     if (Array.isArray(productIds) && productIds.length > 0) where.id = { in: productIds };
     const products = await prisma.product.findMany({ where, select: { id: true, title: true }, take: 200 });
     const results: Array<{ productId: string; productTitle: string; suggestions: Array<{ name: string; value: string; confidence: number }> }> = [];
@@ -367,7 +372,7 @@ router.get('/screen', requireAuth, async (req, res) => {
     const page = Math.max(1, Number(req.query?.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query?.limit) || 50));
 
-    const where: any = { variantMatch: false };
+    const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
     if (search) {
       where.OR = [
@@ -433,7 +438,7 @@ router.get('/problems', requireAuth, async (req, res) => {
     const page = Math.max(1, Number(req.query?.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query?.limit) || 50));
 
-    const where: any = { variantMatch: false };
+    const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
     if (search) {
       where.OR = [
         { title: { contains: search } },
@@ -630,7 +635,7 @@ router.post('/reanalyze', requireAuth, async (req, res) => {
 // ==================== 20. SCAN ====================
 router.post('/scan', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
   try {
-    const where: any = { variantMatch: false };
+    const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
     const products = await prisma.product.findMany({
       where,
       select: { id: true, title: true, xmlKey: true, sku: true, description: true, detail: true, technicalSpecs: true, variantMatch: true, variants: { select: { id: true, name: true, value: true } } },
@@ -782,11 +787,124 @@ router.post('/', requireAuth, async (req, res) => {
   }
 });
 
+// ==================== 28. AI VARYANT EŞLEŞTİRME (GERÇEK GATEWAY) ====================
+router.post('/ai-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
+  try {
+    const xmlSourceId = String(req.query?.xmlSourceId ?? req.body?.xmlSourceId ?? '');
+    const marketplaceId = String(req.query?.marketplaceId ?? req.body?.marketplaceId ?? '');
+    if (!xmlSourceId || !marketplaceId) {
+      return res.status(400).json({ ok: false, error: { code: 'CONTEXT_REQUIRED', message: 'xmlSourceId ve marketplaceId zorunludur' } });
+    }
+
+    const marketplace = await prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { id: true, name: true, key: true } });
+    if (!marketplace) return res.status(404).json({ ok: false, error: { code: 'MARKETPLACE_NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+
+    const limit = Math.min(50, Math.max(1, Number(req.query?.limit ?? req.body?.limit ?? 20)));
+
+    const products = await prisma.product.findMany({
+      where: { xmlSourceId, variantStatus: 'WAITING_AI' },
+      take: limit,
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, title: true, xmlKey: true, description: true },
+    });
+
+    if (products.length === 0) {
+      return res.json({ ok: true, matchedCount: 0, manualCount: 0, failedCount: 0, remaining: 0, message: 'Bu context için WAITING_AI varyant ürünü bulunamadı', results: [] });
+    }
+
+    // XML varyant ağacı çıkar (gerçek renk/beden/numara/kapasite)
+    const prepared: Array<{ product: (typeof products)[number]; attributes: Array<{ name: string; value: string }> }> = [];
+    const noAttrIds: string[] = [];
+    for (const product of products) {
+      const attributes = extractXmlVariantTree(product);
+      if (attributes.length === 0) noAttrIds.push(product.id);
+      else prepared.push({ product, attributes });
+    }
+    if (noAttrIds.length) {
+      await prisma.product.updateMany({ where: { id: { in: noAttrIds }, variantStatus: 'WAITING_AI' }, data: { variantStatus: 'NOT_REQUIRED' } });
+    }
+
+    if (prepared.length === 0) {
+      const remaining = await prisma.product.count({ where: { xmlSourceId, variantStatus: 'WAITING_AI' } });
+      return res.json({ ok: true, matchedCount: 0, manualCount: 0, failedCount: noAttrIds.length, remaining, message: 'Tespit edilen gerçek varyant yok; ürünler NOT_REQUIRED yapıldı', results: [] });
+    }
+
+    // TEST-08: zaten pazaryeri canonical isminde olan attribute'lar otomatik eşleşir (AI gerekmez)
+    const autoMappings: VariantMapping[] = [];
+    const aiBatch: typeof prepared = [];
+    for (const e of prepared) {
+      const autoAttrs = e.attributes.filter((a) => isMarketplaceAttribute(a.name));
+      const aiAttrs = e.attributes.filter((a) => !isMarketplaceAttribute(a.name));
+      for (const a of autoAttrs) autoMappings.push({ productId: e.product.id, xmlAttribute: a.name, xmlValue: a.value, marketplaceAttribute: a.name, marketplaceValue: a.value, confidence: 1.0 });
+      if (aiAttrs.length > 0) aiBatch.push({ product: e.product, attributes: aiAttrs });
+    }
+
+    let aiResult: { ok: boolean; mappings: VariantMapping[]; provider: string; model: string; error?: string; errorCode?: string } =
+      { ok: true, mappings: [], provider: 'auto', model: 'auto' };
+    if (aiBatch.length > 0) {
+      aiResult = await matchVariantsWithAI(aiBatch, marketplace.name);
+    }
+    const aiFailed = aiBatch.length > 0 && !aiResult.ok;
+
+    const allMappings = [...autoMappings, ...aiResult.mappings];
+    const byProduct = new Map<string, VariantMapping[]>();
+    for (const m of allMappings) {
+      if (!byProduct.has(m.productId)) byProduct.set(m.productId, []);
+      byProduct.get(m.productId)!.push(m);
+    }
+
+    const results: Array<{ productId: string; status: string; confidence: number; mappings: VariantMapping[] }> = [];
+    let matchedCount = 0;
+    let manualCount = 0;
+    let failedCount = 0;
+
+    for (const e of prepared) {
+      const maps = byProduct.get(e.product.id) || [];
+      const allCovered = e.attributes.every((a) => maps.some((m) => m.xmlAttribute.toLowerCase() === a.name.toLowerCase() && m.xmlValue === a.value));
+      const allHighConf = maps.length > 0 && maps.every((m) => m.confidence >= 0.9);
+      const complete = allCovered && allHighConf;
+      const confidence = maps.length ? Math.round((maps.reduce((s, m) => s + m.confidence, 0) / maps.length) * 100) : 0;
+
+      const existing = await prisma.variantAnalysis.findFirst({ where: { productId: e.product.id } });
+      const base = {
+        source: aiBatch.length > 0 ? aiResult.provider : 'auto',
+        status: complete ? 'MATCHED' : aiFailed ? 'ERROR' : 'MANUAL_REVIEW',
+        confidence,
+        checkResults: JSON.stringify({ marketplaceName: marketplace.name, marketplaceKey: marketplace.key, xmlAttributes: e.attributes, mappings: maps }),
+        autoFixAttempted: true,
+        autoFixResult: complete ? 'matched' : aiFailed ? 'ai_error' : 'manual_review',
+        validationPassed: complete,
+      };
+      if (existing) await prisma.variantAnalysis.update({ where: { id: existing.id }, data: base });
+      else await prisma.variantAnalysis.create({ data: { productId: e.product.id, ...base } });
+
+      if (complete) {
+        await prisma.product.update({ where: { id: e.product.id }, data: { variantMatch: true, variantStatus: 'COMPLETED' } });
+        matchedCount++;
+      } else if (aiFailed) {
+        // AI hatası: variantMatch ASLA true olmaz; WAITING_AI korunur (retry edilebilir)
+        failedCount++;
+      } else {
+        await prisma.product.update({ where: { id: e.product.id }, data: { variantStatus: 'MANUAL_REVIEW' } });
+        manualCount++;
+      }
+
+      results.push({ productId: e.product.id, status: complete ? 'MATCHED' : aiFailed ? 'FAILED' : 'MANUAL_REVIEW', confidence, mappings: maps });
+    }
+
+    const remaining = await prisma.product.count({ where: { xmlSourceId, variantStatus: 'WAITING_AI' } });
+    res.json({ ok: true, matchedCount, manualCount, failedCount, remaining, provider: aiBatch.length > 0 ? aiResult.provider : 'auto', model: aiBatch.length > 0 ? aiResult.model : 'auto', results });
+  } catch (error) {
+    console.error('[variants] POST ai-match error:', error);
+    res.status(500).json({ ok: false, error: { code: 'DB_ERROR', message: 'Varyant AI eşleştirme başarısız' } });
+  }
+});
+
 // ==================== 25. GET SINGLE VARIANT ====================
 router.get('/:id', requireAuth, async (req, res) => {
   try {
     const item = await prisma.variant.findUnique({
-      where: { id: req.params.id },
+      where: { id: String(req.params.id) },
       include: { product: { select: { id: true, title: true, xmlKey: true, sku: true, images: true, salePrice: true, stock: true } } },
     });
     if (!item) return res.status(404).json({ ok: false, error: 'Varyant bulunamadi' });
@@ -804,7 +922,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     const data: any = {};
     if (name !== undefined) data.name = name;
     if (value !== undefined) data.value = value;
-    const item = await prisma.variant.update({ where: { id: req.params.id }, data });
+    const item = await prisma.variant.update({ where: { id: String(req.params.id) }, data });
     await prisma.auditLog.create({ data: { action: 'VARIANT_UPDATE', entity: 'variant', details: `Varyant guncellendi: ${item.name}:${item.value}`, actorUserId: (req as any).actor?.userId || null } });
     return res.json({ item });
   } catch (error) {

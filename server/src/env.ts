@@ -6,6 +6,8 @@ const EnvSchema = z.object({
   CORS_ORIGIN: z.string().optional(),
   JWT_SECRET: z.string().min(8).default('dev-secret-change-me'),
   JWT_EXPIRES_IN: z.string().optional(),
+  ADMIN_EMAIL: z.string().optional(),
+  ADMIN_PASSWORD: z.string().optional(),
 });
 
 export const env = EnvSchema.parse({
@@ -14,4 +16,6 @@ export const env = EnvSchema.parse({
   CORS_ORIGIN: process.env.CORS_ORIGIN,
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN,
+  ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
 });

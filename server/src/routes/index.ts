@@ -52,11 +52,21 @@ router.use('/marketplace-manage', marketplaceManageRoutes);
 router.use('/ai-settings', aiSettingsRoutes);
 
 // ==================== MARKETPLACES ====================
-// Public read
-router.get('/marketplaces', async (_req, res) => {
+// Auth + ADMIN rolü gerekli; credential alanları (apiKey, apiSecret, merchantId, storeId) ASLA döndürülmez
+router.get('/marketplaces', requireAuth, requireRole(['ADMIN']), async (_req, res) => {
   try {
     const items = await prisma.marketplace.findMany({
       orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        key: true,
+        name: true,
+        apiUrl: true,
+        apiStatus: true,
+        active: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
     return res.json({ items });
   } catch (error) {
@@ -71,6 +81,11 @@ router.post('/xml/import', requireAuth, requireRole(['ADMIN', 'OPERATOR']), asyn
   const sourceName = typeof req.body?.sourceName === 'string' ? req.body.sourceName.trim() : '';
 
   let payload = xml;
+
+  // XML doğrulaması importXmlProducts içindeki parseXmlDocument ile yapılır.
+  if (xml && !xml.trim()) {
+    return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'xml body boş olamaz' } });
+  }
 
   if (!payload.trim() && xmlUrl) {
     try {

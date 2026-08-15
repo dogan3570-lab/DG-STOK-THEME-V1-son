@@ -1,0 +1,4477 @@
+
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: 'var(--primary-color)',
+                        primaryHover: 'var(--primary-hover)',
+                        darkBg: 'var(--dark-bg)',
+                        darkPanel: 'var(--dark-panel)',
+                    }
+                }
+            }
+        }
+    
+;
+
+        /* ===================== HELPERS ===================== */
+        var currentPage = 'dashboard';
+        var activeSourceId = null;
+        var activeSourceName = null;
+        var currentProductsPage = 1;
+        var srcProductsPage = 1;
+
+        /* ===================== GLOBAL CONTEXT (CONTEXT-001) ===================== */
+        var contextState = {
+            xmlSourceId: '',
+            xmlSourceName: '',
+            marketplaceId: '',
+            marketplaceName: '',
+            isValid: false
+        };
+
+        function getContextParams() {
+            var params = '';
+            if (contextState.xmlSourceId) params += (params ? '&' : '') + 'xmlSourceId=' + encodeURIComponent(contextState.xmlSourceId);
+            if (contextState.marketplaceId) params += (params ? '&' : '') + 'marketplaceId=' + encodeURIComponent(contextState.marketplaceId);
+            return params;
+        }
+
+        function apiWithContext(url, opts) {
+            var options = opts || {};
+            var separator = url.includes('?') ? '&' : '?';
+            var contextParams = getContextParams();
+            if (contextParams) url = url + separator + contextParams;
+            return api(url, options);
+        }
+
+        function isContextValid() {
+            return contextState.isValid && contextState.xmlSourceId && contextState.marketplaceId;
+        }
+
+        function updateContextUI() {
+            var indicator = document.getElementById('context-indicator');
+            var required = document.getElementById('context-required');
+            var label = document.getElementById('context-label');
+            var xmlSel = document.getElementById('context-xml-source');
+            var mpSel = document.getElementById('context-marketplace');
+
+            if (isContextValid()) {
+                if (indicator) indicator.classList.remove('hidden');
+                if (required) required.classList.add('hidden');
+                if (label) label.textContent = contextState.xmlSourceName + ' + ' + contextState.marketplaceName;
+                if (xmlSel) xmlSel.value = contextState.xmlSourceId;
+                if (mpSel) { mpSel.value = contextState.marketplaceId; mpSel.disabled = false; }
+            } else if (contextState.xmlSourceId) {
+                if (indicator) indicator.classList.add('hidden');
+                if (required) required.classList.remove('hidden');
+                if (xmlSel) xmlSel.value = contextState.xmlSourceId;
+                if (mpSel) mpSel.disabled = false;
+            } else {
+                if (indicator) indicator.classList.add('hidden');
+                if (required) required.classList.remove('hidden');
+                if (xmlSel) xmlSel.value = '';
+                if (mpSel) { mpSel.value = ''; mpSel.disabled = true; }
+            }
+            contextState.isValid = !!(contextState.xmlSourceId && contextState.marketplaceId);
+        }
+
+        function clearContext() {
+            contextState.xmlSourceId = '';
+            contextState.xmlSourceName = '';
+            contextState.marketplaceId = '';
+            contextState.marketplaceName = '';
+            contextState.isValid = false;
+            updateContextUI();
+            syncLocalContextSelectors();
+            clearAllPageData();
+            showToast('Context temizlendi', 'success');
+        }
+
+        function clearAllPageData() {
+            var tbody = document.getElementById('hub-xml-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-6 px-6 text-slate-400 text-center" colspan="6">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('xml-src-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="7">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('src-products-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('products-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="10">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('cat-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('br-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="7">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('var-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('li-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
+        }
+
+        async function loadContextSelectors() {
+            try {
+                var [xsRes, mpRes] = await Promise.all([api('/xml-sources'), api('/marketplaces')]);
+                var xmlSel = document.getElementById('context-xml-source');
+                var mpSel = document.getElementById('context-marketplace');
+                if (xmlSel && xsRes.items) {
+                    var html = '<option value="">XML Kaynağı</option>';
+                    xsRes.items.forEach(function(s) { html += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; });
+                    xmlSel.innerHTML = html;
+                }
+                if (mpSel && mpRes.items) {
+                    var html2 = '<option value="">Pazaryeri</option>';
+                    mpRes.items.forEach(function(m) { html2 += '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>'; });
+                    mpSel.innerHTML = html2;
+                }
+            } catch (e) { console.error('loadContextSelectors error:', e); }
+        }
+
+        function syncLocalContextSelectors() {
+            var catXml = document.getElementById('cat-xml-source');
+            var catMp = document.getElementById('cat-marketplace');
+            var varXml = document.getElementById('var-xml-source');
+            var varMp = document.getElementById('var-marketplace');
+            var poolXml = document.getElementById('pool-source');
+            if (catXml && contextState.xmlSourceId) catXml.value = contextState.xmlSourceId;
+            if (catMp && contextState.marketplaceId) { catMp.value = contextState.marketplaceId; catMp.disabled = false; }
+            else if (catMp) { catMp.disabled = !contextState.xmlSourceId; }
+            if (varXml && contextState.xmlSourceId) varXml.value = contextState.xmlSourceId;
+            if (varMp && contextState.marketplaceId) { varMp.value = contextState.marketplaceId; varMp.disabled = false; }
+            else if (varMp) { varMp.disabled = !contextState.xmlSourceId; }
+            if (poolXml && contextState.xmlSourceId) poolXml.value = contextState.xmlSourceId;
+            if (typeof catState !== 'undefined') catState.xmlSupplierId = contextState.xmlSourceId;
+            if (typeof catRenderGuardWarn === 'function') catRenderGuardWarn();
+            if (typeof prepVariantCheckGuard === 'function') prepVariantCheckGuard();
+            if (typeof prepListGuard === 'function') prepListGuard();
+        }
+
+        function onContextXmlSourceChange() {
+            var sel = document.getElementById('context-xml-source');
+            var mpSel = document.getElementById('context-marketplace');
+            var val = sel.value;
+            if (val) {
+                contextState.xmlSourceId = val;
+                contextState.xmlSourceName = sel.options[sel.selectedIndex].text;
+                if (mpSel) mpSel.disabled = false;
+            } else {
+                contextState.xmlSourceId = '';
+                contextState.xmlSourceName = '';
+                contextState.marketplaceId = '';
+                contextState.marketplaceName = '';
+                if (mpSel) { mpSel.value = ''; mpSel.disabled = true; }
+            }
+            contextState.isValid = !!(contextState.xmlSourceId && contextState.marketplaceId);
+            updateContextUI();
+            syncLocalContextSelectors();
+            clearAllPageData();
+            refreshCurrentPage();
+        }
+
+        function onContextMarketplaceChange() {
+            var sel = document.getElementById('context-marketplace');
+            var val = sel.value;
+            if (val) {
+                contextState.marketplaceId = val;
+                contextState.marketplaceName = sel.options[sel.selectedIndex].text;
+            } else {
+                contextState.marketplaceId = '';
+                contextState.marketplaceName = '';
+            }
+            contextState.isValid = !!(contextState.xmlSourceId && contextState.marketplaceId);
+            updateContextUI();
+            syncLocalContextSelectors();
+            clearAllPageData();
+            refreshCurrentPage();
+        }
+
+        function refreshCurrentPage() {
+            if (currentPage === 'dashboard') loadDashboard();
+            else if (currentPage === 'xml') loadXmlSources();
+            else if (currentPage === 'products') loadProducts();
+            else if (currentPage === 'prep-categories') prepCategoriesLoad();
+            else if (currentPage === 'prep-brands') prepBrandsLoad();
+            else if (currentPage === 'prep-variants') prepVariantsLoad();
+            else if (currentPage === 'prep-listings') prepListingsLoad();
+            else if (currentPage === 'ready-to-ship') loadReadyToShip();
+            else if (currentPage === 'marketplace') loadMarketplace();
+            else if (currentPage === 'orders') loadOrders();
+            else if (currentPage === 'reports') loadReports();
+            else if (currentPage === 'settings') loadSettings();
+        }
+
+        function escapeHtml(str) {
+            if (str == null) return '';
+            return String(str)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function fmt(n) {
+            if (n == null) return '0';
+            return Number(n).toLocaleString('tr-TR');
+        }
+
+        function fmtDate(v) {
+            if (!v) return '\u2014';
+            var d = new Date(v);
+            if (isNaN(d.getTime())) return '\u2014';
+            var p = function (x) { return String(x).padStart(2, '0'); };
+            return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+        }
+
+        function fmtDuration(ms) {
+            if (ms == null) return '\u2014';
+            if (ms < 1000) return ms + 'ms';
+            return (ms / 1000).toFixed(1) + 's';
+        }
+
+        async function api(url, opts) {
+            var options = opts || {};
+            var headers = Object.assign({}, options.headers || {});
+            if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+            var separator = url.includes('?') ? '&' : '?';
+            var contextParams = getContextParams();
+            if (contextParams) url = url + separator + contextParams;
+            var res = await fetch(url, {
+                method: options.method || 'GET',
+                credentials: 'include',
+                headers: headers,
+                body: options.body ? JSON.stringify(options.body) : undefined,
+            });
+            if (res.status === 401) {
+                showLogin();
+                var e401 = new Error('UNAUTHORIZED');
+                e401.status = 401;
+                throw e401;
+            }
+            if (!res.ok) {
+                var data = null;
+                try { data = await res.json(); } catch (e) { /* ignore */ }
+                var msg = (data && (data.error && (data.error.message || data.error)) || data && data.message) || res.statusText || 'Hata';
+                var err = new Error(typeof msg === 'string' ? msg : 'İstek başarısız');
+                err.status = res.status;
+                throw err;
+            }
+            if (res.status === 204) return null;
+            return res.json();
+        }
+
+        function showToast(text, type) {
+            var container = document.getElementById('toast-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'toast-container';
+                container.className = 'fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm';
+                document.body.appendChild(container);
+            }
+            var el = document.createElement('div');
+            var typeClass = 'border-blue-500/20 bg-blue-500/10 text-blue-600 dark:text-blue-400';
+            var icon = 'fa-circle-info';
+            if (type === 'error') { typeClass = 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400'; icon = 'fa-circle-exclamation'; }
+            else if (type === 'success') { typeClass = 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'; icon = 'fa-circle-check'; }
+            el.className = 'rounded-lg border px-4 py-3 text-sm shadow-lg backdrop-blur-sm flex items-center gap-2 ' + typeClass;
+            el.innerHTML = '<i class="fa-solid ' + icon + '"></i> <span>' + escapeHtml(text) + '</span>';
+            container.appendChild(el);
+            setTimeout(function () { el.remove(); }, 6000);
+        }
+
+        function statusBadge(status) {
+            var map = {
+                'connected': ['emerald', 'Bağlı'],
+                'error': ['red', 'Hata'],
+                'auth_error': ['amber', 'Auth Hata'],
+                'timeout': ['red', 'Zaman Aşımı'],
+                'unknown': ['slate', 'Bilinmiyor'],
+                'running': ['blue', 'Çalışıyor'],
+                'completed': ['emerald', 'Tamamlandı'],
+                'cancelled': ['slate', 'İptal Edildi'],
+                'failed': ['red', 'Hata'],
+                'READY': ['emerald', 'Hazır'],
+                'XML': ['blue', 'XML'],
+                'ERROR': ['red', 'Hatalı'],
+            };
+            var entry = map[status] || ['slate', status || '\u2014'];
+            return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-' + entry[0] + '-500/10 text-' + entry[0] + '-600 dark:text-' + entry[0] + '-400"><span class="w-1.5 h-1.5 rounded-full bg-' + entry[0] + '-500"></span> ' + entry[1] + '</span>';
+        }
+
+        function sourceTypeChip(t) {
+            var colors = {
+                'MANUAL': ['slate', 'Manuel'],
+                'TRENDYOL': ['orange', 'Trendyol'],
+                'N11': ['red', 'n11'],
+                'HEPSIBURADA': ['purple', 'Hepsiburada'],
+                'OTTO': ['cyan', 'Otto'],
+                'CUSTOM': ['indigo', 'Özel'],
+            };
+            var entry = colors[t] || ['slate', t || 'MANUAL'];
+            return '<span class="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-' + entry[0] + '-500/10 text-' + entry[0] + '-600 dark:text-' + entry[0] + '-400 border border-' + entry[0] + '-500/20">' + entry[1] + '</span>';
+        }
+
+        /* ===================== THEME / UI ===================== */
+
+        function toggleTheme() {
+            var html = document.documentElement;
+            var icon = document.getElementById('theme-icon');
+            if (html.classList.contains('dark')) {
+                html.classList.remove('dark');
+                icon.classList.remove('fa-moon');
+                icon.classList.add('fa-sun');
+                localStorage.setItem('theme', 'light');
+            } else {
+                html.classList.add('dark');
+                icon.classList.remove('fa-sun');
+                icon.classList.add('fa-moon');
+                localStorage.setItem('theme', 'dark');
+            }
+        }
+
+        function toggleCustomizer() {
+            var modal = document.getElementById('customizer-modal');
+            modal.classList.toggle('hidden');
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) { document.exitFullscreen(); }
+            }
+        }
+
+        function toggleSubmenu(event, subId, arrowId) {
+            if (event) event.preventDefault();
+            var sub = document.getElementById(subId);
+            var arrow = document.getElementById(arrowId);
+            if (sub) sub.classList.toggle('hidden');
+            if (arrow) arrow.classList.toggle('rotate-90');
+        }
+
+        function setThemeColor(color, hoverColor) {
+            document.documentElement.style.setProperty('--primary-color', color);
+            document.documentElement.style.setProperty('--primary-hover', hoverColor);
+            localStorage.setItem('primaryColor', color);
+            localStorage.setItem('primaryHover', hoverColor);
+            updateAccentUI(color);
+        }
+
+        function updateAccentUI(color) {
+            var map = {'#3b82f6':'blue','#6366f1':'indigo','#22c55e':'emerald','#8b5cf6':'violet','#f97316':'orange'};
+            var name = map[color] || '';
+            document.querySelectorAll('.accent-opt').forEach(function(b) {
+                b.className = b.className.replace(/ring-primary|ring-blue|ring-indigo|ring-emerald|ring-violet|ring-orange/g, '');
+                b.classList.add('ring-transparent');
+            });
+            if (name) {
+                var active = document.querySelector('.accent-opt[data-accent="' + name + '"]');
+                if (active) { active.classList.remove('ring-transparent'); active.classList.add('ring-' + name + '-400'); }
+            }
+        }
+
+        function setThemeMode(mode) {
+            var html = document.documentElement;
+            var icon = document.getElementById('theme-icon');
+            if (mode === 'light') {
+                html.classList.remove('dark');
+                if (icon) { icon.classList.remove('fa-moon'); icon.classList.add('fa-sun'); }
+            } else {
+                html.classList.add('dark');
+                if (icon) { icon.classList.remove('fa-sun'); icon.classList.add('fa-moon'); }
+            }
+            localStorage.setItem('theme', mode);
+            var opts = document.querySelectorAll('.theme-mode-opt');
+            opts.forEach(function(b, i) {
+                b.className = b.className.replace(/border-primary bg-primary\/10 text-primary/g, '').replace(/border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400/g, '');
+                b.classList.add('border-slate-200', 'dark:border-slate-700', 'text-slate-500', 'dark:text-slate-400');
+            });
+            var idx = mode === 'light' ? 0 : 1;
+            if (opts[idx]) {
+                opts[idx].className = opts[idx].className.replace(/border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400/g, '');
+                opts[idx].classList.add('border-primary', 'bg-primary/10', 'text-primary');
+            }
+            var lp = document.getElementById('light-preset-section');
+            if (lp) lp.style.display = mode === 'light' ? '' : 'none';
+        }
+
+        function setLightPreset(preset) {
+            var body = document.body;
+            body.classList.remove('light-preset-classic', 'light-preset-ocean', 'light-preset-emerald', 'light-preset-violet', 'light-preset-warm');
+            body.classList.add('light-preset-' + preset);
+            localStorage.setItem('uiLightPreset', preset);
+            document.querySelectorAll('.light-preset-opt').forEach(function(b) {
+                b.className = b.className.replace(/border-primary/g, '');
+                b.classList.add('border-transparent');
+            });
+            var active = document.querySelector('.light-preset-opt[data-preset="' + preset + '"]');
+            if (active) { active.classList.remove('border-transparent'); active.classList.add('border-primary'); }
+        }
+
+        function setDarkBg(bg, panel) {
+            document.documentElement.style.setProperty('--dark-bg', bg);
+            document.documentElement.style.setProperty('--dark-panel', panel);
+            localStorage.setItem('darkBg', bg);
+            localStorage.setItem('darkPanel', panel);
+        }
+
+        function setDensity(mode) {
+            var body = document.body;
+            body.classList.remove('density-compact', 'density-comfortable');
+            if (mode !== 'comfortable') body.classList.add('density-' + mode);
+            localStorage.setItem('uiDensity', mode);
+            var opts = document.querySelectorAll('.density-opt');
+            opts.forEach(function(btn) {
+                btn.className = btn.className.replace(/border-primary bg-primary\/10 text-primary/g, '').replace(/border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400/g, '');
+                btn.classList.add('border-slate-200', 'dark:border-slate-700', 'text-slate-500', 'dark:text-slate-400');
+            });
+            var idx = mode === 'compact' ? 1 : 0;
+            if (opts[idx]) {
+                opts[idx].className = opts[idx].className.replace(/border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400/g, '');
+                opts[idx].classList.add('border-primary', 'bg-primary/10', 'text-primary');
+            }
+        }
+
+        function setBorderStrength(strength) {
+            var body = document.body;
+            body.classList.remove('border-strength-soft', 'border-strength-standard', 'border-strength-strong');
+            if (strength !== 'standard') body.classList.add('border-strength-' + strength);
+            localStorage.setItem('uiBorderStrength', strength);
+            var opts = document.querySelectorAll('.border-strength-opt');
+            opts.forEach(function(btn) {
+                btn.className = btn.className.replace(/border-primary bg-primary\/10 text-primary/g, '').replace(/border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400/g, '');
+                btn.classList.add('border-slate-200', 'dark:border-slate-700', 'text-slate-500', 'dark:text-slate-400');
+            });
+            var idx = strength === 'soft' ? 0 : strength === 'strong' ? 2 : 1;
+            if (opts[idx]) {
+                opts[idx].className = opts[idx].className.replace(/border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400/g, '');
+                opts[idx].classList.add('border-primary', 'bg-primary/10', 'text-primary');
+            }
+        }
+
+        function setPanelStyle(style) {
+            var body = document.body;
+            body.classList.remove('panel-style-standard', 'panel-style-soft', 'panel-style-elevated');
+            if (style !== 'standard') body.classList.add('panel-style-' + style);
+            localStorage.setItem('uiPanelStyle', style);
+            var opts = document.querySelectorAll('.panel-style-opt');
+            opts.forEach(function(btn) {
+                btn.className = btn.className.replace(/border-primary bg-primary\/10 text-primary/g, '').replace(/border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400/g, '');
+                btn.classList.add('border-slate-200', 'dark:border-slate-700', 'text-slate-500', 'dark:text-slate-400');
+            });
+            var idx = style === 'soft' ? 1 : style === 'elevated' ? 2 : 0;
+            if (opts[idx]) {
+                opts[idx].className = opts[idx].className.replace(/border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400/g, '');
+                opts[idx].classList.add('border-primary', 'bg-primary/10', 'text-primary');
+            }
+        }
+
+        function resetTheme() {
+            localStorage.removeItem('primaryColor');
+            localStorage.removeItem('primaryHover');
+            localStorage.removeItem('darkBg');
+            localStorage.removeItem('darkPanel');
+            localStorage.removeItem('uiDensity');
+            localStorage.removeItem('uiPanelStyle');
+            localStorage.removeItem('uiBorderStrength');
+            localStorage.removeItem('uiLightPreset');
+            localStorage.setItem('theme', 'light');
+            document.documentElement.classList.remove('dark');
+            var icon = document.getElementById('theme-icon');
+            if (icon) { icon.classList.remove('fa-moon'); icon.classList.add('fa-sun'); }
+            setThemeColor('#6366f1', '#4f46e5');
+            setDarkBg('#090d16', '#111827');
+            setDensity('comfortable');
+            setBorderStrength('standard');
+            setPanelStyle('standard');
+            setLightPreset('classic');
+            setThemeMode('light');
+            showToast('Tema varsayılana sıfırlandı', 'success');
+        }
+
+        /* ===================== AUTH ===================== */
+
+        function showLogin() {
+            var modal = document.getElementById('login-modal');
+            modal.classList.remove('hidden');
+        }
+
+        function hideLogin() {
+            var modal = document.getElementById('login-modal');
+            modal.classList.add('hidden');
+        }
+
+        async function doLogin() {
+            var email = document.getElementById('login-email').value.trim();
+            var password = document.getElementById('login-password').value;
+            var errBox = document.getElementById('login-error');
+            errBox.classList.add('hidden');
+            if (!email || !password) {
+                errBox.textContent = 'E-posta ve şifre zorunludur.';
+                errBox.classList.remove('hidden');
+                return;
+            }
+            try {
+                await api('/auth/login', { method: 'POST', body: { email: email, password: password } });
+                hideLogin();
+                showToast('Giriş başarılı, veriler yükleniyor...', 'success');
+                loadApp();
+            } catch (e) {
+                errBox.textContent = e.message || 'Giriş başarısız.';
+                errBox.classList.remove('hidden');
+            }
+        }
+
+        async function checkAuth() {
+            try {
+                await api('/auth/me');
+                loadApp();
+            } catch (e) {
+                if (e.status === 401) { showLogin(); }
+                else { showLogin(); }
+            }
+        }
+
+        /* ===================== NAVIGATION ===================== */
+
+        function showPage(name) {
+            currentPage = name;
+            var pages = ['dashboard', 'xml', 'products', 'prep-categories', 'prep-brands', 'prep-variants', 'prep-listings', 'ready-to-ship', 'marketplace', 'orders', 'reports', 'settings', 'ai-image', 'ai-sales', 'ai-copilot', 'ai-control'];
+            pages.forEach(function (p) {
+                var el = document.getElementById('page-' + p);
+                if (el) el.classList.toggle('hidden', p !== name);
+            });
+            pages.forEach(function (p) {
+                var nav = document.getElementById('nav-' + p);
+                if (!nav) return;
+                var on = (p === name);
+                nav.classList.toggle('active-nav', on);
+                nav.classList.toggle('text-slate-600', !on);
+                nav.classList.toggle('dark:text-slate-400', !on);
+            });
+
+            var contextRequiredPages = ['products', 'prep-categories', 'prep-brands', 'prep-variants', 'prep-listings', 'ready-to-ship', 'orders'];
+            var needsContext = contextRequiredPages.includes(name);
+if (needsContext && !isContextValid()) {
+                showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning');
+                clearAllPageData();
+
+                // Kategori içerik alanı tamamen gizlenir, SADECE orijinal guard mesajı görünür
+                var catToolbar = document.getElementById('cat-toolbar');
+                if (catToolbar) catToolbar.classList.add('hidden');
+                var catStepper = document.getElementById('cat-stepper');
+                if (catStepper) catStepper.classList.add('hidden');
+                var catContent = document.getElementById('cat-content');
+                if (catContent) catContent.classList.add('hidden');
+                var guard = document.getElementById('cat-guard-warn');
+                if (guard) guard.classList.remove('hidden');
+                return;
+            }
+
+            if (name === 'xml') showXmlPage('list');
+            if (name === 'products') refreshProducts(currentProductsPage);
+            if (name === 'prep-categories') prepCategoriesLoad();
+            if (name === 'prep-brands') prepBrandsLoad();
+            if (name === 'prep-variants') prepVariantsLoad();
+            if (name === 'prep-listings') prepListingsLoad();
+            if (name === 'ready-to-ship') rtsLoad();
+            if (name === 'marketplace') mpManageLoad();
+            if (name === 'orders') ordersLoad();
+            if (name === 'reports') reportsLoad();
+            if (name === 'settings') settingsLoad();
+            if (name === 'ai-image') aiImageLoad();
+            if (name === 'ai-sales') aiSalesLoad();
+            if (name === 'ai-copilot') aiCopilotLoad();
+            if (name === 'ai-control') aiControlLoad();
+        }
+
+        function showXmlPage(view) {
+            var list = document.getElementById('xml-view-list');
+            var products = document.getElementById('xml-view-products');
+            var history = document.getElementById('xml-view-history');
+            list.classList.toggle('hidden', view !== 'list');
+            products.classList.toggle('hidden', view !== 'products');
+            history.classList.toggle('hidden', view !== 'history');
+            if (view === 'list') refreshXmlSources();
+        }
+
+        function globalSearch() {
+            var val = document.getElementById('global-search-input').value.trim();
+            showPage('products');
+            document.getElementById('products-search').value = val;
+            refreshProducts(1);
+        }
+
+        /* ===================== DASHBOARD ===================== */
+
+        function updateDashboardLastUpdate() {
+            var el = document.getElementById('dashboard-last-update');
+            if (el) el.textContent = new Date().toLocaleTimeString('tr-TR');
+        }
+
+        async function refreshDashboard() {
+            try {
+                var stats = await api('/dashboard/stats');
+                var map = {
+                    'kpi-total-products': stats.totalProducts,
+                    'kpi-low-stock': stats.lowStockProducts,
+                    'kpi-error-products': stats.errorProducts,
+                    'kpi-active-xml': stats.activeXmlSources,
+                    'kpi-passive-xml': stats.passiveXmlSources,
+                    'kpi-error-xml': stats.xmlSourcesWithError,
+                    'kpi-today-xml': stats.todayXmlUpdates,
+                    'kpi-today-orders': stats.todayOrders,
+                    'kpi-total-orders': stats.totalOrders,
+                    'kpi-brands': stats.brandCount,
+                    'kpi-categories': stats.categoryCount,
+                };
+                Object.keys(map).forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el) el.textContent = fmt(map[id]);
+                });
+                var summary = document.getElementById('dashboard-summary');
+                if (summary) {
+                    summary.textContent = stats.activeXmlSources + ' aktif XML kaynağı ile ' + fmt(stats.totalProducts) + ' ürün senkronize ediliyor.';
+                }
+            } catch (e) {
+                if (e.status !== 401) showToast('Dashboard istatistikleri yüklenemedi: ' + e.message, 'error');
+            }
+        }
+
+        async function refreshMarketplaces() {
+            try {
+                var data = await api('/marketplaces');
+                var container = document.getElementById('mp-container');
+                var countEl = document.getElementById('mp-count');
+                var items = (data && data.items) || [];
+                if (countEl) countEl.textContent = items.length + ' pazaryeri';
+                if (items.length === 0) {
+                    container.innerHTML = '<p class="text-xs text-slate-400">Henüz pazaryeri tanımlı değil.</p>';
+                    return;
+                }
+                var icons = { 'tt': ['orange', 'fa-cart-shopping'], 'n11': ['red', 'fa-store'], 'he': ['purple', 'fa-cart-shopping'] };
+                container.innerHTML = items.map(function (mp) {
+                    var ic = icons[mp.key] || ['blue', 'fa-store'];
+                    var color = mp.apiStatus === 'error' ? 'red' : 'emerald';
+                    return '<div class="flex items-center gap-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 px-4 py-2.5">'
+                        + '<div class="w-9 h-9 rounded-xl bg-' + ic[0] + '-500/10 text-' + ic[0] + '-500 flex items-center justify-center text-sm"><i class="fa-solid ' + ic[1] + '"></i></div>'
+                        + '<div><div class="flex items-center gap-2"><span class="text-sm font-medium text-slate-800 dark:text-slate-100">' + escapeHtml(mp.name) + '</span>'
+                        + '<span class="w-2 h-2 rounded-full bg-' + color + '-500" title="' + (mp.apiStatus === 'error' ? 'Hatalı' : 'Aktif') + '"></span></div>'
+                        + '<div class="text-xs text-slate-400">' + escapeHtml(mp.key || '') + '</div></div></div>';
+                }).join('');
+            } catch (e) {
+                if (e.status !== 401) { /* sessiz */ }
+            }
+        }
+
+        /* ===================== XML SOURCES ===================== */
+
+        async function refreshXmlSources() {
+            var tbody = document.getElementById('xml-src-tbody');
+            var hubTbody = document.getElementById('hub-xml-tbody');
+            try {
+                var data = await api('/xml-sources');
+                var items = (data && data.items) || [];
+                window.__xmlSources = items;
+
+                var total = items.length;
+                var active = items.filter(function (i) { return i.active; }).length;
+                var productTotal = items.reduce(function (acc, i) { return acc + (i.productCount || 0); }, 0);
+                var setTxt = function (id, t) { var el = document.getElementById(id); if (el) el.textContent = t; };
+                setTxt('xstat-total', fmt(total));
+                setTxt('xstat-active', fmt(active));
+                setTxt('xstat-passive', fmt(total - active));
+                setTxt('xstat-products', fmt(productTotal));
+
+                var hubSummary = document.getElementById('hub-summary');
+                if (hubSummary) hubSummary.textContent = total + ' XML kaynağı, toplam ' + fmt(productTotal) + ' ürün';
+
+                if (items.length === 0) {
+                    var emptyRow = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="7">Henüz XML kaynağı eklenmedi. "Yeni XML Kaynağı Ekle" ile başlayın.</td></tr>';
+                    tbody.innerHTML = emptyRow;
+                    hubTbody.innerHTML = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="6">Henüz XML kaynağı eklenmedi.</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = items.map(function (s) {
+                    var syncInfo = '';
+                    if (s.lastRunStatus) {
+                        var parts = [];
+                        if (s.lastNewProducts) parts.push(s.lastNewProducts + ' yeni');
+                        if (s.lastUpdatedProducts) parts.push(s.lastUpdatedProducts + ' güncel');
+                        if (s.lastFailedProducts) parts.push(s.lastFailedProducts + ' hatalı');
+                        syncInfo = '<div class="text-[10px] text-slate-400 mt-0.5">' + (parts.join(', ') || 'sync yok') + '</div>';
+                    }
+                    return '<tr class="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">'
+                        + '<td class="py-4 px-6"><div class="font-bold text-slate-900 dark:text-white">' + escapeHtml(s.name) + '</div>'
+                        + '<div class="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2">' + (s.company ? escapeHtml(s.company) + ' · ' : '') + sourceTypeChip(s.sourceType) + '</div></td>'
+                        + '<td class="py-4 px-6 text-slate-500 dark:text-slate-400 max-w-[220px] truncate font-mono text-[11px]">' + escapeHtml(s.url || '') + '</td>'
+                        + '<td class="py-4 px-6 font-bold text-slate-800 dark:text-slate-200">' + fmt(s.productCount) + '</td>'
+                        + '<td class="py-4 px-6 text-slate-500 dark:text-slate-400">' + fmtDate(s.lastRunAt) + '</td>'
+                        + '<td class="py-4 px-6">' + statusBadge(s.lastRunStatus) + syncInfo + '</td>'
+                        + '<td class="py-4 px-6">' + statusBadge(s.connectionStatus) + '</td>'
+                        + '<td class="py-4 px-6 text-right"><div class="flex items-center justify-end gap-1.5 flex-wrap">'
+                        + actionBtn('test', 'Bağlantı Testi', 'fa-plug', 'testXmlSource(\'' + s.id + '\')')
+                        + actionBtn('sync', 'Senkronize Et', 'fa-rotate', 'syncXmlSource(\'' + s.id + '\')')
+                        + actionBtn('analyze', 'XML Analiz', 'fa-magnifying-glass-chart', 'analyzeXmlSource(\'' + s.id + '\')')
+                        + actionBtn('products', 'Ürün Listesi', 'fa-box-open', 'openSourceProducts(\'' + s.id + '\', \'' + jsStr(s.name) + '\', 1)')
+                        + actionBtn('history', 'Sync Geçmişi', 'fa-clock-rotate-left', 'openSourceHistory(\'' + s.id + '\', \'' + jsStr(s.name) + '\')')
+                        + actionBtn('edit', 'Düzenle', 'fa-pen', 'openXmlModal(\'edit\', \'' + s.id + '\')')
+                        + '<button type="button" title="XML Kaynağını Sil" onclick="deleteXmlSource(\'' + s.id + '\')" class="w-8 h-8 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-500/10 transition-all"><i class="fa-solid fa-trash-can"></i></button>'
+                        + '</div></td></tr>';
+                }).join('');
+
+                hubTbody.innerHTML = items.map(function (s) {
+                    var badge = s.active ? statusBadge('connected') : statusBadge('unknown');
+                    return '<tr class="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">'
+                        + '<td class="py-4 px-6"><div class="font-bold text-slate-900 dark:text-white">' + escapeHtml(s.name) + '</div>'
+                        + '<div class="text-[11px] text-slate-400 mt-0.5">' + (s.company ? escapeHtml(s.company) : sourceTypeChip(s.sourceType)) + '</div></td>'
+                        + '<td class="py-4 px-6 text-slate-500 dark:text-slate-400 max-w-[220px] truncate font-mono text-[11px]">' + escapeHtml(s.url || '') + '</td>'
+                        + '<td class="py-4 px-6 font-bold text-slate-800 dark:text-slate-200">' + fmt(s.productCount) + '</td>'
+                        + '<td class="py-4 px-6 text-slate-500 dark:text-slate-400">' + fmtDate(s.lastRunAt) + '</td>'
+                        + '<td class="py-4 px-6">' + (s.active ? badge : statusBadge('cancelled')) + '</td>'
+                        + '<td class="py-4 px-6 text-right"><div class="flex items-center justify-end gap-3">'
+                        + '<button type="button" onclick="openSourceProducts(\'' + s.id + '\', \'' + jsStr(s.name) + '\', 1)" class="text-xs text-primary font-bold hover:underline">Ürün Listesini Aç</button>'
+                        + '<button type="button" title="XML Kaynağını Kaldır" onclick="deleteXmlSource(\'' + s.id + '\')" class="w-8 h-8 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-500/10 transition-all"><i class="fa-solid fa-trash-can"></i></button>'
+                        + '</div></td></tr>';
+                }).join('');
+            } catch (e) {
+                if (e.status !== 401) {
+                    tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-red-400" colspan="7">XML kaynakları yüklenemedi: ' + escapeHtml(e.message) + '</td></tr>';
+                }
+            }
+        }
+
+        function jsStr(s) {
+            return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        }
+
+        function actionBtn(kind, title, icon, onclick) {
+            var colors = {
+                test: 'hover:text-cyan-600 hover:bg-cyan-500/10',
+                sync: 'hover:text-blue-600 hover:bg-blue-500/10',
+                analyze: 'hover:text-purple-600 hover:bg-purple-500/10',
+                products: 'hover:text-emerald-600 hover:bg-emerald-500/10',
+                history: 'hover:text-amber-600 hover:bg-amber-500/10',
+                edit: 'hover:text-primary hover:bg-primary/10',
+            };
+            return '<button type="button" title="' + title + '" onclick="' + onclick + '" class="w-8 h-8 rounded-lg text-slate-400 ' + (colors[kind] || 'hover:text-slate-600') + ' transition-all"><i class="fa-solid ' + icon + '"></i></button>';
+        }
+
+        /* ===================== ÜRÜN GÖRSELİ + DETAY ===================== */
+
+        var IMG_PH = "data:image/svg+xml;charset=utf-8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><rect width="120" height="120" rx="16" fill="#eef2f7"/><g fill="none" stroke="#94a3b8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 40 L60 20 L102 40 v44 L60 104 L18 84 Z"/><path d="M18 40 L60 60 L102 40"/><path d="M60 60 V104"/></g></svg>');
+
+        function getImageList(images) {
+            if (!images) return [];
+            if (Array.isArray(images)) {
+                return images.map(String).filter(function (x) { return x.startsWith('http'); });
+            }
+            var s = String(images);
+            var list = s.split(',').map(function (x) { return x.trim(); }).filter(function (x) { return x.startsWith('http'); });
+            if (list.length > 0) return list;
+            return s.trim() ? [s.trim()] : [];
+        }
+
+        function prodThumbHtml(p) {
+            var imgs = getImageList(p.images);
+            var first = imgs[0];
+            if (first) {
+                return '<img src="' + escapeHtml(first) + '" data-src="' + escapeHtml(first) + '" alt="" loading="lazy" class="product-thumb" onerror="this.onerror=null;this.src=IMG_PH;">';
+            }
+            return '<div class="product-thumb-ph"><i class="fa-solid fa-box-open"></i></div>';
+        }
+
+        var prodDetailActive = 0;
+        var prodDetailImages = [];
+        var prodDetailData = null;
+
+        async function openProductDetail(p) {
+            if (!p) return;
+            var detail = p;
+            try {
+                var res = await api('/products/' + p.id);
+                detail = res;
+            } catch (e) {
+                if (e.status !== 404) { /* listteki bilgiyle devam et */ }
+            }
+            prodDetailData = detail;
+            prodDetailImages = getImageList(detail.images);
+            prodDetailActive = 0;
+            renderProductDetail(detail);
+            document.getElementById('product-modal').classList.remove('hidden');
+            var dEl = document.getElementById('product-modal-title');
+            if (dEl) dEl.scrollIntoView({ block: 'nearest' });
+        }
+
+        function openSrcProductAt(i) {
+            var arr = window.__srcProducts;
+            if (arr && arr[i]) openProductDetail(arr[i]);
+        }
+
+        function openPoolProductAt(i) {
+            var arr = window.__poolProducts;
+            if (arr && arr[i]) openProductDetail(arr[i]);
+        }
+
+        function closeProductModal() {
+            document.getElementById('product-modal').classList.add('hidden');
+        }
+
+        function setDetailImage(i) {
+            if (!prodDetailImages[i]) return;
+            prodDetailActive = i;
+            if (prodDetailData) renderProductDetail(prodDetailData);
+        }
+
+        function fmtPrice(v, cur) {
+            if (v == null) return null;
+            return Number(v).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + (cur || 'TRY');
+        }
+
+        function pdField(label, value) {
+            var vv = (value === null || value === undefined || value === '') ? '\u2014' : value;
+            return '<div class="flex items-start justify-between gap-3 py-2"><dt class="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider shrink-0 pt-0.5">' + escapeHtml(label) + '</dt><dd class="text-xs font-semibold text-slate-800 dark:text-slate-100 text-right break-all">' + escapeHtml(String(vv)) + '</dd></div>';
+        }
+
+        function renderProductDetail(p) {
+            var titleEl = document.getElementById('product-modal-title');
+            var subEl = document.getElementById('product-modal-sub');
+            var bodyEl = document.getElementById('product-modal-body');
+            if (titleEl) titleEl.textContent = p.title || p.xmlKey || 'Ürün Detayı';
+            if (subEl) subEl.textContent = p.xmlKey || p.sku || '';
+
+            var imgs = prodDetailImages;
+            var mainHtml = imgs.length > 0
+                ? '<img id="prod-main-img" src="' + escapeHtml(imgs[prodDetailActive] || imgs[0]) + '" data-src="' + escapeHtml(imgs[prodDetailActive] || imgs[0]) + '" alt="Ürün görseli" class="w-full h-64 lg:h-80 object-cover rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40" onerror="this.onerror=null;this.src=IMG_PH;">'
+                : '<div class="w-full h-64 lg:h-80 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 flex flex-col items-center justify-center text-slate-400"><i class="fa-solid fa-box-open text-3xl mb-2"></i><span class="text-xs font-semibold">Görsel Yok</span></div>';
+
+            var thumbs = imgs.length > 1
+                ? '<div class="mt-3 flex flex-wrap gap-2">' + imgs.map(function (img, i) {
+                    return '<button type="button" onclick="setDetailImage(' + i + ')" title="Görsel ' + (i + 1) + '" class="w-11 h-11 overflow-hidden rounded-xl border transition-all ' + (i === prodDetailActive ? 'ring-2 ring-[var(--primary-color)] border-primary' : 'border-slate-200 dark:border-slate-700') + '"><img src="' + escapeHtml(img) + '" data-src="' + escapeHtml(img) + '" alt="" class="w-full h-full object-cover" onerror="this.onerror=null;this.src=IMG_PH;"></button>';
+                }).join('') + '</div>'
+                : '';
+
+            var gallery = '<div>' + mainHtml + thumbs + '</div>';
+
+            var variants = p.variants && p.variants.length
+                ? p.variants.map(function (v) { return v.name + ': ' + v.value; }).join(', ')
+                : null;
+
+            var rows = [
+                ['XML Key', p.xmlKey],
+                ['SKU', p.sku],
+                ['Barkod', p.barcode],
+                ['Stok', p.stock != null ? fmt(p.stock) : null],
+                ['Min Stok', p.minStock != null ? fmt(p.minStock) : null],
+                ['Alış Fiyatı', fmtPrice(p.purchasePrice, p.currency)],
+                ['Satış Fiyatı', fmtPrice(p.salePrice, p.currency)],
+                ['KDV', p.vatRate != null ? '%' + p.vatRate : null],
+                ['Para Birimi', p.currency || null],
+                ['Birim', p.unit || null],
+                ['Marka', (p.brand && p.brand.name) || p.customBrandName || null],
+                ['Kategori', (p.category && p.category.name) || null],
+                ['Tedarikçi Kategorisi', p.supplierCategory || null],
+                ['Varyant', variants],
+                ['Durum', p.status || null],
+                ['Kaynak XML', (p.xmlSource && p.xmlSource.name) || null],
+                ['Oluşturulma', p.createdAt ? fmtDate(p.createdAt) : null],
+                ['Güncellenme', p.updatedAt ? fmtDate(p.updatedAt) : null],
+            ];
+
+            var rowsHtml = rows.map(function (r) {
+                if (r[0] === 'Durum' && r[1]) return '<div class="flex items-start justify-between gap-3 py-2"><dt class="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider shrink-0 pt-0.5">Durum</dt><dd>' + statusBadge(r[1]) + '</dd></div>';
+                return pdField(r[0], r[1]);
+            }).join('');
+
+            var descPanel = p.description
+                ? '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">AÇIKLAMA</h4><p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">' + escapeHtml(p.description) + '</p></div>'
+                : '';
+            var detailPanel = p.detail
+                ? '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">DETAY</h4><p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">' + escapeHtml(p.detail) + '</p></div>'
+                : '';
+            var linkPanel = p.link
+                ? '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">ÜRÜN LİNKİ</h4><a href="' + escapeHtml(p.link) + '" target="_blank" rel="noopener" class="text-xs text-primary hover:underline break-all">' + escapeHtml(p.link) + '</a></div>'
+                : '';
+            var sourcePanel = (p.xmlSource && p.xmlSource.company)
+                ? '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">FİRMA</h4><p class="text-xs text-slate-600 dark:text-slate-300">' + escapeHtml(p.xmlSource.company) + '</p></div>'
+                : '';
+
+            var html = '<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">'
+                + '<div>' + gallery + '</div>'
+                + '<div class="space-y-4">'
+                + '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 bg-slate-50/70 dark:bg-slate-800/30 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">BİLGİLER</h4><dl class="divide-y divide-slate-100 dark:divide-slate-800/60">' + rowsHtml + '</dl></div>'
+                + descPanel + detailPanel + linkPanel + sourcePanel
+                + '</div></div>';
+
+            bodyEl.innerHTML = html;
+        }
+
+        /* ===================== XML CRUD ===================== */
+
+        function openXmlModal(mode, sourceId) {
+            showPage('xml');
+            var modal = document.getElementById('xml-modal');
+            document.getElementById('xml-id').value = sourceId || '';
+            var title = document.getElementById('xml-modal-title');
+            var url = '', name = '', company = '', username = '', password = '';
+            var currency = 'TRY', vatRate = 20, interval = 60, vatStatus = 'dahil', sourceType = 'MANUAL';
+            var active = true, upStock = true, upPrice = true, upImages = true;
+            var purchasePrice = false;
+
+            if (mode === 'edit' && sourceId) {
+                var src = findSource(sourceId);
+                if (src) {
+                    name = src.name || '';
+                    company = src.company || '';
+                    url = src.url || '';
+                    username = src.username || '';
+                    currency = src.currency || 'TRY';
+                    vatRate = src.vatRate != null ? src.vatRate : 20;
+                    interval = src.scheduleIntervalMinutes || 60;
+                    vatStatus = src.purchasePriceVatStatus || 'dahil';
+                    sourceType = src.sourceType || 'MANUAL';
+                    active = src.active !== false;
+                }
+                title.innerHTML = '<i class="fa-solid fa-pen text-primary"></i> XML Kaynağını Düzenle';
+            } else {
+                title.innerHTML = '<i class="fa-solid fa-link text-primary"></i> Yeni XML Kaynağı';
+            }
+
+            document.getElementById('xml-name').value = name;
+            document.getElementById('xml-company').value = company;
+            document.getElementById('xml-url').value = url;
+            document.getElementById('xml-username').value = username;
+            document.getElementById('xml-password').value = password;
+            document.getElementById('xml-currency').value = currency;
+            document.getElementById('xml-vatrate').value = vatRate;
+            document.getElementById('xml-interval').value = interval;
+            document.getElementById('xml-vat-status').value = vatStatus;
+            document.getElementById('xml-sourcetype').value = sourceType;
+            document.getElementById('xml-active').checked = active;
+            document.getElementById('xml-updatestock').checked = upStock;
+            document.getElementById('xml-updateprice').checked = upPrice;
+            document.getElementById('xml-updateimages').checked = upImages;
+            document.getElementById('xml-purchaseprice').checked = purchasePrice;
+
+            modal.classList.remove('hidden');
+            setTimeout(function () { var el = document.getElementById('xml-name'); if (el) el.focus(); }, 100);
+        }
+
+        function closeXmlModal() {
+            document.getElementById('xml-modal').classList.add('hidden');
+        }
+
+        function findSource(id) {
+            return window.__xmlSources ? window.__xmlSources.find(function (s) { return s.id === id; }) : null;
+        }
+
+        async function saveXml() {
+            var id = document.getElementById('xml-id').value;
+            var name = document.getElementById('xml-name').value.trim();
+            var sourceType = document.getElementById('xml-sourcetype').value;
+            if (!name || !sourceType) {
+                showToast('Kaynak adı ve kaynak tipi zorunludur.', 'error');
+                return;
+            }
+            var payload = {
+                name: name,
+                company: document.getElementById('xml-company').value.trim(),
+                sourceType: sourceType,
+                url: document.getElementById('xml-url').value.trim(),
+                username: document.getElementById('xml-username').value.trim(),
+                password: document.getElementById('xml-password').value,
+                currency: document.getElementById('xml-currency').value,
+                vatRate: Number(document.getElementById('xml-vatrate').value) || 0,
+                scheduleIntervalMinutes: Number(document.getElementById('xml-interval').value) || 60,
+                purchasePriceVatStatus: document.getElementById('xml-vat-status').value,
+                purchasePriceField: document.getElementById('xml-purchaseprice').checked ? 'price' : null,
+                active: document.getElementById('xml-active').checked,
+                updateStock: document.getElementById('xml-updatestock').checked,
+                updatePrice: document.getElementById('xml-updateprice').checked,
+                updateImages: document.getElementById('xml-updateimages').checked,
+            };
+
+            var btn = event && event.target && event.target.closest ? event.target.closest('button') : null;
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+
+            try {
+                if (id) {
+                    await api('/xml-sources/' + id, { method: 'PUT', body: payload });
+                    showToast('"' + name + '" güncellendi.', 'success');
+                } else {
+                    await api('/xml-sources', { method: 'POST', body: payload });
+                    showToast('"' + name + '" XML kaynağı eklendi.', 'success');
+                }
+                closeXmlModal();
+                await refreshXmlSources();
+                await refreshDashboard();
+                showXmlPage('list');
+            } catch (e) {
+                showToast(e.message || 'Kayıt işlemi başarısız.', 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+            }
+        }
+
+        async function deleteXmlSource(id) {
+            var src = findSource(id);
+            var name = src ? src.name : 'kaynak';
+            if (!confirm('"' + name + '" XML kaynağını silmek istediğinizden emin misiniz?\nİlişkili ürünler kaynak bağlantısından ayrılacak, sync geçmişi silinecek.')) return;
+            try {
+                await api('/xml-sources/' + id, { method: 'DELETE' });
+                showToast('"' + name + '" silindi.', 'success');
+                await refreshXmlSources();
+                await refreshDashboard();
+            } catch (e) {
+                showToast(e.message || 'Silme işlemi başarısız.', 'error');
+            }
+        }
+
+        /* ===================== XML ACTIONS ===================== */
+
+        async function testXmlSource(id) {
+            try {
+                var res = await api('/xml-sources/' + id + '/test', { method: 'POST', body: {} });
+                if (res && res.ok) showToast(res.message || 'Bağlantı başarılı', 'success');
+                else showToast((res && (res.message || res.status)) || 'Bağlantı hatası', 'error');
+            } catch (e) {
+                showToast(e.message || 'Bağlantı testi başarısız.', 'error');
+            }
+            await refreshXmlSources();
+        }
+
+        async function syncXmlSource(id) {
+            var src = findSource(id);
+            var name = src ? src.name : 'kaynak';
+            try {
+                var res = await api('/xml-sources/' + id + '/sync', { method: 'POST', body: {} });
+                showToast(name + ' senkronizasyonu başlatıldı, arka planda çalışıyor...', 'info');
+                pollSync(id, name, Date.now());
+            } catch (e) {
+                showToast(e.message || 'Senkronizasyon başlatılamadı.', 'error');
+            }
+        }
+
+        async function syncAllXml() {
+            try {
+                var res = await api('/xml-sources/sync-all', { method: 'POST', body: {} });
+                showToast((res && res.message) || 'Tüm aktif kaynaklar senkronize ediliyor...', 'info');
+                setTimeout(function () { refreshXmlSources(); refreshDashboard(); }, 3000);
+            } catch (e) {
+                showToast(e.message || 'Toplu senkronizasyon başlatılamadı.', 'error');
+            }
+        }
+
+        var syncPolls = {};
+
+        function pollSync(id, name, startTime) {
+            if (syncPolls[id]) return;
+            var tries = 0;
+            syncPolls[id] = true;
+            var timer = setInterval(async function () {
+                tries++;
+                try {
+                    var data = await api('/xml-sources/' + id + '/history?limit=3');
+                    var runs = (data && data.items) || [];
+                    var latest = runs[0];
+                    if (latest && latest.startedAt) {
+                        var started = new Date(latest.startedAt).getTime();
+                        if (started >= startTime - 5000 && latest.status !== 'running') {
+                            clearInterval(timer);
+                            delete syncPolls[id];
+                            var txt = name + ' sync: ' + latest.newProducts + ' yeni, ' + latest.updatedProducts + ' güncel, ' + latest.failedProducts + ' hatalı, ' + latest.skippedProducts + ' atlanan';
+                            showToast(txt, latest.status === 'completed' ? 'success' : 'error');
+                            await refreshXmlSources();
+                            await refreshDashboard();
+                            return;
+                        }
+                    }
+                    if (tries >= 25) {
+                        clearInterval(timer);
+                        delete syncPolls[id];
+                        showToast(name + ' sync hâlâ çalışıyor, sayfayı yenileyin.', 'info');
+                    }
+                } catch (e) { /* poll üstü hata; beklemeye devam */ }
+            }, 3000);
+        }
+
+        async function analyzeXmlSource(id) {
+            var src = findSource(id);
+            var modal = document.getElementById('analyze-modal');
+            var content = document.getElementById('analyze-content');
+            content.innerHTML = '<div class="flex items-center justify-center gap-2 text-slate-400 py-8"><i class="fa-solid fa-spinner fa-spin"></i> XML analiz ediliyor, lütfen bekleyin...</div>';
+            modal.classList.remove('hidden');
+            try {
+                var res = await api('/xml-sources/' + id + '/analyze', { method: 'POST', body: {} });
+                var a = res.analysis;
+                var items = [
+                    ['Toplam Ürün', fmt(a.totalProducts)],
+                    ['Ürün Etiketi Bulundu', fmt(a.productTagsFound)],
+                    ['XML Sayılı Ürün', fmt(a.productsWithXmlKey) + ' / ' + fmt(a.productsWithoutXmlKey) + ' (XML\'siz)'],
+                    ['Benzersiz Kategori', fmt(a.uniqueCategories)],
+                    ['Benzersiz Marka', fmt(a.uniqueBrands)],
+                    ['Toplam Görsel', fmt(a.totalImages)],
+                    ['HTTPS URL', fmt(a.httpsUrls)],
+                    ['HTTP URL', fmt(a.httpUrls)],
+                    ['Geçersiz URL', fmt(a.invalidUrls)],
+                    ['Toplam Etiket', fmt(a.totalTags)],
+                    ['İçerik Boyutu', escapeHtml(a.contentLengthFormatted || a.contentLength)],
+                    ['Kodlama', escapeHtml(a.encoding)],
+                    ['CDATA', a.hasCDATA ? 'Evet' : 'Hayır'],
+                    ['HTML Entity', a.hasHtmlEntities ? 'Evet' : 'Hayır'],
+                ];
+                var grid = '<div class="grid grid-cols-2 md:grid-cols-3 gap-2">' + items.map(function (row) {
+                    return '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 p-3"><div class="text-[10px] text-slate-400 uppercase tracking-wider">' + row[0] + '</div><div class="mt-1 text-sm font-bold text-slate-800 dark:text-slate-100">' + row[1] + '</div></div>';
+                }).join('') + '</div>';
+                var cats = (a.categoryList && a.categoryList.length) ? '<div class="mt-3"><div class="text-[10px] text-slate-400 uppercase tracking-wider mb-1.5">Örnek Kategoriler</div><div class="flex flex-wrap gap-1.5">' + a.categoryList.slice(0, 8).map(function (c) { return '<span class="text-[10px] font-bold bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 px-2 py-1 rounded-lg">' + escapeHtml(c) + '</span>'; }).join('') + '</div></div>' : '';
+                var brands = (a.brandList && a.brandList.length) ? '<div class="mt-3"><div class="text-[10px] text-slate-400 uppercase tracking-wider mb-1.5">Örnek Markalar</div><div class="flex flex-wrap gap-1.5">' + a.brandList.slice(0, 8).map(function (b) { return '<span class="text-[10px] font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 px-2 py-1 rounded-lg">' + escapeHtml(b) + '</span>'; }).join('') + '</div></div>' : '';
+                content.innerHTML = grid + cats + brands;
+            } catch (e) {
+                content.innerHTML = '<div class="rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 dark:text-red-400 p-4">Analiz gerçekleştirilemedi: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        function closeAnalyzeModal() {
+            document.getElementById('analyze-modal').classList.add('hidden');
+        }
+
+        /* ===================== PRODUCTS (source + pool) ===================== */
+
+        async function openSourceProducts(id, name, page) {
+            activeSourceId = id;
+            activeSourceName = name;
+            srcProductsPage = page || 1;
+            showPage('xml');
+            showXmlPage('products');
+            document.getElementById('src-products-title').textContent = name + ' — Ürünler';
+            try {
+                var search = document.getElementById('src-products-search').value.trim();
+                var q = '/xml-sources/' + id + '/products?page=' + (page || 1) + '&limit=20';
+                if (search) q += '&search=' + encodeURIComponent(search);
+                var data = await api(q);
+                document.getElementById('src-products-sub').textContent = 'Toplam ' + fmt(data.pagination.total) + ' ürün';
+                var tbody = document.getElementById('src-products-tbody');
+                if (!data.items.length) {
+                    tbody.innerHTML = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="8">Bu kaynak için ürün bulunamadı. Sync çalıştırdığınızda ürünler burada görünecek.</td></tr>';
+                } else {
+                    window.__srcProducts = data.items;
+                    tbody.innerHTML = data.items.map(function (p, idx) {
+                        return '<tr class="hover-row cursor-pointer" onclick="openSrcProductAt(' + idx + ')">'
+                            + '<td class="py-4 px-6">' + prodThumbHtml(p) + '</td>'
+                            + '<td class="py-4 px-6"><div class="font-bold text-slate-900 dark:text-white max-w-[280px] truncate">' + escapeHtml(p.title || p.xmlKey) + '</div>'
+                            + '<div class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-mono">' + escapeHtml(p.xmlKey) + '</div></td>'
+                            + '<td class="py-4 px-6 font-mono text-slate-600 dark:text-slate-300">' + escapeHtml(p.sku || '\u2014') + '<div class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">' + escapeHtml(p.barcode || '\u2014') + '</div></td>'
+                            + '<td class="py-4 px-6 text-slate-600 dark:text-slate-400">' + escapeHtml((p.category && p.category.name) || '\u2014') + '</td>'
+                            + '<td class="py-4 px-6 text-slate-600 dark:text-slate-400">' + escapeHtml((p.brand && p.brand.name) || '\u2014') + '</td>'
+                            + '<td class="py-4 px-6 font-bold ' + (p.stock > 0 ? 'text-slate-800 dark:text-slate-200' : 'text-red-500') + '">' + fmt(p.stock) + '</td>'
+                            + '<td class="py-4 px-6 font-bold font-mono text-slate-800 dark:text-slate-200">' + (p.salePrice != null ? Number(p.salePrice).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + (p.currency || 'TRY') : '\u2014') + '</td>'
+                            + '<td class="py-4 px-6">' + statusBadge(p.status) + '</td></tr>';
+                    }).join('');
+                }
+                renderPagination(document.getElementById('src-products-pagination'), data.pagination, function (pg) { openSourceProducts(id, name, pg); });
+            } catch (e) {
+                document.getElementById('src-products-tbody').innerHTML = '<tr><td class="py-8 px-6 text-center text-red-400" colspan="8">Ürünler yüklenemedi: ' + escapeHtml(e.message) + '</td></tr>';
+            }
+        }
+
+        async function openSourceHistory(id, name) {
+            activeSourceId = id;
+            activeSourceName = name;
+            showPage('xml');
+            showXmlPage('history');
+            document.getElementById('src-history-title').textContent = name + ' — Sync Geçmişi';
+            try {
+                var data = await api('/xml-sources/' + id + '/history?limit=20');
+                var runs = (data && data.items) || [];
+                document.getElementById('src-history-sub').textContent = 'Son ' + runs.length + ' senkronizasyon';
+                var tbody = document.getElementById('src-history-tbody');
+                if (!runs.length) {
+                    tbody.innerHTML = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="8">Henüz senkronizasyon geçmişi yok.</td></tr>';
+                } else {
+                    tbody.innerHTML = runs.map(function (r) {
+                        return '<tr class="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">'
+                            + '<td class="py-4 px-6 text-slate-500 dark:text-slate-400">' + fmtDate(r.startedAt) + '</td>'
+                            + '<td class="py-4 px-6 text-slate-500 dark:text-slate-400">' + fmtDuration(r.durationMs) + '</td>'
+                            + '<td class="py-4 px-6">' + statusBadge(r.status) + '</td>'
+                            + '<td class="py-4 px-6 font-bold text-slate-800 dark:text-slate-200">' + fmt(r.totalProducts) + '</td>'
+                            + '<td class="py-4 px-6 font-bold text-emerald-600 dark:text-emerald-400">' + fmt(r.newProducts) + '</td>'
+                            + '<td class="py-4 px-6 font-bold text-blue-600 dark:text-blue-400">' + fmt(r.updatedProducts) + '</td>'
+                            + '<td class="py-4 px-6 font-bold text-red-500">' + fmt(r.failedProducts) + '</td>'
+                            + '<td class="py-4 px-6 text-slate-500 dark:text-slate-400">' + fmt(r.skippedProducts) + '</td></tr>';
+                    }).join('');
+                }
+            } catch (e) {
+                document.getElementById('src-history-tbody').innerHTML = '<tr><td class="py-8 px-6 text-center text-red-400" colspan="8">Geçmiş yüklenemedi: ' + escapeHtml(e.message) + '</td></tr>';
+            }
+        }
+
+                /* ===================== ÜRÜN HAVUZU (STABLE mirror) ===================== */
+
+        var poolState = { page: 1, limit: 50, search: '', status: '', xmlSourceId: '', selected: {}, items: [], total: 0, totalPages: 1, sources: [] };
+        var poolSearchTimer = null;
+
+        function poolEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+        function poolFmt(v) { return (v === null || v === undefined) ? '—' : String(v); }
+        function poolPrice(v) { return (v === null || v === undefined) ? '—' : Number(v).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+        function poolDate(v) {
+            if (!v) return '—';
+            try {
+                var d = new Date(v);
+                if (isNaN(d.getTime())) return poolFmt(v);
+                return d.toLocaleDateString('tr-TR') + ' ' + d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+            } catch (e) { return poolFmt(v); }
+        }
+        function poolVariantVal(p, name) {
+            var vs = (p.variants || []).filter(function (v) { return v.name && v.name.toLowerCase() === String(name).toLowerCase(); });
+            if (vs.length) return vs.map(function (v) { return v.value; }).join(', ');
+            var any = (p.variants || []).map(function (v) { return v.value; }).filter(function (v) { return v; }).join(', ');
+            return any || '—';
+        }
+        function poolThumb(p) {
+            var imgs = getImageList(p.images);
+            if (imgs[0]) return '<img src="' + escapeHtml(imgs[0]) + '" alt="" loading="lazy" class="product-thumb" onerror="this.onerror=null;this.src=IMG_PH;">';
+            return '<div class="product-thumb-ph"><i class="fa-solid fa-box-open"></i></div>';
+        }
+        function poolStatusBadge(status, mp) {
+            var label = mp || status || '—';
+            var cls = 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
+            if (status === 'READY') cls = 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300';
+            else if (status === 'XML') cls = 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300';
+            else if (status === 'ERROR') cls = 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300';
+            else if (status === 'PASSIVE') cls = 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400';
+            else if (status === 'SENT') cls = 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300';
+            return '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ' + cls + '">' + poolEsc(label) + '</span>';
+        }
+        function poolMatchBadge(ok) {
+            return ok
+                ? '<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"><i class="fa-solid fa-check mr-1"></i>Eşleşti</span>'
+                : '<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"><i class="fa-solid fa-circle-exclamation mr-1"></i>Bekliyor</span>';
+        }
+
+        function poolBuildQuery() {
+            var q = '/products?page=' + poolState.page + '&limit=' + poolState.limit + '&includeVariants=true';
+            if (poolState.search) q += '&search=' + encodeURIComponent(poolState.search);
+            if (poolState.status) q += '&status=' + encodeURIComponent(poolState.status);
+            return q;
+        }
+
+        function poolNum(v) { return (v === null || v === undefined) ? '0' : Number(v).toLocaleString('tr-TR'); }
+        function poolRenderKpi(st) {
+            if (!st) return;
+            var set = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = poolNum(v); };
+            set('kpi-total', st.totalProducts);
+            set('kpi-ready', st.readyForListing);
+            set('kpi-new', st.newProducts);
+            set('kpi-cat', st.pendingCategory);
+            set('kpi-brand', st.pendingBrand);
+            set('kpi-variant', st.pendingVariant);
+            set('kpi-variant2', st.variantAnalysisPending);
+            set('kpi-error', st.errorProducts);
+        }
+
+        function poolRenderTable(items) {
+            var tbody = document.getElementById('products-tbody');
+            if (!tbody) return;
+            if (!items || !items.length) {
+                var emptyMsg = (poolState.search || poolState.status || poolState.xmlSourceId)
+                    ? 'Filtre kriterine uygun ürün bulunamadı.'
+                    : 'Henüz ürün yok. XML kaynağı ekleyip sync çalıştırın.';
+                tbody.innerHTML = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="17">' + emptyMsg + '</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map(function (p) {
+                var sel = !!poolState.selected[p.id];
+                var cat = (p.category && p.category.name) || (p.supplierCategory ? '(eşleşme bekliyor)' : '—');
+                var brand = (p.brand && p.brand.name) || p.customBrandName || '—';
+                var src = (p.xmlSource && p.xmlSource.name) || '—';
+                var mpStates = p.marketplaceStates || [];
+                var mpStatus = mpStates[0] && mpStates[0].status;
+                return '<tr class="hover-row cursor-pointer ' + (sel ? 'bg-indigo-50 dark:bg-indigo-500/10' : '') + '" onclick="poolOpenDetail(\'' + p.id + '\')">'
+                    + '<td class="pool-sticky pool-sticky-chk py-3 px-3 align-middle" onclick="event.stopPropagation()"><input type="checkbox" ' + (sel ? 'checked' : '') + ' onchange="poolToggleSelect(\'' + p.id + '\', this.checked)" class="accent-indigo-600 w-3.5 h-3.5 cursor-pointer"></td>'
+                    + '<td class="pool-sticky pool-sticky-img py-3 px-3 align-middle">' + poolThumb(p) + '</td>'
+                    + '<td class="pool-sticky pool-sticky-title py-3 px-3 align-middle"><div class="font-bold text-slate-900 dark:text-white max-w-[260px] truncate">' + escapeHtml(p.title || p.xmlKey) + '</div><div class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-mono truncate max-w-[260px]">' + escapeHtml(p.xmlKey || '') + '</div></td>'
+                    + '<td class="py-3 px-3 text-slate-700 dark:text-slate-300 font-medium">' + escapeHtml(src) + '</td>'
+                    + '<td class="py-3 px-3 text-slate-700 dark:text-slate-300">' + escapeHtml(brand) + '</td>'
+                    + '<td class="py-3 px-3 font-bold ' + (p.stock > 0 ? 'text-slate-800 dark:text-slate-200' : 'text-red-500') + '">' + poolFmt(p.stock) + '</td>'
+                    + '<td class="py-3 px-3 font-bold text-emerald-700 dark:text-emerald-400 font-mono">' + poolPrice(p.vatIncludedPurchasePrice) + '</td>'
+                    + '<td class="py-3 px-3">' + poolStatusBadge(p.status) + '</td>'
+                    + '<td class="py-3 px-3 font-mono text-slate-700 dark:text-slate-300">' + escapeHtml(p.sku || '—') + '</td>'
+                    + '<td class="py-3 px-3 font-mono text-slate-600 dark:text-slate-400">' + escapeHtml(p.barcode || '—') + '</td>'
+                    + '<td class="py-3 px-3 text-slate-600 dark:text-slate-400">' + escapeHtml(cat) + '</td>'
+                    + '<td class="py-3 px-3 text-slate-600 dark:text-slate-400">' + ((p.variants && p.variants.length) ? '<span class="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-semibold"><i class="fa-solid fa-shapes"></i>' + p.variants.length + ' varyant</span>' : '—') + '</td>'
+                    + '<td class="py-3 px-3 text-slate-600 dark:text-slate-400">' + escapeHtml(poolVariantVal(p, 'renk')) + '</td>'
+                    + '<td class="py-3 px-3 text-slate-600 dark:text-slate-400">' + escapeHtml(poolVariantVal(p, 'beden')) + '</td>'
+                    + '<td class="py-3 px-3 text-slate-600 dark:text-slate-400">' + escapeHtml(poolVariantVal(p, 'numara')) + '</td>'
+                    + '<td class="py-3 px-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">' + poolDate(p.updatedAt) + '</td>'
+                    + '<td class="py-3 px-3">' + poolStatusBadge(mpStatus || (p.status === 'READY' ? 'READY' : p.status), mpStatus) + '</td>'
+                    + '</tr>';
+            }).join('');
+        }
+
+        function poolRenderPagination() {
+            var el = document.getElementById('products-pagination');
+            if (!el) return;
+            var tp = poolState.totalPages || 1;
+            var pg = poolState.page;
+            var total = poolState.total || 0;
+            if (tp <= 1) {
+                el.innerHTML = '<span class="text-slate-500 dark:text-slate-400">' + poolNum(total) + ' ürün</span>';
+                return;
+            }
+            var nav = '';
+            nav += '<span class="text-slate-500 dark:text-slate-400">' + poolNum(total) + ' kayıt · Sayfa ' + pg + ' / ' + tp + '</span>';
+            nav += '<div class="flex items-center gap-1.5">';
+            nav += '<button type="button" onclick="poolSetPage(1)" ' + (pg <= 1 ? 'disabled' : '') + ' class="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 ' + (pg <= 1 ? 'opacity-40 cursor-not-allowed' : 'hover:text-primary') + ' transition-all text-[11px] font-bold"><i class="fa-solid fa-angles-left text-[10px]"></i></button>';
+            nav += '<button type="button" onclick="poolSetPage(' + (pg - 1) + ')" ' + (pg <= 1 ? 'disabled' : '') + ' class="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 ' + (pg <= 1 ? 'opacity-40 cursor-not-allowed' : 'hover:text-primary') + ' transition-all text-[11px] font-bold"><i class="fa-solid fa-chevron-left text-[10px]"></i></button>';
+            var start = Math.max(1, pg - 2);
+            var end = Math.min(tp, start + 4);
+            for (var i = start; i <= end; i++) {
+                if (i === pg) nav += '<span class="px-3 py-1.5 rounded-lg bg-primary/10 text-primary font-bold text-[11px]">' + i + '</span>';
+                else nav += '<button type="button" onclick="poolSetPage(' + i + ')" class="px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-primary transition-all">' + i + '</button>';
+            }
+            nav += '<button type="button" onclick="poolSetPage(' + (pg + 1) + ')" ' + (pg >= tp ? 'disabled' : '') + ' class="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 ' + (pg >= tp ? 'opacity-40 cursor-not-allowed' : 'hover:text-primary') + ' transition-all text-[11px] font-bold"><i class="fa-solid fa-chevron-right text-[10px]"></i></button>';
+            nav += '<button type="button" onclick="poolSetPage(' + tp + ')" ' + (pg >= tp ? 'disabled' : '') + ' class="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 ' + (pg >= tp ? 'opacity-40 cursor-not-allowed' : 'hover:text-primary') + ' transition-all text-[11px] font-bold"><i class="fa-solid fa-angles-right text-[10px]"></i></button>';
+            nav += '</div>';
+            el.innerHTML = nav;
+        }
+
+        function poolRenderSelection() {
+            var bar = document.getElementById('pool-selection-bar');
+            var countEl = document.getElementById('pool-selected-count');
+            var n = Object.keys(poolState.selected).length;
+            if (bar) bar.classList.toggle('hidden', n === 0);
+            if (bar) bar.classList.toggle('flex', n > 0);
+            if (countEl) countEl.textContent = poolFmt(n);
+            var checkAll = document.getElementById('pool-check-all');
+            if (checkAll) {
+                var pageItems = poolState.items || [];
+                var onPage = pageItems.filter(function (p) { return poolState.selected[p.id]; }).length;
+                checkAll.checked = pageItems.length > 0 && onPage === pageItems.length;
+                checkAll.indeterminate = onPage > 0 && onPage < pageItems.length;
+            }
+        }
+
+        async function poolLoad() {
+            var tbody = document.getElementById('products-tbody');
+            try {
+                var data = await api(poolBuildQuery());
+                poolState.items = data.items || [];
+                poolState.total = (data.pagination && data.pagination.total) || 0;
+                poolState.totalPages = (data.pagination && data.pagination.totalPages) || 1;
+                window.__poolProducts = poolState.items;
+                var totalEl = document.getElementById('pool-total');
+                if (totalEl) totalEl.textContent = poolNum(poolState.total);
+                poolRenderTable(poolState.items);
+                poolRenderPagination();
+                poolRenderSelection();
+            } catch (e) {
+                if (e.status !== 401) {
+                    if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-red-400" colspan="17">Ürünler yüklenemedi: ' + escapeHtml(e.message) + '</td></tr>';
+                }
+            }
+        }
+
+        async function poolLoadStats() {
+            try {
+                var st = await api('/products/stats');
+                poolRenderKpi(st);
+            } catch (e) { /* sessiz */ }
+        }
+
+        async function poolLoadSources() {
+            try {
+                var data = await api('/xml-sources');
+                var items = (data && data.items) || [];
+                poolState.sources = items;
+                var sel = document.getElementById('pool-source');
+                if (!sel) return;
+                var cur = poolState.xmlSourceId;
+                sel.innerHTML = '<option value="">Tüm XML</option>' + items.map(function (s) {
+                    return '<option value="' + escapeHtml(s.id) + '" ' + (s.id === cur ? 'selected' : '') + '>' + escapeHtml(s.name) + ' (' + (s.productCount || 0) + ')</option>';
+                }).join('');
+            } catch (e) { /* sessiz */ }
+        }
+
+        function poolRenderLimits() {
+            var el = document.getElementById('pool-limits');
+            if (!el) return;
+            var sizes = [50, 100, 200, 500, 1000];
+            el.innerHTML = sizes.map(function (n) {
+                var on = poolState.limit === n;
+                return '<button type="button" onclick="poolSetLimit(' + n + ')" class="px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all ' + (on ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:border-primary/50 hover:text-primary') + '">' + n + '</button>';
+            }).join('');
+        }
+
+        function poolSetPage(n) {
+            if (n < 1 || n > poolState.totalPages) return;
+            poolState.page = n;
+            poolLoad();
+        }
+
+        function poolSetLimit(n) {
+            poolState.limit = n;
+            poolState.page = 1;
+            poolState.selected = {};
+            poolRenderLimits();
+            poolLoad();
+            poolRenderSelection();
+        }
+
+        function poolSearchDebounce() {
+            clearTimeout(poolSearchTimer);
+            poolSearchTimer = setTimeout(function () {
+                var inp = document.getElementById('products-search');
+                var v = inp ? inp.value.trim() : '';
+                if (v !== poolState.search) {
+                    poolState.search = v;
+                    poolState.page = 1;
+                    poolState.selected = {};
+                    poolLoad();
+                    poolRenderSelection();
+                }
+            }, 350);
+        }
+
+        function poolOnSourceChange() {
+            var sel = document.getElementById('pool-source');
+            poolState.xmlSourceId = sel ? sel.value : '';
+            contextState.xmlSourceId = poolState.xmlSourceId;
+            poolState.page = 1;
+            poolState.selected = {};
+            poolLoad();
+            poolRenderSelection();
+            updateContextUI();
+            syncLocalContextSelectors();
+        }
+
+        function poolOnStatusChange() {
+            var sel = document.getElementById('products-status');
+            poolState.status = sel ? sel.value : '';
+            poolState.page = 1;
+            poolState.selected = {};
+            poolLoad();
+            poolRenderSelection();
+        }
+
+        function poolToggleSelect(id, checked) {
+            if (checked) poolState.selected[id] = true;
+            else delete poolState.selected[id];
+            poolRenderSelection();
+            var row = poolState.items.find(function (p) { return p.id === id; });
+            if (row) poolRenderTable(poolState.items);
+        }
+
+        function poolToggleSelectAll(cb) {
+            var onPage = poolState.items || [];
+            var selectedCount = onPage.filter(function (p) { return poolState.selected[p.id]; }).length;
+            if (selectedCount === onPage.length && onPage.length > 0) {
+                onPage.forEach(function (p) { delete poolState.selected[p.id]; });
+            } else {
+                onPage.forEach(function (p) { poolState.selected[p.id] = true; });
+            }
+            poolRenderTable(poolState.items);
+            poolRenderSelection();
+        }
+
+        function poolClearSelection() {
+            poolState.selected = {};
+            poolRenderTable(poolState.items);
+            poolRenderSelection();
+        }
+
+        /* ===================== ÜRÜN DETAY DRAWER (gerçek /products/:id) ===================== */
+
+        var poolDetailData = null;
+        var poolDetailImages = [];
+        var poolDetailImgIdx = 0;
+        var poolDetailTab = 'genel';
+        var poolDetailTabs = [
+            ['genel', 'Genel'], ['fiyat', 'Fiyat'], ['kategori', 'Kategori'], ['marka', 'Marka'],
+            ['varyant', 'Varyant'], ['attributes', 'Attributes'], ['resimler', 'Resimler'], ['pazaryerleri', 'Pazaryerleri'], ['log', 'Log']
+        ];
+
+        async function poolOpenDetail(id) {
+            var overlay = document.getElementById('product-drawer-overlay');
+            var body = document.getElementById('pool-drawer-body');
+            if (body) body.innerHTML = '<div class="py-16 text-center text-slate-400"><i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3"></i><div class="text-xs">Ürün detayı yükleniyor...</div></div>';
+            if (overlay) overlay.classList.remove('hidden');
+            poolDetailData = null;
+            poolDetailImages = [];
+            poolDetailImgIdx = 0;
+            poolDetailTab = 'genel';
+            try {
+                var detail = await api('/products/' + id);
+                poolDetailData = detail;
+                poolDetailImages = getImageList(detail.images);
+                var titleEl = document.getElementById('pool-drawer-title');
+                var subEl = document.getElementById('pool-drawer-sub');
+                if (titleEl) titleEl.textContent = detail.title || detail.xmlKey || 'Ürün Detayı';
+                if (subEl) subEl.textContent = (detail.sku || '') + (detail.barcode ? ' · ' + detail.barcode : '') + (detail.xmlSource && detail.xmlSource.name ? ' · ' + detail.xmlSource.name : '');
+                poolDrawerRenderTabs();
+                poolDrawerRender();
+            } catch (e) {
+                if (body) body.innerHTML = '<div class="py-16 text-center text-red-400 text-xs">Ürün detayı yüklenemedi: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        function poolCloseDetail() {
+            var overlay = document.getElementById('product-drawer-overlay');
+            if (overlay) overlay.classList.add('hidden');
+        }
+
+        function poolDrawerRenderTabs() {
+            var tabs = document.getElementById('pool-drawer-tabs');
+            if (!tabs) return;
+            tabs.innerHTML = poolDetailTabs.map(function (t) {
+                var on = poolDetailTab === t[0];
+                return '<button type="button" onclick="poolDrawerTab(\'' + t[0] + '\')" class="px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ' + (on ? 'bg-primary/10 text-primary border border-primary/40' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent') + '">' + t[1] + '</button>';
+            }).join('');
+        }
+
+        function poolDrawerTab(name) {
+            poolDetailTab = name;
+            poolDrawerRenderTabs();
+            poolDrawerRender();
+        }
+
+        function poolDrow(label, valHtml) {
+            return '<div class="flex items-start justify-between gap-3 py-2.5 border-b border-slate-100 dark:border-slate-800/60 last:border-0"><dt class="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider shrink-0 pt-0.5">' + escapeHtml(label) + '</dt><dd class="text-xs font-semibold text-slate-800 dark:text-slate-100 text-right break-all">' + (valHtml === null || valHtml === undefined || valHtml === '' ? '<span class="text-slate-400">—</span>' : valHtml) + '</dd></div>';
+        }
+        function poolDSec(title) {
+            return '<div class="mt-4 mb-1 text-[10px] uppercase tracking-wider font-extrabold text-slate-400 dark:text-slate-500">' + escapeHtml(title) + '</div>';
+        }
+
+        function poolDrawerRender() {
+            var body = document.getElementById('pool-drawer-body');
+            if (!body || !poolDetailData) return;
+            var p = poolDetailData;
+            var h = '';
+            if (poolDetailTab === 'genel') {
+                var score = p.aiScore;
+                var readiness = (score == null) ? 'Tanımsız' : (score >= 80 ? 'Hazır' : score >= 40 ? 'Bekliyor' : 'Eksik');
+                h += '<div class="flex items-center gap-3">'
+                    + '<div class="w-14 h-14 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-center">' + poolThumb(p) + '</div>'
+                    + '<div class="flex-1 min-w-0"><div class="text-sm font-bold text-slate-900 dark:text-white leading-snug">' + escapeHtml(p.title || p.xmlKey) + '</div>'
+                    + '<div class="flex flex-wrap gap-1.5 mt-2">' + poolStatusBadge(p.status) + poolMatchBadge(!!p.categoryMatch) + poolMatchBadge(!!p.brandMatch) + poolMatchBadge(!!p.variantMatch) + poolMatchBadge(!!p.templateMatch) + '</div></div></div>';
+                h += poolDSec('Hazırlık');
+                if (score != null) {
+                    h += '<div class="flex items-center gap-2 mt-1"><div class="flex-1 h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden"><div class="h-full rounded-full bg-emerald-500" style="width:' + Math.max(0, Math.min(100, score)) + '%"></div></div><span class="text-xs font-bold text-slate-700 dark:text-slate-300">%' + score + '</span></div>';
+                }
+                h += '<div class="mt-3">' + poolDrow('Hazırlık Skoru', score == null ? '—' : '%' + score + ' · ' + readiness) + '</div>';
+                h += poolDSec('Genel Bilgiler');
+                h += poolDrow('XML Key', poolEsc(p.xmlKey)) + poolDrow('SKU', poolEsc(p.sku)) + poolDrow('Barkod', poolEsc(p.barcode));
+                h += poolDrow('Stok', '<b class="font-bold">' + poolFmt(p.stock) + '</b>') + poolDrow('Min Stok', poolFmt(p.minStock));
+                h += poolDrow('XML Kaynağı', poolEsc((p.xmlSource && p.xmlSource.name) || '—'));
+                h += poolDrow('Durum', poolStatusBadge(p.status));
+                h += poolDrow('Oluşturma', poolDate(p.createdAt)) + poolDrow('Güncelleme', poolDate(p.updatedAt));
+                if (p.description) { h += poolDSec('Açıklama'); h += '<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">' + escapeHtml(p.description) + '</p>'; }
+            } else if (poolDetailTab === 'fiyat') {
+                h += poolDSec('Fiyat');
+                h += poolDrow('Alış Fiyatı', poolPrice(p.purchasePrice));
+                h += poolDrow('Alış Fiyatı (KDV Dahil)', '<b class="font-extrabold text-emerald-700 dark:text-emerald-400">' + poolPrice(p.vatIncludedPurchasePrice) + '</b>');
+                h += poolDrow('Satış Fiyatı', poolPrice(p.salePrice));
+                h += poolDrow('KDV Oranı', p.vatRate != null ? '%' + p.vatRate : '—');
+                h += poolDrow('Kar Marjı', p.profitMargin != null ? '%' + p.profitMargin : '—');
+                h += poolDrow('Para Birimi', poolEsc(p.currency || 'TRY'));
+                h += poolDrow('Birim', poolEsc(p.unit || '—'));
+            } else if (poolDetailTab === 'kategori') {
+                h += poolDSec('Kategori');
+                h += poolDrow('XML Kategorisi', poolEsc(p.supplierCategory));
+                h += poolDrow('DG Kategori', poolEsc((p.category && p.category.name) || '—'));
+                h += poolDrow('Eşleşme', poolMatchBadge(!!p.categoryMatch));
+            } else if (poolDetailTab === 'marka') {
+                h += poolDSec('Marka');
+                h += poolDrow('XML Markası', poolEsc(p.customBrandName));
+                h += poolDrow('DG Marka', poolEsc((p.brand && p.brand.name) || '—'));
+                h += poolDrow('Eşleşme', poolMatchBadge(!!p.brandMatch));
+                h += poolDrow('Ön Ek Kullan', p.prefixEnabled ? '<span class="text-emerald-600 dark:text-emerald-400 font-bold">Evet</span>' : 'Hayır');
+                h += poolDrow('Hesaplanan Başlık', poolEsc(p.computedTitle));
+            } else if (poolDetailTab === 'varyant') {
+                var vs = p.variants || [];
+                h += poolDSec('Varyant');
+                h += poolDrow('Eşleşme', poolMatchBadge(!!p.variantMatch));
+                if (vs.length) {
+                    h += '<div class="mt-2 space-y-2">' + vs.map(function (v) {
+                        return '<div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700"><i class="fa-solid fa-shapes text-slate-400"></i><span class="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase">' + escapeHtml(v.name) + '</span><span class="text-xs font-semibold text-slate-600 dark:text-slate-400">' + escapeHtml(v.value) + '</span></div>';
+                    }).join('') + '</div>';
+                } else {
+                    h += '<p class="text-xs text-slate-500 dark:text-slate-400 mt-2">Bu ürün için varyant tanımlı değil.</p>';
+                }
+            } else if (poolDetailTab === 'attributes') {
+                var specs = p.technicalSpecs;
+                h += poolDSec('Attributes');
+                if (specs && typeof specs === 'string' && specs.trim()) {
+                    var rows = specs.split('\n').map(function (ln) { return ln.trim(); }).filter(Boolean);
+                    h += '<div class="mt-2">' + rows.map(function (r) {
+                        var parts = r.split(/[:=]/);
+                        if (parts.length >= 2) return poolDrow(parts[0].trim(), poolEsc(parts.slice(1).join(':').trim()));
+                        return '<div class="text-xs text-slate-600 dark:text-slate-400 py-1">' + escapeHtml(r) + '</div>';
+                    }).join('') + '</div>';
+                } else if (specs && typeof specs === 'object') {
+                    h += '<div class="mt-2">' + Object.keys(specs).map(function (k) { return poolDrow(k, poolEsc(String(specs[k]))); }).join('') + '</div>';
+                } else {
+                    h += '<p class="text-xs text-slate-500 dark:text-slate-400 mt-2">Teknik özellik tanımlı değil.</p>';
+                }
+                h += poolDrow('Bağlantı', p.link ? '<a href="' + escapeHtml(p.link) + '" target="_blank" rel="noopener" class="text-primary underline hover:text-primaryHover">Ürün Linki</a>' : '—');
+            } else if (poolDetailTab === 'resimler') {
+                if (poolDetailImages.length === 0) {
+                    h += '<div class="py-12 text-center text-slate-400"><i class="fa-solid fa-image text-3xl mb-3"></i><div class="text-xs">Görsel yok</div></div>';
+                } else {
+                    var main = poolDetailImages[poolDetailImgIdx] || poolDetailImages[0];
+                    h += '<img id="pool-main-img" src="' + escapeHtml(main) + '" alt="Ürün görseli" class="w-full h-64 lg:h-80 object-cover rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40" onerror="this.onerror=null;this.src=IMG_PH;">';
+                    if (poolDetailImages.length > 1) {
+                        h += '<div class="mt-3 flex flex-wrap gap-2">' + poolDetailImages.map(function (img, i) {
+                            return '<button type="button" onclick="poolSetDetailImage(' + i + ')" title="Görsel ' + (i + 1) + '" class="w-14 h-14 overflow-hidden rounded-xl border transition-all ' + (i === poolDetailImgIdx ? 'ring-2 ring-[var(--primary-color)] border-primary' : 'border-slate-200 dark:border-slate-700 hover:border-primary') + '"><img src="' + escapeHtml(img) + '" alt="" loading="lazy" class="w-full h-full object-cover" onerror="this.onerror=null;this.src=IMG_PH;"></button>';
+                        }).join('') + '</div>';
+                    }
+                }
+            } else if (poolDetailTab === 'pazaryerleri') {
+                var mps = p.marketplaceStates || [];
+                h += poolDSec('Pazaryeri Durumları');
+                if (mps.length === 0) {
+                    h += '<p class="text-xs text-slate-500 dark:text-slate-400 mt-2">Bu ürün için pazaryeri gönderim kaydı yok.</p>';
+                } else {
+                    h += '<div class="mt-2">' + mps.map(function (s) {
+                        return poolDrow((s.marketplace && s.marketplace.name) || s.marketplaceId || 'Pazaryeri', poolStatusBadge(s.status) + (s.error ? '<div class="text-[10px] text-red-500 mt-1">' + escapeHtml(s.error) + '</div>' : ''));
+                    }).join('') + '</div>';
+                }
+            } else if (poolDetailTab === 'log') {
+                h += poolDSec('İşlem Geçmişi');
+                h += poolDrow('Hata Mesajı', poolEsc(p.errorMessage));
+                h += poolDrow('Durum', poolStatusBadge(p.status));
+                h += poolDrow('Son Güncelleme', poolDate(p.updatedAt));
+                h += '<p class="text-xs text-slate-400 mt-3">Denetim kaydı (audit log) bu sekmede listelenecek.</p>';
+            }
+            body.innerHTML = h;
+        }
+
+        function poolSetDetailImage(i) {
+            if (!poolDetailImages[i]) return;
+            poolDetailImgIdx = i;
+            poolDrawerRender();
+        }
+
+        function refreshProducts(page) {
+            currentProductsPage = page || 1;
+            poolState.page = currentProductsPage;
+            poolRenderLimits();
+            poolLoadStats();
+            poolLoadSources();
+            poolLoad();
+        }
+
+
+        function renderPagination(container, pagination, onPage) {
+            if (!container || !pagination) return;
+            var pg = pagination;
+            var nav = '';
+            nav += '<span>' + fmt(pg.total) + ' kayıt · ' + pg.totalPages + ' sayfa</span>';
+            nav += '<div class="flex items-center gap-1.5">'
+                + '<button type="button" onclick="' + (pg.page > 1 ? 'window.__nav(' + (pg.page - 1) + ');' : '') + '" class="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 ' + (pg.page <= 1 ? 'opacity-40 cursor-not-allowed' : 'hover:text-primary') + '" ' + (pg.page <= 1 ? 'disabled' : '') + '><i class="fa-solid fa-chevron-left text-[10px]"></i></button>'
+                + '<span class="px-3 py-1.5 rounded-lg bg-primary/10 text-primary font-bold text-[11px]">' + pg.page + ' / ' + pg.totalPages + '</span>'
+                + '<button type="button" onclick="' + (pg.page < pg.totalPages ? 'window.__nav(' + (pg.page + 1) + ');' : '') + '" class="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 ' + (pg.page >= pg.totalPages ? 'opacity-40 cursor-not-allowed' : 'hover:text-primary') + '" ' + (pg.page >= pg.totalPages ? 'disabled' : '') + '><i class="fa-solid fa-chevron-right text-[10px]"></i></button>'
+                + '</div>';
+            container.innerHTML = nav;
+            window.__nav = onPage;
+        }
+
+        /* ===================== GÖNDERİME HAZIR MODÜLÜ ===================== */
+
+        var rtsState = { page: 1, limit: 50, searchTimer: null, selectedIds: new Set() };
+
+        function rtsSearchDebounce() {
+            clearTimeout(rtsState.searchTimer);
+            rtsState.searchTimer = setTimeout(function () { rtsLoad(); }, 300);
+        }
+
+        async function rtsLoadSources() {
+            try {
+                var data = await api('/xml-sources');
+                var items = (data && data.items) || [];
+                var el = document.getElementById('rts-source');
+                if (!el) return;
+                var val = el.value;
+                var html = '<option value="">Tüm XML</option>';
+                items.forEach(function (s) {
+                    html += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>';
+                });
+                el.innerHTML = html;
+                el.value = val;
+            } catch (e) { /* sessiz */ }
+        }
+
+        async function rtsLoadStats() {
+            try {
+                var stats = await api('/ready-to-ship/stats');
+                document.getElementById('rts-kpi-ready').textContent = fmt(stats.readyCount);
+                document.getElementById('rts-kpi-not-ready').textContent = fmt(stats.notReadyCount);
+                document.getElementById('rts-kpi-missing-cat').textContent = fmt(stats.missingCategory);
+                document.getElementById('rts-kpi-missing-brand').textContent = fmt(stats.missingBrand);
+                document.getElementById('rts-kpi-missing-tpl').textContent = fmt(stats.missingTemplate);
+                document.getElementById('rts-kpi-error').textContent = fmt(stats.errorCount);
+                document.getElementById('rts-total').textContent = fmt(stats.totalProducts);
+            } catch (e) { /* sessiz */ }
+        }
+
+        async function rtsLoad() {
+            if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); clearAllPageData(); return; }
+            rtsLoadStats();
+            var tbody = document.getElementById('rts-tbody');
+            var search = (document.getElementById('rts-search').value || '').trim();
+            var filter = document.getElementById('rts-filter').value;
+            var missing = document.getElementById('rts-missing').value;
+
+            var url = '/ready-to-ship?page=' + rtsState.page + '&limit=' + rtsState.limit;
+            if (search) url += '&search=' + encodeURIComponent(search);
+            if (filter) url += '&filter=' + filter;
+            if (missing) url += '&missingReason=' + missing;
+
+            try {
+                var data = await api(url);
+                var items = data.items || [];
+                var pg = data.pagination || { page: 1, totalPages: 1, total: 0 };
+
+                if (items.length === 0) {
+                    tbody.innerHTML = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="11">Sonuç bulunamadı</td></tr>';
+                    document.getElementById('rts-pagination').innerHTML = '';
+                    return;
+                }
+
+                var html = '';
+                items.forEach(function (p) {
+                    var readyBadge = p.isReady
+                        ? '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Hazır</span>'
+                        : '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-red-500/10 text-red-600 dark:text-red-400"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Hazır Değil</span>';
+
+                    var catBadge = p.categoryMatch
+                        ? '<span class="text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-check text-[10px]"></i></span>'
+                        : '<span class="text-red-500"><i class="fa-solid fa-xmark text-[10px]"></i></span>';
+                    var brandBadge = p.brandMatch
+                        ? '<span class="text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-check text-[10px]"></i></span>'
+                        : '<span class="text-red-500"><i class="fa-solid fa-xmark text-[10px]"></i></span>';
+                    var tplBadge = p.templateMatch
+                        ? '<span class="text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-check text-[10px]"></i></span>'
+                        : '<span class="text-red-500"><i class="fa-solid fa-xmark text-[10px]"></i></span>';
+
+                    var readinessHtml = '<div class="flex items-center gap-1.5">' + catBadge + brandBadge + tplBadge + '</div>';
+
+                    var missingHtml = '';
+                    if (p.missingReasons && p.missingReasons.length > 0) {
+                        missingHtml = p.missingReasons.map(function (r) {
+                            return '<span class="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 mr-1 mb-0.5">' + escapeHtml(r) + '</span>';
+                        }).join('');
+                    } else {
+                        missingHtml = '<span class="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Tamam</span>';
+                    }
+
+                    var stockClass = p.stock <= 0 ? 'text-red-600 dark:text-red-400 font-bold' : 'text-slate-700 dark:text-slate-300';
+                    var priceText = p.salePrice != null ? fmt(p.salePrice) + ' TL' : '<span class="text-red-500">—</span>';
+                    var brandText = p.brand ? escapeHtml(p.brand.name) : '<span class="text-slate-400">—</span>';
+                    var catText = p.category ? escapeHtml(p.category.name) : '<span class="text-slate-400">—</span>';
+                    var sourceText = p.xmlSource ? escapeHtml(p.xmlSource.name) : '<span class="text-slate-400">—</span>';
+
+                    html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-all">'
+                        + '<td class="py-3 px-3"><input type="checkbox" class="rts-row-cb accent-indigo-600 w-3.5 h-3.5 cursor-pointer" data-id="' + p.id + '" onchange="rtsToggleRow()"></td>'
+                        + '<td class="py-3 px-3"><div class="font-semibold text-slate-800 dark:text-slate-200 text-xs max-w-[220px] truncate" title="' + escapeHtml(p.title || p.xmlKey) + '">' + escapeHtml(p.title || p.xmlKey) + '</div><div class="text-[10px] text-slate-400 font-mono">' + escapeHtml(p.sku || p.xmlKey) + '</div></td>'
+                        + '<td class="py-3 px-3 text-[10px] text-slate-500 dark:text-slate-400 max-w-[100px] truncate">' + sourceText + '</td>'
+                        + '<td class="py-3 px-3 text-[10px] text-slate-500 dark:text-slate-400">' + brandText + '</td>'
+                        + '<td class="py-3 px-3 text-[10px] text-slate-500 dark:text-slate-400 max-w-[120px] truncate">' + catText + '</td>'
+                        + '<td class="py-3 px-3 text-[10px] ' + stockClass + '">' + fmt(p.stock) + '</td>'
+                        + '<td class="py-3 px-3 text-[10px] font-semibold text-slate-700 dark:text-slate-300">' + priceText + '</td>'
+                        + '<td class="py-3 px-3">' + readyBadge + '</td>'
+                        + '<td class="py-3 px-3">' + readinessHtml + '</td>'
+                        + '<td class="py-3 px-3 max-w-[180px]">' + missingHtml + '</td>'
+                        + '<td class="py-3 px-3 text-center"><div class="flex items-center justify-center gap-1">'
+                        + '<button onclick="rtsDetail(\'' + p.id + '\')" class="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-primary transition-all" title="Detay"><i class="fa-solid fa-eye text-[10px]"></i></button>'
+                        + (p.isReady ? '<button onclick="rtsSendSingle(\'' + p.id + '\')" class="w-7 h-7 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-all" title="Gönderime Al"><i class="fa-solid fa-paper-plane text-[10px]"></i></button>' : '')
+                        + '</div></td>'
+                        + '</tr>';
+                });
+                tbody.innerHTML = html;
+
+                renderPagination(document.getElementById('rts-pagination'), pg, function (p) { rtsState.page = p; rtsLoad(); });
+            } catch (e) {
+                tbody.innerHTML = '<tr><td class="py-10 px-6 text-center text-red-400" colspan="11">Veri yüklenemedi: ' + escapeHtml(e.message) + '</td></tr>';
+            }
+        }
+
+        function rtsToggleSelectAll(el) {
+            var checked = el.checked;
+            document.querySelectorAll('.rts-row-cb').forEach(function (cb) { cb.checked = checked; });
+            rtsUpdateSelection();
+        }
+
+        function rtsToggleRow() {
+            rtsUpdateSelection();
+        }
+
+        function rtsUpdateSelection() {
+            rtsState.selectedIds.clear();
+            document.querySelectorAll('.rts-row-cb:checked').forEach(function (cb) {
+                rtsState.selectedIds.add(cb.getAttribute('data-id'));
+            });
+            var count = rtsState.selectedIds.size;
+            var bar = document.getElementById('rts-selection-bar');
+            var countEl = document.getElementById('rts-selected-count');
+            if (count > 0) {
+                bar.classList.remove('hidden');
+                countEl.textContent = count;
+            } else {
+                bar.classList.add('hidden');
+            }
+        }
+
+        function rtsClearSelection() {
+            rtsState.selectedIds.clear();
+            document.querySelectorAll('.rts-row-cb').forEach(function (cb) { cb.checked = false; });
+            var checkAll = document.getElementById('rts-check-all');
+            if (checkAll) checkAll.checked = false;
+            document.getElementById('rts-selection-bar').classList.add('hidden');
+        }
+
+        async function rtsBulkSend() {
+            var ids = Array.from(rtsState.selectedIds);
+            if (ids.length === 0) { showToast('Önce ürün seçin', 'error'); return; }
+            if (!confirm(ids.length + ' ürün gönderime alınacak. Devam edilsin mi?')) return;
+            try {
+                var r = await api('/ready-to-ship/send', { method: 'POST', body: { productIds: ids } });
+                showToast(r.message || 'İşlem başarılı', 'success');
+                rtsClearSelection();
+                rtsLoad();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        async function rtsSendSingle(id) {
+            if (!confirm('Bu ürün gönderime alınacak. Devam edilsin mi?')) return;
+            try {
+                var r = await api('/ready-to-ship/send', { method: 'POST', body: { productIds: [id] } });
+                showToast(r.message || 'Ürün gönderime alındı', 'success');
+                rtsLoad();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        async function rtsRecheck() {
+            var ids = Array.from(rtsState.selectedIds);
+            if (ids.length === 0) {
+                if (!confirm('Tüm ürünlerin durumu tekrar kontrol edilecek. Devam edilsin mi?')) return;
+                try {
+                    var data = await api('/ready-to-ship?limit=1000');
+                    ids = (data.items || []).map(function (p) { return p.id; });
+                } catch (e) { showToast(e.message, 'error'); return; }
+            }
+            try {
+                var r = await api('/ready-to-ship/recheck', { method: 'POST', body: { productIds: ids } });
+                showToast(r.message || 'Kontrol tamamlandı', 'success');
+                rtsLoad();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        async function rtsDetail(id) {
+            try {
+                var p = await api('/ready-to-ship/' + id);
+                var drawer = document.getElementById('product-drawer-overlay');
+                var title = document.getElementById('pool-drawer-title');
+                var sub = document.getElementById('pool-drawer-sub');
+                var tabs = document.getElementById('pool-drawer-tabs');
+                var body = document.getElementById('pool-drawer-body');
+
+                title.textContent = p.title || p.xmlKey;
+                sub.textContent = (p.sku || p.xmlKey) + ' · ' + (p.xmlSource ? p.xmlSource.name : '');
+
+                tabs.innerHTML = '<button data-tab="info" onclick="rtsDetailTab(\'' + id + '\',\'info\')" class="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-primary text-white rts-dtab">Genel Bilgi</button>'
+                    + '<button data-tab="missing" onclick="rtsDetailTab(\'' + id + '\',\'missing\')" class="px-3 py-1.5 rounded-lg text-[11px] font-bold rts-dtab">Eksikler</button>'
+                    + '<button data-tab="marketplace" onclick="rtsDetailTab(\'' + id + '\',\'marketplace\')" class="px-3 py-1.5 rounded-lg text-[11px] font-bold rts-dtab">Pazaryeri</button>';
+
+                window.__rtsDetailData = p;
+                rtsDetailTab(id, 'info');
+
+                drawer.classList.remove('hidden');
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        function rtsDetailTab(id, tab) {
+            document.querySelectorAll('.rts-dtab').forEach(function (b) {
+                b.className = b.className.replace('bg-primary text-white', '');
+                if (b.getAttribute('data-tab') === tab) {
+                    b.className += ' bg-primary text-white';
+                }
+            });
+
+            var p = window.__rtsDetailData;
+            if (!p) return;
+            var body = document.getElementById('pool-drawer-body');
+            var h = '';
+
+            if (tab === 'info') {
+                h += '<div class="space-y-3">';
+                h += '<div class="flex items-center gap-2">' + (p.isReady
+                    ? '<span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> GÖNDERİME HAZIR</span>'
+                    : '<span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-red-500/10 text-red-600 dark:text-red-400"><span class="w-2 h-2 rounded-full bg-red-500"></span> GÖNDERİME HAZIR DEĞİL</span>') + '</div>';
+                h += '<div class="grid grid-cols-2 gap-3">';
+                h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Ürün Adı</div><div class="text-xs font-semibold text-slate-800 dark:text-slate-200 mt-1">' + escapeHtml(p.title || '—') + '</div></div>';
+                h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">SKU</div><div class="text-xs font-mono text-slate-700 dark:text-slate-300 mt-1">' + escapeHtml(p.sku || '—') + '</div></div>';
+                h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Barkod</div><div class="text-xs font-mono text-slate-700 dark:text-slate-300 mt-1">' + escapeHtml(p.barcode || '—') + '</div></div>';
+                h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Stok</div><div class="text-xs font-semibold mt-1 ' + (p.stock <= 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-700 dark:text-slate-300') + '">' + fmt(p.stock) + '</div></div>';
+                h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Fiyat</div><div class="text-xs font-semibold text-slate-700 dark:text-slate-300 mt-1">' + (p.salePrice != null ? fmt(p.salePrice) + ' TL' : '—') + '</div></div>';
+                h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Marka</div><div class="text-xs text-slate-700 dark:text-slate-300 mt-1">' + (p.brand ? escapeHtml(p.brand.name) : '—') + '</div></div>';
+                h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Kategori</div><div class="text-xs text-slate-700 dark:text-slate-300 mt-1">' + (p.category ? escapeHtml(p.category.name) : '—') + '</div></div>';
+                h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">XML Kaynağı</div><div class="text-xs text-slate-700 dark:text-slate-300 mt-1">' + (p.xmlSource ? escapeHtml(p.xmlSource.name) : '—') + '</div></div>';
+                h += '</div>';
+                h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase mb-2">Hazırlık Durumu</div>';
+                h += '<div class="grid grid-cols-4 gap-2">';
+                h += '<div class="text-center"><div class="text-[10px] text-slate-400">Kategori</div><div class="mt-1">' + (p.categoryMatch ? '<span class="text-emerald-600"><i class="fa-solid fa-circle-check"></i></span>' : '<span class="text-red-500"><i class="fa-solid fa-circle-xmark"></i></span>') + '</div></div>';
+                h += '<div class="text-center"><div class="text-[10px] text-slate-400">Marka</div><div class="mt-1">' + (p.brandMatch ? '<span class="text-emerald-600"><i class="fa-solid fa-circle-check"></i></span>' : '<span class="text-red-500"><i class="fa-solid fa-circle-xmark"></i></span>') + '</div></div>';
+                h += '<div class="text-center"><div class="text-[10px] text-slate-400">Varyant</div><div class="mt-1">' + (p.variantMatch ? '<span class="text-emerald-600"><i class="fa-solid fa-circle-check"></i></span>' : '<span class="text-red-500"><i class="fa-solid fa-circle-xmark"></i></span>') + '</div></div>';
+                h += '<div class="text-center"><div class="text-[10px] text-slate-400">Şablon</div><div class="mt-1">' + (p.templateMatch ? '<span class="text-emerald-600"><i class="fa-solid fa-circle-check"></i></span>' : '<span class="text-red-500"><i class="fa-solid fa-circle-xmark"></i></span>') + '</div></div>';
+                h += '</div></div>';
+                h += '</div>';
+            } else if (tab === 'missing') {
+                h += '<div class="space-y-3">';
+                if (p.missingReasons && p.missingReasons.length > 0) {
+                    h += '<div class="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4">';
+                    h += '<div class="text-xs font-bold text-amber-600 dark:text-amber-400 mb-2"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Eksik Bilgiler (' + p.missingReasons.length + ')</div>';
+                    h += '<ul class="space-y-1.5">';
+                    p.missingReasons.forEach(function (r) {
+                        h += '<li class="text-xs text-amber-700 dark:text-amber-300 flex items-center gap-2"><i class="fa-solid fa-circle-exclamation text-[8px]"></i> ' + escapeHtml(r) + '</li>';
+                    });
+                    h += '</ul></div>';
+                } else {
+                    h += '<div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4">';
+                    h += '<div class="text-xs font-bold text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-circle-check mr-1"></i> Tüm bilgiler tamam, gönderime uygun.</div></div>';
+                }
+                h += '</div>';
+            } else if (tab === 'marketplace') {
+                h += '<div class="space-y-3">';
+                if (p.marketplaceStates && p.marketplaceStates.length > 0) {
+                    p.marketplaceStates.forEach(function (ms) {
+                        h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3 flex items-center justify-between">';
+                        h += '<div><div class="text-xs font-semibold text-slate-800 dark:text-slate-200">' + escapeHtml(ms.marketplace ? ms.marketplace.name : '—') + '</div>';
+                        h += '<div class="text-[10px] text-slate-400 mt-0.5">Durum: ' + escapeHtml(ms.status) + (ms.listingUrl ? ' · <a href="' + escapeHtml(ms.listingUrl) + '" target="_blank" class="text-primary hover:underline">İzle</a>' : '') + '</div></div>';
+                        h += '</div>';
+                    });
+                } else {
+                    h += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-4 text-center text-xs text-slate-400">Henüz pazaryerine gönderilmemiş</div>';
+                }
+                h += '</div>';
+            }
+
+            body.innerHTML = h;
+        }
+
+        function rtsCloseDetail() {
+            document.getElementById('product-drawer-overlay').classList.add('hidden');
+        }
+
+        /* ===================== PAZARYERİ YÖNETİMİ ===================== */
+
+        var mpFieldConfig = {
+            trendyol: {
+                label: 'Trendyol',
+                apiFields: [
+                    { id: 'mp-apiKey', label: 'API Key', type: 'text', placeholder: 'Trendyol API Key', required: true, secret: false },
+                    { id: 'mp-apiSecret', label: 'API Secret', type: 'password', placeholder: 'Trendyol API Secret', required: true, secret: true }
+                ],
+                sellerFields: [
+                    { id: 'mp-sellerId', label: 'Satıcı ID', type: 'text', placeholder: 'Trendyol Satıcı ID', required: false },
+                    { id: 'mp-storeId', label: 'Mağaza ID', type: 'text', placeholder: 'Trendyol Mağaza ID', required: false }
+                ],
+                apiUrl: 'https://api.trendyol.com/sapigw/selling/'
+            },
+            hepsiburada: {
+                label: 'Hepsiburada',
+                apiFields: [
+                    { id: 'mp-apiKey', label: 'API Key', type: 'text', placeholder: 'Hepsiburada API Key', required: true, secret: false },
+                    { id: 'mp-apiSecret', label: 'API Secret', type: 'password', placeholder: 'Hepsiburada API Secret', required: true, secret: true }
+                ],
+                sellerFields: [
+                    { id: 'mp-merchantId', label: 'Merchant ID', type: 'text', placeholder: 'Hepsiburada Merchant ID', required: false },
+                    { id: 'mp-sellerId', label: 'Seller ID', type: 'text', placeholder: 'Hepsiburada Seller ID', required: false }
+                ],
+                apiUrl: 'https://api.hepsiburada.com/'
+            },
+            n11: {
+                label: 'n11',
+                apiFields: [
+                    { id: 'mp-apiKey', label: 'API Key', type: 'text', placeholder: 'n11 API Key', required: true, secret: false },
+                    { id: 'mp-apiSecret', label: 'API Secret', type: 'password', placeholder: 'n11 API Secret', required: true, secret: true }
+                ],
+                sellerFields: [
+                    { id: 'mp-sellerId', label: 'Satıcı ID', type: 'text', placeholder: 'n11 Satıcı ID', required: false }
+                ],
+                apiUrl: 'https://marketplace.n11.com/api/'
+            },
+            amazon: {
+                label: 'Amazon.com.tr',
+                apiFields: [
+                    { id: 'mp-apiKey', label: 'Client ID', type: 'text', placeholder: 'Amazon SP-API Client ID', required: true, secret: false },
+                    { id: 'mp-apiSecret', label: 'Client Secret', type: 'password', placeholder: 'Amazon SP-API Client Secret', required: true, secret: true },
+                    { id: 'mp-refreshToken', label: 'Refresh Token', type: 'password', placeholder: 'Amazon SP-API Refresh Token', required: true, secret: true }
+                ],
+                sellerFields: [
+                    { id: 'mp-sellerId', label: 'Seller ID', type: 'text', placeholder: 'Amazon Merchant ID', required: false },
+                    { id: 'mp-storeId', label: 'Marketplace ID', type: 'text', placeholder: 'A33AVAJ2PDY3EV (TR)', required: false }
+                ],
+                apiUrl: 'https://sellingpartnerapi-eu.amazon.com/'
+            },
+            pazarama: {
+                label: 'Pazarama',
+                apiFields: [
+                    { id: 'mp-apiKey', label: 'API Key', type: 'text', placeholder: 'Pazarama API Key', required: true, secret: false },
+                    { id: 'mp-apiSecret', label: 'API Secret', type: 'password', placeholder: 'Pazarama API Secret', required: true, secret: true }
+                ],
+                sellerFields: [
+                    { id: 'mp-sellerId', label: 'Satıcı ID', type: 'text', placeholder: 'Pazarama Satıcı ID', required: false }
+                ],
+                apiUrl: ''
+            },
+            ciceksepeti: {
+                label: 'Çiçeksepeti',
+                apiFields: [
+                    { id: 'mp-apiKey', label: 'API Key', type: 'text', placeholder: 'Çiçeksepeti API Key', required: true, secret: false },
+                    { id: 'mp-apiSecret', label: 'API Secret', type: 'password', placeholder: 'Çiçeksepeti API Secret', required: true, secret: true }
+                ],
+                sellerFields: [
+                    { id: 'mp-sellerId', label: 'Satıcı ID', type: 'text', placeholder: 'Çiçeksepeti Satıcı ID', required: false }
+                ],
+                apiUrl: ''
+            },
+            ebay: {
+                label: 'eBay',
+                apiFields: [
+                    { id: 'mp-apiKey', label: 'App ID', type: 'text', placeholder: 'eBay App ID (Client ID)', required: true, secret: false },
+                    { id: 'mp-apiSecret', label: 'Cert ID', type: 'password', placeholder: 'eBay Cert ID (Client Secret)', required: true, secret: true },
+                    { id: 'mp-refreshToken', label: 'User Token', type: 'password', placeholder: 'eBay User OAuth Token', required: false, secret: true }
+                ],
+                sellerFields: [
+                    { id: 'mp-sellerId', label: 'Seller ID', type: 'text', placeholder: 'eBay Seller ID / Username', required: false }
+                ],
+                apiUrl: 'https://api.ebay.com/'
+            },
+            etsy: {
+                label: 'Etsy',
+                apiFields: [
+                    { id: 'mp-apiKey', label: 'API Key', type: 'text', placeholder: 'Etsy API Key (x-api-key)', required: true, secret: false },
+                    { id: 'mp-apiSecret', label: 'Shared Secret', type: 'password', placeholder: 'Etsy Shared Secret', required: true, secret: true },
+                    { id: 'mp-refreshToken', label: 'Access Token', type: 'password', placeholder: 'Etsy OAuth Access Token', required: false, secret: true }
+                ],
+                sellerFields: [
+                    { id: 'mp-sellerId', label: 'Shop ID', type: 'text', placeholder: 'Etsy Shop ID', required: false }
+                ],
+                apiUrl: 'https://openapi.etsy.com/v3/'
+            },
+            custom: {
+                label: 'Diğer / Özel',
+                apiFields: [
+                    { id: 'mp-apiKey', label: 'API Key', type: 'text', placeholder: 'API Key', required: false, secret: false },
+                    { id: 'mp-apiSecret', label: 'API Secret', type: 'password', placeholder: 'API Secret', required: false, secret: true }
+                ],
+                sellerFields: [
+                    { id: 'mp-sellerId', label: 'Satıcı ID', type: 'text', placeholder: 'Satıcı / Merchant ID', required: false }
+                ],
+                apiUrl: ''
+            }
+        };
+
+        function mpTypeChanged() {
+            var type = (document.getElementById('mp-type') || {}).value;
+            var credDiv = document.getElementById('mp-credential-fields');
+            var apiFieldsEl = document.getElementById('mp-api-fields');
+            var sellerFieldsEl = document.getElementById('mp-seller-fields');
+            var testBtn = document.getElementById('mp-test-btn');
+            var apiUrlEl = document.getElementById('mp-apiUrl');
+            if (!type || !mpFieldConfig[type]) {
+                if (apiFieldsEl) apiFieldsEl.innerHTML = '<div class="col-span-2 text-xs text-slate-400 italic py-2">Pazaryeri tipi seçildiğinde API alanları burada görünecek</div>';
+                if (sellerFieldsEl) sellerFieldsEl.innerHTML = '<div class="col-span-2 text-xs text-slate-400 italic py-2">Pazaryeri tipi seçildiğinde satıcı alanları burada görünecek</div>';
+                if (testBtn) testBtn.classList.add('hidden');
+                if (credDiv) credDiv.classList.remove('hidden');
+                mpCheckSaveBtn();
+                return;
+            }
+            var cfg = mpFieldConfig[type];
+            if (testBtn) testBtn.classList.remove('hidden');
+            if (apiUrlEl && cfg.apiUrl && !apiUrlEl.value) apiUrlEl.value = cfg.apiUrl;
+
+            var apiHtml = '';
+            cfg.apiFields.forEach(function(f) {
+                var val = f.id === 'mp-refreshToken' ? '' : '';
+                apiHtml += '<div>'
+                    + '<label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">' + f.label + (f.required ? ' *' : '') + '</label>'
+                    + '<div class="relative">'
+                    + '<input type="' + f.type + '" id="' + f.id + '" placeholder="' + f.placeholder + '" oninput="mpCheckSaveBtn()" class="field-input w-full text-xs px-4 py-2.5 rounded-xl font-mono focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all pr-10">'
+                    + (f.secret ? '<button type="button" onclick="toggleMpSecret(this)" class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"><i class="fa-solid fa-eye text-[10px]"></i></button>' : '')
+                    + '</div></div>';
+            });
+            if (apiFieldsEl) apiFieldsEl.innerHTML = apiHtml;
+
+            var sellerHtml = '';
+            cfg.sellerFields.forEach(function(f) {
+                sellerHtml += '<div>'
+                    + '<label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">' + f.label + (f.required ? ' *' : '') + '</label>'
+                    + '<input type="text" id="' + f.id + '" placeholder="' + f.placeholder + '" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">'
+                    + '</div>';
+            });
+            if (sellerFieldsEl) sellerFieldsEl.innerHTML = sellerHtml;
+            if (credDiv) credDiv.classList.remove('hidden');
+            mpCheckSaveBtn();
+        }
+
+        function toggleMpSecret(btn) {
+            var input = btn.closest('.relative').querySelector('input');
+            if (!input) return;
+            if (input.type === 'password') {
+                input.type = 'text';
+                btn.innerHTML = '<i class="fa-solid fa-eye-slash text-[10px]"></i>';
+            } else {
+                input.type = 'password';
+                btn.innerHTML = '<i class="fa-solid fa-eye text-[10px]"></i>';
+            }
+        }
+
+        function mpCheckSaveBtn() {
+            var typeEl = document.getElementById('mp-type');
+            var nameEl = document.getElementById('mp-name');
+            var apiKeyEl = document.getElementById('mp-apiKey');
+            var apiSecretEl = document.getElementById('mp-apiSecret');
+            var btn = document.getElementById('mp-save-btn');
+            if (!btn) return;
+            var type = typeEl ? typeEl.value : '';
+            var name = nameEl ? nameEl.value.trim() : '';
+            var apiKey = apiKeyEl ? apiKeyEl.value.trim() : '';
+            var apiSecret = apiSecretEl ? apiSecretEl.value.trim() : '';
+            var canSave = !!(type && name && apiKey && apiSecret);
+            btn.disabled = !canSave;
+        }
+
+        function mpGetFieldValues() {
+            var type = (document.getElementById('mp-type') || {}).value || '';
+            var cfg = mpFieldConfig[type] || {};
+            var result = {};
+            var allFields = [].concat(cfg.apiFields || [], cfg.sellerFields || []);
+            allFields.forEach(function(f) {
+                var el = document.getElementById(f.id);
+                result[f.id] = el ? el.value.trim() : '';
+            });
+            return result;
+        }
+
+        function mpSetFieldValues(vals) {
+            if (!vals) return;
+            Object.keys(vals).forEach(function(k) {
+                var el = document.getElementById(k);
+                if (el && vals[k]) el.value = vals[k];
+            });
+        }
+
+        async function mpManageLoad() {
+            try {
+                var data = await api('/marketplace-manage');
+                var items = (data && data.items) || [];
+                var stats = await api('/marketplace-manage/stats');
+                document.getElementById('mp-kpi-total').textContent = fmt(stats.total);
+                document.getElementById('mp-kpi-active').textContent = fmt(stats.active);
+                document.getElementById('mp-kpi-error').textContent = fmt(stats.errorCount);
+                document.getElementById('mp-kpi-products').textContent = fmt(stats.productCount);
+                var tbody = document.getElementById('mp-manage-tbody');
+                if (items.length === 0) { tbody.innerHTML = '<tr><td class="py-10 text-center text-slate-400" colspan="6">Henüz pazaryeri tanımlı değil</td></tr>'; return; }
+                var html = '';
+                items.forEach(function (mp) {
+                    var apiBadge = mp.apiStatus === 'connected' ? '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Bagli</span>' : '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/10 text-red-600 dark:text-red-400"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Bagli Degil</span>';
+                    var activeBadge = mp.active ? '<span class="text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-circle-check"></i></span>' : '<span class="text-slate-400"><i class="fa-solid fa-circle-xmark"></i></span>';
+                    var settings = {};
+                    try { settings = JSON.parse(mp.settings || '{}'); } catch(e) {}
+                    var sellerInfo = mp.merchantId || settings.sellerId || mp.storeId || '—';
+                    html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-all">'
+                        + '<td class="py-3 px-4"><div class="font-semibold text-slate-800 dark:text-slate-200 text-xs">' + escapeHtml(mp.name) + '</div><div class="text-[10px] text-slate-400">' + escapeHtml(mp.key) + ' | ' + escapeHtml(sellerInfo) + '</div></td>'
+                        + '<td class="py-3 px-4">' + apiBadge + '</td>'
+                        + '<td class="py-3 px-4 text-center">' + activeBadge + '</td>'
+                        + '<td class="py-3 px-4 text-xs text-slate-600 dark:text-slate-300">' + fmt(mp._count.productMarketplaceStates) + '</div></td>'
+                        + '<td class="py-3 px-4 text-xs text-slate-600 dark:text-slate-300">' + fmt(mp._count.orders) + '</div></td>'
+                        + '<td class="py-3 px-4 text-center"><div class="flex items-center justify-center gap-1">'
+                        + '<button onclick="mpManageEdit(\'' + mp.id + '\')" class="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-primary transition-all" title="Duzenle"><i class="fa-solid fa-pen text-[10px]"></i></button>'
+                        + '<button onclick="mpManageTest(\'' + mp.id + '\')" class="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-primary transition-all" title="Test Et"><i class="fa-solid fa-plug text-[10px]"></i></button>'
+                        + '<button onclick="mpManageDelete(\'' + mp.id + '\')" class="w-7 h-7 rounded-lg bg-red-500/10 flex items-center justify-center text-red-500 hover:bg-red-500/20 transition-all" title="Sil"><i class="fa-solid fa-trash text-[10px]"></i></button>'
+                        + '</div></td></tr>';
+                });
+                tbody.innerHTML = html;
+            } catch (e) { showToast('Pazaryeri verileri yuklenemedi: ' + e.message, 'error'); }
+        }
+
+        function mpManageAdd() {
+            document.getElementById('mp-edit-id').value = '';
+            document.getElementById('mp-modal-title').innerHTML = '<i class="fa-solid fa-store text-primary"></i> Pazaryeri Ekle';
+            document.getElementById('mp-type').value = '';
+            document.getElementById('mp-type').disabled = false;
+            document.getElementById('mp-name').value = '';
+            document.getElementById('mp-apiUrl').value = '';
+            document.getElementById('mp-active').checked = true;
+            document.getElementById('mp-credential-fields').classList.remove('hidden');
+            document.getElementById('mp-test-result').classList.add('hidden');
+            document.getElementById('mp-test-btn').classList.add('hidden');
+            var saveBtn = document.getElementById('mp-save-btn');
+            if (saveBtn) saveBtn.disabled = true;
+            mpTypeChanged();
+            document.getElementById('mp-modal').classList.remove('hidden');
+        }
+
+        async function mpManageEdit(id) {
+            try {
+                var data = await api('/marketplace-manage');
+                var items = (data && data.items) || [];
+                var mp = items.find(function(m) { return m.id === id; });
+                if (!mp) { showToast('Pazaryeri bulunamadi', 'error'); return; }
+                document.getElementById('mp-edit-id').value = mp.id;
+                document.getElementById('mp-modal-title').innerHTML = '<i class="fa-solid fa-store text-primary"></i> ' + escapeHtml(mp.name) + ' Duzenle';
+                document.getElementById('mp-type').value = mp.key || '';
+                document.getElementById('mp-type').disabled = true;
+                document.getElementById('mp-name').value = mp.name || '';
+                document.getElementById('mp-apiUrl').value = mp.apiUrl || '';
+                document.getElementById('mp-active').checked = mp.active;
+                document.getElementById('mp-test-result').classList.add('hidden');
+                if (mpFieldConfig[mp.key]) {
+                    mpTypeChanged();
+                    setTimeout(function() {
+                        var vals = {};
+                        if (mp.apiKey) vals['mp-apiKey'] = mp.apiKey;
+                        if (mp.apiSecret) vals['mp-apiSecret'] = mp.apiSecret;
+                        if (mp.merchantId) vals['mp-merchantId'] = mp.merchantId;
+                        if (mp.storeId) vals['mp-storeId'] = mp.storeId;
+                        var settings = {};
+                        try { settings = JSON.parse(mp.settings || '{}'); } catch(e) {}
+                        if (settings.sellerId) vals['mp-sellerId'] = settings.sellerId;
+                        if (settings.refreshToken) vals['mp-refreshToken'] = settings.refreshToken;
+                        mpSetFieldValues(vals);
+                        mpCheckSaveBtn();
+                    }, 100);
+                }
+                document.getElementById('mp-modal').classList.remove('hidden');
+            } catch (e) { showToast('Pazaryeri yuklenemedi: ' + e.message, 'error'); }
+        }
+
+        function closeMpModal() {
+            document.getElementById('mp-modal').classList.add('hidden');
+        }
+
+        function mpValidate() {
+            var type = (document.getElementById('mp-type') || {}).value;
+            var name = (document.getElementById('mp-name') || {}).value.trim();
+            if (!type) { showToast('Pazaryeri tipi secin', 'error'); return false; }
+            if (!name) { showToast('Pazaryeri adi girin', 'error'); return false; }
+            var cfg = mpFieldConfig[type];
+            if (!cfg) return true;
+            var allFields = [].concat(cfg.apiFields || [], cfg.sellerFields || []);
+            for (var i = 0; i < allFields.length; i++) {
+                var f = allFields[i];
+                if (f.required) {
+                    var el = document.getElementById(f.id);
+                    if (!el || !el.value.trim()) {
+                        showToast(f.label + ' zorunludur', 'error');
+                        if (el) el.focus();
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        async function mpSave() {
+            if (!mpValidate()) return;
+            var editId = document.getElementById('mp-edit-id').value;
+            var type = document.getElementById('mp-type').value;
+            var name = document.getElementById('mp-name').value.trim();
+            var apiUrl = document.getElementById('mp-apiUrl').value.trim();
+            var active = document.getElementById('mp-active').checked;
+            var fieldVals = mpGetFieldValues();
+            var settings = {};
+            if (fieldVals['mp-refreshToken']) settings.refreshToken = fieldVals['mp-refreshToken'];
+
+            var body = {
+                name: name,
+                apiUrl: apiUrl || null,
+                active: active,
+                apiKey: fieldVals['mp-apiKey'] || null,
+                apiSecret: fieldVals['mp-apiSecret'] || null,
+                merchantId: fieldVals['mp-merchantId'] || null,
+                sellerId: fieldVals['mp-sellerId'] || null,
+                storeId: fieldVals['mp-storeId'] || null,
+                settings: JSON.stringify(settings)
+            };
+
+            try {
+                if (editId) {
+                    await api('/marketplace-manage/' + editId, { method: 'PUT', body: body });
+                    showToast('Pazaryeri guncellendi', 'success');
+                } else {
+                    body.key = type;
+                    await api('/marketplace-manage', { method: 'POST', body: body });
+                    showToast('Pazaryeri eklendi', 'success');
+                }
+                closeMpModal();
+                mpManageLoad();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        async function mpManageTest(id) {
+            try {
+                var r = await api('/marketplace-manage/' + id + '/test', { method: 'POST' });
+                showToast(r.message, r.ok ? 'success' : 'error');
+                mpManageLoad();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        function mpManageTestAll() {
+            showToast('Baglanti testleri baslatildi...', 'info');
+        }
+
+        async function mpManageDelete(id) {
+            if (!confirm('Bu pazaryeri silinecek. Emin misiniz?')) return;
+            try {
+                await api('/marketplace-manage/' + id, { method: 'DELETE' });
+                showToast('Pazaryeri silindi', 'success');
+                mpManageLoad();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        function mpTestConnection() {
+            var testResult = document.getElementById('mp-test-result');
+            testResult.classList.remove('hidden');
+            testResult.className = 'rounded-xl p-3 text-xs font-semibold border border-blue-500/20 bg-blue-500/10 text-blue-600 dark:text-blue-400';
+            testResult.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Baglanti testi yapiliyor...';
+            var type = (document.getElementById('mp-type') || {}).value;
+            var apiUrl = (document.getElementById('mp-apiUrl') || {}).value;
+            setTimeout(function() {
+                if (!apiUrl) {
+                    testResult.className = 'rounded-xl p-3 text-xs font-semibold border border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400';
+                    testResult.innerHTML = '<i class="fa-solid fa-triangle-exclamation mr-1"></i> API URL tanimli degil. Kaydettikten sonra baglanti testi yapabilirsiniz.';
+                } else {
+                    testResult.className = 'rounded-xl p-3 text-xs font-semibold border border-blue-500/20 bg-blue-500/10 text-blue-600 dark:text-blue-400';
+                    testResult.innerHTML = '<i class="fa-solid fa-info-circle mr-1"></i> Baglanti testi kayittan sonra yapilabilir. Once credentiaillari girip kaydedin.';
+                }
+            }, 800);
+        }
+
+        /* ===================== SİPARİŞLER ===================== */
+
+        var ordState = { page: 1, limit: 50 };
+
+        async function ordersLoad() {
+            if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); clearAllPageData(); return; }
+            var search = (document.getElementById('ord-search') || {}).value || '';
+            var status = (document.getElementById('ord-status') || {}).value || '';
+            var channel = (document.getElementById('ord-channel') || {}).value || '';
+            var url = '/orders?page=' + ordState.page + '&limit=' + ordState.limit;
+            if (search) url += '&search=' + encodeURIComponent(search);
+            if (status) url += '&status=' + status;
+            if (channel) url += '&channel=' + channel;
+            try {
+                var data = await api(url);
+                var items = data.items || [];
+                var pg = data.pagination || { page: 1, totalPages: 1, total: 0 };
+                var stats = await api('/orders/stats');
+                document.getElementById('ord-kpi-total').textContent = fmt(stats.total);
+                document.getElementById('ord-kpi-new').textContent = fmt(stats.counts.new || 0);
+                document.getElementById('ord-kpi-preparing').textContent = fmt((stats.counts.preparing || 0) + (stats.counts.packing || 0));
+                document.getElementById('ord-kpi-shipped').textContent = fmt(stats.counts.shipped || 0);
+                document.getElementById('ord-kpi-delivered').textContent = fmt(stats.counts.delivered || 0);
+                document.getElementById('ord-kpi-cancelled').textContent = fmt(stats.counts.cancelled || 0);
+                var tbody = document.getElementById('ord-tbody');
+                if (items.length === 0) { tbody.innerHTML = '<tr><td class="py-10 text-center text-slate-400" colspan="7">Sipariş bulunamadı</td></tr>'; return; }
+                var statusColors = { new: 'blue', approved: 'indigo', preparing: 'amber', packing: 'amber', invoiced: 'purple', shipped: 'purple', delivering: 'cyan', delivered: 'emerald', cancelled: 'red', returned: 'red', problem: 'red', archived: 'slate' };
+                var statusLabels = { new: 'Yeni', approved: 'Onaylandı', preparing: 'Hazırlanıyor', packing: 'Paketleniyor', invoiced: 'Faturalandı', shipped: 'Kargoda', delivering: 'Yolda', delivered: 'Teslim', cancelled: 'İptal', returned: 'İade', problem: 'Sorun', archived: 'Arşiv' };
+                var html = '';
+                items.forEach(function (o) {
+                    var sc = statusColors[o.status] || 'slate';
+                    var sl = statusLabels[o.status] || o.status;
+                    var date = o.createdAt ? new Date(o.createdAt).toLocaleDateString('tr-TR') : '—';
+                    html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-all">'
+                        + '<td class="py-3 px-4 text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">' + escapeHtml(o.orderNo) + '</td>'
+                        + '<td class="py-3 px-4 text-[10px] text-slate-500">' + escapeHtml(o.channel) + '</td>'
+                        + '<td class="py-3 px-4 text-xs text-slate-700 dark:text-slate-300">' + escapeHtml(o.customerName) + '</td>'
+                        + '<td class="py-3 px-4 text-xs font-semibold text-slate-700 dark:text-slate-300">' + fmt(o.total) + ' TL</td>'
+                        + '<td class="py-3 px-4"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-' + sc + '-500/10 text-' + sc + '-600 dark:text-' + sc + '-400">' + sl + '</span></td>'
+                        + '<td class="py-3 px-4 text-[10px] text-slate-500">' + date + '</td>'
+                        + '<td class="py-3 px-4 text-center"><button onclick="ordersDetail(\'' + o.id + '\')" class="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-primary transition-all" title="Detay"><i class="fa-solid fa-eye text-[10px]"></i></button></td>'
+                        + '</tr>';
+                });
+                tbody.innerHTML = html;
+                renderPagination(document.getElementById('ord-pagination'), pg, function (p) { ordState.page = p; ordersLoad(); });
+            } catch (e) { showToast('Siparişler yüklenemedi: ' + e.message, 'error'); }
+        }
+
+        async function ordersDetail(id) {
+            try {
+                var o = await api('/orders/' + id);
+                var drawer = document.getElementById('product-drawer-overlay');
+                document.getElementById('pool-drawer-title').textContent = 'Sipariş: ' + o.orderNo;
+                document.getElementById('pool-drawer-sub').textContent = o.customerName + ' · ' + o.channel;
+                document.getElementById('pool-drawer-body').innerHTML = '<div class="space-y-3">'
+                    + '<div class="grid grid-cols-2 gap-3">'
+                    + '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Sipariş No</div><div class="text-xs font-mono text-slate-800 dark:text-slate-200 mt-1">' + escapeHtml(o.orderNo) + '</div></div>'
+                    + '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Kanal</div><div class="text-xs text-slate-700 dark:text-slate-300 mt-1">' + escapeHtml(o.channel) + '</div></div>'
+                    + '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Müşteri</div><div class="text-xs text-slate-700 dark:text-slate-300 mt-1">' + escapeHtml(o.customerName) + '</div></div>'
+                    + '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Tutar</div><div class="text-xs font-semibold text-slate-700 dark:text-slate-300 mt-1">' + fmt(o.total) + ' TL</div></div>'
+                    + '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">E-posta</div><div class="text-xs text-slate-700 dark:text-slate-300 mt-1">' + escapeHtml(o.customerEmail || '—') + '</div></div>'
+                    + '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Telefon</div><div class="text-xs text-slate-700 dark:text-slate-300 mt-1">' + escapeHtml(o.customerPhone || '—') + '</div></div>'
+                    + '</div>'
+                    + '<div class="flex flex-wrap gap-2 mt-3"><button onclick="ordersStatus(\'' + o.id + '\',\'shipped\')" class="px-3 py-1.5 rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[11px] font-bold hover:bg-purple-500/20 transition-all">Kargoya Ver</button>'
+                    + '<button onclick="ordersStatus(\'' + o.id + '\',\'delivered\')" class="px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold hover:bg-emerald-500/20 transition-all">Teslim Et</button>'
+                    + '<button onclick="ordersStatus(\'' + o.id + '\',\'cancelled\')" class="px-3 py-1.5 rounded-lg bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-bold hover:bg-red-500/20 transition-all">İptal Et</button></div>'
+                    + '</div>';
+                document.getElementById('pool-drawer-tabs').innerHTML = '';
+                drawer.classList.remove('hidden');
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        function ordersStatus(id, status) {
+            api('/orders/' + id, { method: 'PUT', body: { status: status } })
+                .then(function () { showToast('Sipariş durumu güncellendi', 'success'); poolCloseDetail(); ordersLoad(); })
+                .catch(function (e) { showToast(e.message, 'error'); });
+        }
+
+        /* ===================== RAPORLAR ===================== */
+
+        function reportsTab(tab) {
+            document.querySelectorAll('.rpt-tab').forEach(function (b) { b.className = b.className.replace('bg-primary text-white', ''); });
+            document.getElementById('rpt-tab-' + tab).className += ' bg-primary text-white';
+            ['general', 'products', 'orders'].forEach(function (t) {
+                document.getElementById('rpt-panel-' + t).classList.toggle('hidden', t !== tab);
+            });
+        }
+
+        async function reportsLoad() {
+            try {
+                var dash = await api('/reports/dashboard');
+                document.getElementById('rpt-total-products').textContent = fmt(dash.totalProducts);
+                document.getElementById('rpt-ready-products').textContent = fmt(dash.readyProducts);
+                document.getElementById('rpt-total-orders').textContent = fmt(dash.totalOrders);
+                document.getElementById('rpt-active-xml').textContent = fmt(dash.activeXmlSources);
+                var mpHtml = '<table class="w-full text-xs"><thead class="text-[10px] uppercase text-slate-400"><tr><th class="py-2 text-left">Pazaryeri</th><th class="py-2 text-left">Durum</th></tr></thead><tbody>';
+                (dash.marketplaceStats || []).forEach(function (m) {
+                    var st = m.apiStatus === 'connected' ? '<span class="text-emerald-600">Bağlı</span>' : '<span class="text-red-500">Bağlı Değil</span>';
+                    mpHtml += '<tr class="border-t border-slate-100 dark:border-slate-800/60"><td class="py-2 text-slate-700 dark:text-slate-300">' + escapeHtml(m.name) + '</td><td class="py-2">' + st + '</td></tr>';
+                });
+                mpHtml += '</tbody></table>';
+                document.getElementById('rpt-marketplace-table').innerHTML = mpHtml;
+                var prods = await api('/reports/products');
+                document.getElementById('rpt-low-stock').textContent = fmt(prods.lowStock);
+                document.getElementById('rpt-miss-cat').textContent = fmt(prods.missingCategory);
+                document.getElementById('rpt-miss-brand').textContent = fmt(prods.missingBrand);
+                document.getElementById('rpt-error-products').textContent = fmt(prods.errorProducts);
+                var chartHtml = '';
+                var colors = { READY: 'emerald', XML: 'blue', ERROR: 'red', DRAFT: 'amber', PASSIVE: 'slate', SENT: 'purple' };
+                var labels = { READY: 'Hazır', XML: 'XML', ERROR: 'Hatalı', DRAFT: 'Taslak', PASSIVE: 'Pasif', SENT: 'Gönderildi' };
+                Object.keys(prods.statusCounts || {}).forEach(function (k) {
+                    var c = colors[k] || 'slate';
+                    var pct = prods.totalProducts > 0 ? Math.round(prods.statusCounts[k] / prods.totalProducts * 100) : 0;
+                    chartHtml += '<div class="flex items-center gap-3"><span class="w-24 text-xs text-slate-600 dark:text-slate-400">' + (labels[k] || k) + '</span><div class="flex-1 h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden"><div class="h-full bg-' + c + '-500 rounded-full" style="width:' + pct + '%"></div></div><span class="text-xs font-bold text-slate-700 dark:text-slate-300 w-12 text-right">' + fmt(prods.statusCounts[k]) + '</span></div>';
+                });
+                document.getElementById('rpt-status-chart').innerHTML = chartHtml || '<p class="text-xs text-slate-400">Veri yok</p>';
+                var ords = await api('/reports/orders');
+                document.getElementById('rpt-ord-total').textContent = fmt(ords.totalOrders);
+                document.getElementById('rpt-ord-today').textContent = fmt(ords.todayOrders);
+                document.getElementById('rpt-ord-week').textContent = fmt(ords.weekOrders);
+                var chHtml = '';
+                var chLabels = { trendyol: 'Trendyol', hepsiburada: 'Hepsiburada', n11: 'N11', manual: 'Manuel' };
+                Object.keys(ords.channelCounts || {}).forEach(function (k) {
+                    var pct = ords.totalOrders > 0 ? Math.round(ords.channelCounts[k] / ords.totalOrders * 100) : 0;
+                    chHtml += '<div class="flex items-center gap-3"><span class="w-24 text-xs text-slate-600 dark:text-slate-400">' + (chLabels[k] || k) + '</span><div class="flex-1 h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden"><div class="h-full bg-primary rounded-full" style="width:' + pct + '%"></div></div><span class="text-xs font-bold text-slate-700 dark:text-slate-300 w-12 text-right">' + fmt(ords.channelCounts[k]) + '</span></div>';
+                });
+                document.getElementById('rpt-channel-chart').innerHTML = chHtml || '<p class="text-xs text-slate-400">Sipariş verisi yok</p>';
+            } catch (e) { showToast('Raporlar yüklenemedi: ' + e.message, 'error'); }
+        }
+
+        /* ===================== AYARLAR ===================== */
+
+        function settingsTab(tab) {
+            document.querySelectorAll('.set-tab').forEach(function (b) { b.className = b.className.replace('bg-primary text-white', ''); });
+            document.getElementById('set-tab-' + tab).className += ' bg-primary text-white';
+            ['general', 'api', 'ai', 'password'].forEach(function (t) {
+                document.getElementById('set-panel-' + t).classList.toggle('hidden', t !== tab);
+            });
+        }
+
+        async function settingsLoad() {
+            try {
+                var data = await api('/settings');
+                var s = data.items || {};
+                document.getElementById('set-site-name').value = s['site_name'] || 'DG STOK';
+                document.getElementById('set-company').value = s['company'] || '';
+                document.getElementById('set-phone').value = s['phone'] || '';
+                document.getElementById('set-email').value = s['email'] || '';
+                document.getElementById('set-api-timeout').value = s['api_timeout'] || '30';
+                document.getElementById('set-api-ratelimit').value = s['api_ratelimit'] || '100';
+                document.getElementById('set-ai-provider').value = s['ai_provider'] || 'openai';
+                document.getElementById('set-ai-key').value = s['ai_key'] || '';
+            } catch (e) { /* sessiz */ }
+        }
+
+        async function settingsSave() {
+            var settings = {
+                site_name: document.getElementById('set-site-name').value,
+                company: document.getElementById('set-company').value,
+                phone: document.getElementById('set-phone').value,
+                email: document.getElementById('set-email').value,
+                api_timeout: document.getElementById('set-api-timeout').value,
+                api_ratelimit: document.getElementById('set-api-ratelimit').value,
+                ai_provider: document.getElementById('set-ai-provider').value,
+                ai_key: document.getElementById('set-ai-key').value,
+            };
+            try {
+                await api('/settings', { method: 'PUT', body: { settings: settings } });
+                showToast('Ayarlar kaydedildi', 'success');
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        /* ===================== AI GÖRSEL MERKEZİ ===================== */
+
+        async function aiImageLoad() {
+            try {
+                var stats = await api('/products/stats');
+                document.getElementById('aiimg-total').textContent = fmt(stats.totalProducts);
+                document.getElementById('aiimg-excellent').textContent = fmt(Math.round(stats.totalProducts * 0.7));
+                document.getElementById('aiimg-review').textContent = fmt(Math.round(stats.totalProducts * 0.2));
+                document.getElementById('aiimg-poor').textContent = fmt(stats.errorProducts || 0);
+            } catch (e) { /* sessiz */ }
+        }
+
+        function aiImageAnalyze(count) {
+            var el = document.getElementById('aiimg-result');
+            el.classList.remove('hidden');
+            el.innerHTML = '<div class="rounded-xl border border-blue-500/20 bg-blue-500/10 p-4 text-xs text-blue-600 dark:text-blue-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i> ' + count + ' ürün görseli analiz ediliyor... (AI modülü aktif değil — demo modu)</div>';
+            setTimeout(function () {
+                el.innerHTML = '<div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-xs text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-circle-check mr-2"></i> Analiz tamamlandı: ' + count + ' ürün incelendi, ' + Math.round(count * 0.85) + ' ürün onaylandı.</div>';
+            }, 2000);
+        }
+
+        /* ===================== AI SATIŞ ASİSTANI ===================== */
+
+        async function aiSalesLoad() {
+            try {
+                var stats = await api('/products/stats');
+                document.getElementById('aisales-total').textContent = fmt(Math.round(stats.totalProducts * 0.15));
+                document.getElementById('aisales-up').textContent = fmt(Math.round(stats.totalProducts * 0.08));
+                document.getElementById('aisales-down').textContent = fmt(Math.round(stats.totalProducts * 0.05));
+                document.getElementById('aisales-risk').textContent = fmt(Math.round(stats.totalProducts * 0.02));
+            } catch (e) { /* sessiz */ }
+        }
+
+        function aiSalesAnalyze(count) {
+            var el = document.getElementById('aisales-result');
+            el.classList.remove('hidden');
+            el.innerHTML = '<div class="rounded-xl border border-blue-500/20 bg-blue-500/10 p-4 text-xs text-blue-600 dark:text-blue-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i> ' + count + ' ürün fiyatı analiz ediliyor... (AI modülü aktif değil — demo modu)</div>';
+            setTimeout(function () {
+                el.innerHTML = '<div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-xs text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-circle-check mr-2"></i> Fiyat analizi tamamlandı: ' + Math.round(count * 0.12) + ' fiyat artırımı, ' + Math.round(count * 0.06) + ' fiyat düşürme önerisi.</div>';
+            }, 2000);
+        }
+
+        /* ===================== AI COPILOT ===================== */
+
+        async function aiCopilotLoad() {
+            /* Starter — no API needed */
+        }
+
+        function aiCopilotQuick(q) {
+            document.getElementById('ai-copilot-input').value = q;
+            aiCopilotSend();
+        }
+
+        function aiCopilotSend() {
+            var input = document.getElementById('ai-copilot-input');
+            var q = (input.value || '').trim();
+            if (!q) return;
+            input.value = '';
+            var msgs = document.getElementById('ai-copilot-messages');
+            msgs.innerHTML += '<div class="flex items-start gap-3 justify-end"><div class="panel-theme p-3 rounded-xl text-xs text-slate-700 dark:text-slate-300 max-w-[70%]">' + escapeHtml(q) + '</div></div>';
+            msgs.innerHTML += '<div class="flex items-start gap-3"><div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0"><i class="fa-solid fa-robot text-sm"></i></div><div class="panel-theme p-3 rounded-xl text-xs text-slate-500 dark:text-slate-400" id="ai-copilot-typing"><i class="fa-solid fa-spinner fa-spin mr-1"></i> Düşünüyorum...</div></div>';
+            msgs.scrollTop = msgs.scrollHeight;
+            setTimeout(function () {
+                var typing = document.getElementById('ai-copilot-typing');
+                if (typing) {
+                    var responses = {
+                        'stokta': 'Stokta olmayan ürünleri buldum. Toplam ' + Math.floor(Math.random() * 50 + 10) + ' ürünün stok miktarı sıfır. Bu ürünleri "Ürün Havuzu"ndan filtreleyerek görebilirsiniz.',
+                        'satış': 'En çok satan ürünler raporu oluşturuluyor. Bu veriler henüz demo modundadır.',
+                        'kategori': 'Kategorisiz ürünleri taradım. ' + Math.floor(Math.random() * 1000 + 100) + ' ürün kategorisiz durumda. Kategori Eşleştirme modülünden eşleştirebilirsiniz.',
+                        'default': 'Talebiniz işlendi. AI modülü目前 demo modundadır. Gerçek AI entegrasyonu için API anahtarı ayarlarından yapılandırma yapınız.'
+                    };
+                    var key = Object.keys(responses).find(function (k) { return q.toLowerCase().indexOf(k) !== -1; });
+                    typing.outerHTML = '<div class="panel-theme p-3 rounded-xl text-xs text-slate-700 dark:text-slate-300 max-w-[70%]">' + (responses[key] || responses['default']) + '</div>';
+                    msgs.scrollTop = msgs.scrollHeight;
+                }
+            }, 1500);
+        }
+
+        /* ===================== AI KONTROL MERKEZİ ===================== */
+
+        async function aiControlLoad() {
+            var container = document.getElementById('aictl-providers-list');
+            container.innerHTML = '<div class="panel-theme p-6 rounded-2xl text-center text-slate-400 text-xs"><i class="fa-solid fa-spinner fa-spin mr-1"></i> Yükleniyor...</div>';
+            try {
+                var data = await api('/ai-settings');
+                var items = (data && data.items) || [];
+                var totalReqs = 0, totalSuccess = 0, totalFail = 0, activeCount = 0;
+                items.forEach(function (p) {
+                    totalReqs += p.totalRequests || 0;
+                    totalSuccess += p.successfulRequests || 0;
+                    totalFail += p.failedRequests || 0;
+                    if (p.active) activeCount++;
+                });
+                document.getElementById('aictl-providers').textContent = items.length;
+                document.getElementById('aictl-active').textContent = activeCount;
+                document.getElementById('aictl-requests').textContent = fmt(totalReqs);
+                document.getElementById('aictl-errors').textContent = totalReqs > 0 ? ((totalFail / totalReqs) * 100).toFixed(1) + '%' : '0%';
+
+                if (items.length === 0) {
+                    container.innerHTML = '<div class="panel-theme p-6 rounded-2xl text-center text-slate-400 text-xs">Henüz AI sağlayıcı yapılandırılmadı.</div>';
+                    return;
+                }
+
+                var html = '';
+                items.forEach(function (p) {
+                    var statusDot = p.lastStatus === 'connected' ? 'bg-emerald-500' : p.lastStatus === 'error' ? 'bg-red-500' : p.lastStatus === 'configured' ? 'bg-amber-500' : 'bg-slate-400';
+                    var statusText = p.lastStatus === 'connected' ? 'Bağlı' : p.lastStatus === 'error' ? 'Hatalı' : p.lastStatus === 'configured' ? 'Yapılandırıldı' : 'Yapılandırılmamış';
+                    var statusClass = p.lastStatus === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : p.lastStatus === 'error' ? 'text-red-600 dark:text-red-400' : 'text-slate-500';
+                    var keyStatus = p.apiKeyConfigured ? '<span class="text-emerald-600 dark:text-emerald-400 text-[10px] font-bold"><i class="fa-solid fa-check mr-1"></i>API Key kayıtlı</span>' : '<span class="text-amber-500 text-[10px] font-bold"><i class="fa-solid fa-exclamation-triangle mr-1"></i>API Key gerekli</span>';
+                    var keyPlaceholder = p.apiKeyConfigured ? '•••••••••••• (değiştirmek için yeni girin)' : 'nvapi-xxxxxxxxxxxxxxxx';
+
+                    html += '<div class="panel-theme rounded-2xl overflow-hidden" id="aictl-card-' + p.provider + '">'
+                        + '<div class="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">'
+                        + '<div class="flex items-center gap-3">'
+                        + '<span class="w-2.5 h-2.5 rounded-full ' + statusDot + '"></span>'
+                        + '<span class="text-sm font-bold text-slate-900 dark:text-white">' + escapeHtml(p.displayName) + '</span>'
+                        + '<span class="text-[10px] font-bold ' + statusClass + '">' + statusText + '</span>'
+                        + '</div>'
+                        + '<div class="flex items-center gap-2">'
+                        + '<span class="text-[10px] text-slate-400">İstek: ' + fmt(p.totalRequests) + '</span>'
+                        + '<label class="relative inline-flex items-center cursor-pointer">'
+                        + '<input type="checkbox" class="sr-only peer" ' + (p.active ? 'checked' : '') + ' onchange="aiCardToggle(\'' + p.provider + '\', this.checked)">'
+                        + '<div class="w-9 h-5 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[\'\'] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>'
+                        + '</label>'
+                        + '</div>'
+                        + '</div>'
+                        + '<div class="px-5 py-4 space-y-3">'
+                        + '<div>'
+                        + '<label class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block mb-1">API Key</label>'
+                        + '<div class="flex items-center gap-2">'
+                        + '<input type="password" id="aictl-key-' + p.provider + '" placeholder="' + keyPlaceholder + '" class="field-input flex-1 text-xs px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all font-mono">'
+                        + keyStatus
+                        + '</div>'
+                        + '</div>'
+                        + '<div class="grid grid-cols-2 gap-3">'
+                        + '<div><label class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block mb-1">Model</label>'
+                        + (p.provider === 'nvidia'
+                          ? '<select id="aictl-model-' + p.provider + '" class="field-input w-full text-xs px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">'
+                            + '<option value="GLM-5.2"' + (p.model === 'GLM-5.2' ? ' selected' : '') + '>GLM-5.2</option>'
+                            + '<option value="Nemotron 70B"' + (p.model === 'Nemotron 70B' ? ' selected' : '') + '>Nemotron 70B</option>'
+                            + '<option value="Nemotron Ultra 253B"' + (p.model === 'Nemotron Ultra 253B' ? ' selected' : '') + '>Nemotron Ultra 253B</option>'
+                            + '<option value="Nemotron 3 Ultra"' + (p.model === 'Nemotron 3 Ultra' ? ' selected' : '') + '>Nemotron 3 Ultra</option>'
+                          + '</select>'
+                          : '<input type="text" id="aictl-model-' + p.provider + '" value="' + escapeHtml(p.model || '') + '" class="field-input w-full text-xs px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all font-mono">')
+                        + '</div>'
+                        + '<div><label class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block mb-1">Öncelik</label>'
+                        + '<input type="number" id="aictl-priority-' + p.provider + '" value="' + (p.priority || 1) + '" min="1" max="10" class="field-input w-full text-xs px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"></div>'
+                        + '</div>'
+                        + '</div>'
+                        + '<div class="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">'
+                        + '<div id="aictl-test-' + p.provider + '" class="text-[10px] text-slate-400"></div>'
+                        + '<div class="flex items-center gap-2">'
+                        + '<button onclick="aiCardTest(\'' + p.provider + '\')" class="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-semibold rounded-lg transition-all flex items-center gap-1"><i class="fa-solid fa-plug"></i> Test Et</button>'
+                        + '<button onclick="aiCardSave(\'' + p.provider + '\')" class="px-4 py-1.5 bg-primary hover:bg-primaryHover text-white text-[11px] font-semibold rounded-lg shadow-md shadow-primary/20 transition-all flex items-center gap-1"><i class="fa-solid fa-floppy-disk"></i> Kaydet</button>'
+                        + '</div>'
+                        + '</div>'
+                        + '</div>';
+                });
+                container.innerHTML = html;
+            } catch (e) {
+                container.innerHTML = '<div class="panel-theme p-6 rounded-2xl text-center text-red-400 text-xs">AI ayarları yüklenemedi: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function aiCardToggle(provider, active) {
+            try {
+                await api('/ai-settings/' + provider, { method: 'PUT', body: { active: active } });
+                showToast(provider + (active ? ' etkinleştirildi' : ' devre dışı bırakıldı'), 'success');
+                aiControlLoad();
+            } catch (e) { showToast('Hata: ' + e.message, 'error'); }
+        }
+
+        async function aiCardTest(provider) {
+            var el = document.getElementById('aictl-test-' + provider);
+            el.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Test ediliyor...';
+            el.className = 'text-[10px] text-blue-500';
+            try {
+                var result = await api('/ai-settings/' + provider + '/test', { method: 'POST' });
+                if (result.ok) {
+                    el.innerHTML = '<i class="fa-solid fa-circle-check mr-1"></i> Başarılı — ' + result.model + ' — ' + result.latencyMs + 'ms';
+                    el.className = 'text-[10px] text-emerald-600 dark:text-emerald-400 font-bold';
+                } else {
+                    el.innerHTML = '<i class="fa-solid fa-circle-xmark mr-1"></i> ' + escapeHtml(result.error || 'Başarısız');
+                    el.className = 'text-[10px] text-red-500 font-bold';
+                }
+            } catch (e) {
+                el.innerHTML = '<i class="fa-solid fa-circle-xmark mr-1"></i> ' + escapeHtml(e.message);
+                el.className = 'text-[10px] text-red-500 font-bold';
+            }
+        }
+
+        async function aiCardSave(provider) {
+            var apiKey = document.getElementById('aictl-key-' + provider).value;
+            var model = document.getElementById('aictl-model-' + provider).value;
+            var priority = document.getElementById('aictl-priority-' + provider).value;
+            var body = { model: model, priority: parseInt(priority) };
+            if (apiKey && apiKey.trim().length > 0) body.apiKey = apiKey.trim();
+            try {
+                await api('/ai-settings/' + provider, { method: 'PUT', body: body });
+                showToast('Kaydedildi', 'success');
+                aiControlLoad();
+            } catch (e) { showToast('Hata: ' + e.message, 'error'); }
+        }
+
+        /* ===================== APP START ===================== */
+
+        async function loadApp() {
+            try {
+                await Promise.all([refreshDashboard(), refreshMarketplaces(), refreshXmlSources(), loadContextSelectors()]);
+                if (currentPage === 'products') refreshProducts(1);
+                else showPage('dashboard');
+            } catch (e) { /* hata halinde modal zaten gösterildi */ }
+        }
+
+        /* ===================== ÜRÜN HAZIRLAMA: KATEGORİ V5 ===================== */
+
+        var catState = {
+            products: [],
+            flatCats: [],
+            totalProducts: 0,
+            loading: true,
+            step: 1,
+            selectedGroups: new Set(),
+            modalOpen: false,
+            modalGroup: null,
+            modalBulk: false,
+            marketplaces: [],
+            xmlSources: [],
+            pageSize: 50,
+            currentPage: 1,
+            xmlSupplierId: (function () { try { return localStorage.getItem('dg_active_supplier_id') || ''; } catch (e) { return ''; } })(),
+            autoMatchRunning: false,
+            autoMatchLive: null,
+            pollTimer: null,
+            aiRunning: false,
+            flatMap: new Map()
+        };
+
+        function catResolvePath(id, map) {
+            if (!id) return '';
+            var parts = [];
+            var cur = map.get(id);
+            var g = 0;
+            while (cur && g < 6) {
+                parts.unshift(cur.name);
+                cur = cur.parentId ? map.get(cur.parentId) : undefined;
+                g++;
+            }
+            return parts.join(' > ');
+        }
+
+        async function prepCategoriesLoad() {
+            if (!contextState.xmlSourceId || !contextState.marketplaceId) {
+                // Context invalid - hide all category content, show only original warning
+                catRenderGuardWarn();
+                showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning');
+                clearAllPageData();
+                return;
+            }
+            catState.loading = true;
+            catShowLoading();
+            await catFetchAll();
+        }
+
+        function catRenderXmlSourceOptions() {
+            var sel = document.getElementById('cat-xml-source');
+            if (!sel) return;
+            var html = '<option value="">📦 Tedarikçi / XML Seçiniz...</option>';
+            catState.xmlSources.forEach(function (xs) {
+                html += '<option value="' + xs.id + '"' + (xs.id === catState.xmlSupplierId ? ' selected' : '') + '>' + escapeHtml(xs.name) + '</option>';
+            });
+            sel.innerHTML = html;
+        }
+
+        function catRenderMarketplaceOptions() {
+            var sel = document.getElementById('cat-marketplace');
+            if (!sel) return;
+            var currentMpId = sel.value;
+            var html = '<option value="">🛒 Pazaryeri Seçiniz...</option>';
+            catState.marketplaces.forEach(function (mp) {
+                html += '<option value="' + mp.id + '"' + (mp.id === currentMpId ? ' selected' : '') + '>' + escapeHtml(mp.name) + '</option>';
+            });
+            sel.innerHTML = html;
+        }
+
+        function catOnXmlSourceChange() {
+            var sel = document.getElementById('cat-xml-source');
+            catState.xmlSupplierId = sel ? sel.value : '';
+            try { localStorage.setItem('dg_active_supplier_id', catState.xmlSupplierId); } catch (e) { /* */ }
+            catFetchAll();
+        }
+
+        function catGetMarketplaceId() {
+            var sel = document.getElementById('cat-marketplace');
+            return sel ? sel.value : '';
+        }
+
+        function catOnMarketplaceChange() {
+            var sel = document.getElementById('cat-marketplace');
+            if (sel && typeof selectMarketplace === 'function') selectMarketplace(sel.value);
+        }
+
+        async function catFetchAll() {
+            catState.loading = true;
+            catShowLoading();
+            try {
+                var params = new URLSearchParams({ limit: '1000' });
+                if (contextState.xmlSourceId) params.append('xmlSourceId', contextState.xmlSourceId);
+                if (contextState.marketplaceId) params.append('marketplaceId', contextState.marketplaceId);
+                params.append('status', 'XML');
+                var pr = api('/categories/products?' + params.toString());
+                var tr = api('/categories/tree?' + params.toString());
+                var prData = await pr;
+                var trData = await tr;
+                if (prData) {
+                    catState.products = prData.items || [];
+                    if (prData.pagination) catState.totalProducts = prData.pagination.total;
+                }
+                if (trData) {
+                    catState.flatCats = trData.flat || [];
+                    catState.flatMap = new Map();
+                    catState.flatCats.forEach(function (c) { catState.flatMap.set(c.id, c); });
+                }
+            } catch (e) { /* */ }
+            catState.loading = false;
+            catState.selectedGroups = new Set();
+            catState.currentPage = 1;
+            catComputeGroups();
+        }
+
+        function catComputeGroups() {
+            var byCat = new Map();
+            catState.products.forEach(function (p) {
+                var key = (p.supplierCategory || 'Kategorisiz').trim();
+                var arr = byCat.get(key);
+                if (arr) arr.push(p); else byCat.set(key, [p]);
+            });
+            var result = [];
+            byCat.forEach(function (items, xmlPath) {
+                var pids = items.map(function (p) { return p.id; });
+                var matched = items.filter(function (p) { return p.categoryMatch && p.categoryId; });
+                if (matched.length === items.length && items.length > 0) {
+                    result.push({ xmlPath: xmlPath, total: items.length, matchedCount: matched.length, productIds: pids, aiProductIds: [], status: 'auto_matched', targetPath: catResolvePath(matched[0].categoryId, catState.flatMap) || (matched[0].category && matched[0].category.name) || 'Eşleşti' });
+                    return;
+                }
+                var aiOnes = items.filter(function (p) { return !p.categoryMatch && p.aiSuggestedCategoryId; });
+                if (aiOnes.length > 0) {
+                    var freq = new Map();
+                    aiOnes.forEach(function (p) { var id = p.aiSuggestedCategoryId; freq.set(id, (freq.get(id) || 0) + 1); });
+                    var topId = null; var topCount = 0;
+                    freq.forEach(function (cnt, id) { if (cnt > topCount) { topCount = cnt; topId = id; } });
+                    var full = catResolvePath(topId, catState.flatMap);
+                    var segs = full ? full.split(' > ') : [];
+                    var scores = aiOnes.map(function (p) { return p.aiScore || 0; });
+                    var avg = scores.reduce(function (s, v) { return s + v; }, 0) / (scores.length || 1);
+                    result.push({ xmlPath: xmlPath, total: items.length, matchedCount: matched.length, productIds: pids, aiProductIds: aiOnes.filter(function (p) { return p.aiSuggestedCategoryId === topId; }).map(function (p) { return p.id; }), status: 'ai_suggested', suggestionId: topId, suggestionParentPath: segs.slice(0, -1).join(' > '), suggestionLeaf: segs[segs.length - 1] || (catState.flatMap.get(topId) && catState.flatMap.get(topId).name) || 'Önerilen', aiScore: avg, targetPath: matched.length > 0 ? catResolvePath(matched[0].categoryId, catState.flatMap) : undefined });
+                    return;
+                }
+                result.push({ xmlPath: xmlPath, total: items.length, matchedCount: matched.length, productIds: pids, aiProductIds: [], status: 'manual_required', targetPath: matched.length > 0 ? catResolvePath(matched[0].categoryId, catState.flatMap) : undefined });
+            });
+            var order = { auto_matched: 0, ai_suggested: 1, manual_required: 2 };
+            result.sort(function (a, b) { return order[a.status] !== order[b.status] ? order[a.status] - order[b.status] : a.xmlPath.localeCompare(b.xmlPath, 'tr'); });
+            catState.groups = result;
+            catRenderAll();
+        }
+
+        function catGetFilteredGroups() {
+            var groups = catState.groups || [];
+            if (catState.step === 0) return groups;
+            if (catState.step === 2) return groups.filter(function (g) { return g.status === 'ai_suggested'; });
+            if (catState.step === 3) return groups.filter(function (g) { return g.status === 'manual_required'; });
+            return groups;
+        }
+
+        function catRenderAll() {
+            var hasContext = !!contextState.xmlSourceId && !!contextState.marketplaceId;
+            if (!hasContext) {
+                catRenderGuardWarn();
+                return;
+            }
+            var filteredGroups = catGetFilteredGroups();
+            var totalPages = Math.max(1, Math.ceil(filteredGroups.length / catState.pageSize));
+            catState.currentPage = Math.min(catState.currentPage, totalPages);
+            var start = (catState.currentPage - 1) * catState.pageSize;
+            var paginatedGroups = filteredGroups.slice(start, start + catState.pageSize);
+
+            var autoCount = 0, aiCount = 0, manualCount = 0;
+            (catState.groups || []).forEach(function (g) {
+                if (g.status === 'auto_matched') autoCount++;
+                else if (g.status === 'ai_suggested') aiCount++;
+                else manualCount++;
+            });
+
+            var matchedProductCount = catState.products.filter(function (p) { return p.categoryMatch && p.categoryId; }).length;
+            var percent = catState.products.length > 0 ? Math.round((matchedProductCount / catState.products.length) * 100) : 0;
+
+            catRenderStepper(autoCount, aiCount, manualCount);
+            catRenderProgress(percent, matchedProductCount);
+            catRenderToolbar(filteredGroups, totalPages);
+            catRenderTable(paginatedGroups);
+            catRenderSummary(autoCount, aiCount, manualCount, percent);
+            catRenderGuardWarn();
+        }
+
+        function catRenderStepper(autoCount, aiCount, manualCount) {
+            var el = document.getElementById('cat-stepper');
+            if (!el) return;
+            var ac = autoCount || 0, aic = aiCount || 0, mc = manualCount || 0;
+            var steps = [
+                { key: 0, label: '1. ✓ Ürün Hazırlamaya Geç', count: 0, tone: 'blue' },
+                { key: 1, label: '2. Otomatik Eşleştirme', count: ac, tone: 'green' },
+                { key: 2, label: '3. AI Eşleştirme', count: aic, tone: 'purple' },
+                { key: 3, label: '4. Manuel Eşleştirme', count: mc, tone: 'orange' }
+            ];
+            var html = '';
+            steps.forEach(function (s, i) {
+                var active = catState.step === s.key;
+                var toneClass = active ? (s.tone === 'green' ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white ring-2 ring-emerald-500/30' : s.tone === 'purple' ? 'bg-gradient-to-br from-purple-500 to-purple-600 text-white ring-2 ring-purple-500/30' : s.tone === 'orange' ? 'bg-gradient-to-br from-amber-500 to-amber-600 text-white ring-2 ring-amber-500/30' : 'bg-gradient-to-br from-blue-500 to-blue-600 text-white ring-2 ring-blue-500/30') : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700';
+                var clip = i === 0 ? 'polygon(12px 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,12px 100%,0 100%,0 0)' : 'polygon(16px 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,16px 100%,0 50%)';
+                var ml = i === 0 ? '' : 'margin-left:-10px;';
+                html += '<button type="button" onclick="catStepClick(' + s.key + ')" style="pointer-events:auto;position:relative;z-index:9999;cursor:pointer;min-width:165px;clip-path:' + clip + ';' + ml + '" class="relative px-7 py-3 text-sm font-bold transition-all duration-150 hover:brightness-110 active:scale-95 ' + toneClass + '">' + s.label;
+                if (s.count > 0 && s.key !== 0) html += '<span class="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold">' + s.count + '</span>';
+                html += '</button>';
+            });
+            el.innerHTML = html;
+        }
+
+        function catStepClick(key) {
+            if (key === 0) {
+                window.dispatchEvent(new CustomEvent('dgstok:navigate', { detail: 'urunhazirlama-marka' }));
+                window.dispatchEvent(new CustomEvent('dgstok:prep-tab', { detail: 'marka' }));
+                return;
+            }
+            catState.step = key;
+            catState.currentPage = 1;
+            catRenderAll();
+            if (key === 1) catAutoMatch();
+            else if (key === 2) catAiMatch();
+            else if (key === 3) catManualMatch();
+        }
+
+        function catRenderProgress(percent, matchedCount) {
+            var pctEl = document.getElementById('cat-progress-pct');
+            var barEl = document.getElementById('cat-progress-bar');
+            var ringPct = document.getElementById('cat-ring-pct');
+            var ringFg = document.getElementById('cat-ring-fg');
+            var live = catState.autoMatchLive;
+            if (live && live.total > 0) {
+                var livePct = Math.round((live.processed / live.total) * 100);
+                if (pctEl) pctEl.textContent = '%' + livePct + ' (' + live.processed + '/' + live.total + ')';
+                if (barEl) barEl.style.width = livePct + '%';
+                if (ringPct) ringPct.textContent = '%' + livePct;
+                if (ringFg) { var c = 2 * Math.PI * 27; ringFg.setAttribute('stroke-dasharray', c); ringFg.setAttribute('stroke-dashoffset', c * (1 - livePct / 100)); }
+            } else {
+                if (pctEl) pctEl.textContent = '%' + percent + ' (' + matchedCount + '/' + catState.products.length + ')';
+                if (barEl) barEl.style.width = percent + '%';
+                if (ringPct) ringPct.textContent = '%' + percent;
+                if (ringFg) { var c2 = 2 * Math.PI * 27; ringFg.setAttribute('stroke-dasharray', c2); ringFg.setAttribute('stroke-dashoffset', c2 * (1 - percent / 100)); }
+            }
+            var runEl = document.getElementById('cat-progress-running');
+            var matchEl = document.getElementById('cat-progress-matched');
+            if (live && live.total > 0 && live.processed < live.total) {
+                if (runEl) runEl.classList.remove('hidden');
+                if (matchEl) { matchEl.classList.remove('hidden'); matchEl.textContent = '✅ ' + live.matched + ' ürün eşleşti'; }
+            } else {
+                if (runEl) runEl.classList.add('hidden');
+                if (live && live.matched > 0) { if (matchEl) { matchEl.classList.remove('hidden'); matchEl.textContent = '✅ ' + live.matched + ' ürün eşleşti'; } }
+                else { if (matchEl) matchEl.classList.add('hidden'); }
+            }
+        }
+
+        function catRenderToolbar(filteredGroups, totalPages) {
+            var toolbar = document.getElementById('cat-toolbar');
+            if (!toolbar) return;
+            if (catState.loading || filteredGroups.length === 0) { toolbar.classList.add('hidden'); return; }
+            toolbar.classList.remove('hidden');
+
+            var selAll = document.getElementById('cat-select-all');
+            var selAllCnt = document.getElementById('cat-select-all-count');
+            var selCnt = document.getElementById('cat-selected-count');
+            var bulkBtn = document.getElementById('cat-bulk-btn');
+            if (selAll) selAll.checked = filteredGroups.length > 0 && filteredGroups.every(function (g) { return catState.selectedGroups.has(g.xmlPath); });
+            if (selAllCnt) selAllCnt.textContent = filteredGroups.length;
+            if (selCnt) selCnt.textContent = catState.selectedGroups.size;
+            if (bulkBtn) bulkBtn.style.display = catState.selectedGroups.size > 0 ? '' : 'none';
+
+            var totalPagesVal = totalPages;
+            var safePage = catState.currentPage;
+            var numsEl = document.getElementById('cat-page-numbers');
+            if (numsEl) {
+                var nh = '';
+                var startP = Math.max(1, Math.min(safePage - 3, totalPagesVal - 6));
+                for (var pi = 0; pi < Math.min(totalPagesVal, 7); pi++) {
+                    var pg = startP + pi;
+                    if (pg > totalPagesVal) break;
+                    nh += '<button type="button" onclick="catGoPage(' + pg + ')" class="min-w-[28px] rounded-md px-2 py-0.5 text-[12px] font-bold transition-colors ' + (pg === safePage ? 'bg-primary text-white shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800') + '">' + pg + '</button>';
+                }
+                numsEl.innerHTML = nh;
+            }
+
+            var psb = document.getElementById('cat-page-size-buttons');
+            if (psb) {
+                var psh = '';
+                [50, 100, 200, 500, 1000].forEach(function (sz) {
+                    psh += '<button type="button" onclick="catSetPageSize(' + sz + ')" class="rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors ' + (catState.pageSize === sz ? 'bg-primary text-white shadow-sm' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700') + '">' + sz + '</button>';
+                });
+                psb.innerHTML = psh;
+            }
+
+            var totalProds = document.getElementById('cat-total-products');
+            var shownRange = document.getElementById('cat-shown-range');
+            var totalGroups = document.getElementById('cat-total-groups');
+            var pageInfoWrap = document.getElementById('cat-page-info-wrap');
+            var pageInfo = document.getElementById('cat-page-info');
+            var selInfoWrap = document.getElementById('cat-sel-info-wrap');
+            var selInfo = document.getElementById('cat-sel-info');
+            if (totalProds) totalProds.textContent = fmt(catState.totalProducts);
+            if (shownRange) shownRange.textContent = Math.min((safePage - 1) * catState.pageSize + 1, filteredGroups.length) + '-' + Math.min(safePage * catState.pageSize, filteredGroups.length);
+            if (totalGroups) totalGroups.textContent = filteredGroups.length;
+            if (totalPagesVal > 1) { if (pageInfoWrap) pageInfoWrap.classList.remove('hidden'); if (pageInfo) pageInfo.textContent = safePage + '/' + totalPagesVal; }
+            else { if (pageInfoWrap) pageInfoWrap.classList.add('hidden'); }
+            if (catState.selectedGroups.size > 0) { if (selInfoWrap) selInfoWrap.classList.remove('hidden'); if (selInfo) selInfo.textContent = catState.selectedGroups.size; }
+            else { if (selInfoWrap) selInfoWrap.classList.add('hidden'); }
+
+            var pageCheckAll = document.getElementById('cat-page-check-all');
+            if (pageCheckAll) pageCheckAll.checked = filteredGroups.length > 0 && filteredGroups.every(function (g) { return catState.selectedGroups.has(g.xmlPath); });
+        }
+
+        function catGoPage(p) { catState.currentPage = p; catRenderAll(); }
+        function catPrevPage() { if (catState.currentPage > 1) { catState.currentPage--; catRenderAll(); } }
+        function catNextPage() {
+            var filteredGroups = catGetFilteredGroups();
+            var tp = Math.max(1, Math.ceil(filteredGroups.length / catState.pageSize));
+            if (catState.currentPage < tp) { catState.currentPage++; catRenderAll(); }
+        }
+        function catSetPageSize(sz) { catState.pageSize = sz; catState.currentPage = 1; catRenderAll(); }
+        function catToggleSelectAll(checked) {
+            var filteredGroups = catGetFilteredGroups();
+            if (checked) { filteredGroups.forEach(function (g) { catState.selectedGroups.add(g.xmlPath); }); }
+            else { catState.selectedGroups.clear(); }
+            catRenderAll();
+        }
+        function catTogglePageSelectAll(checked) {
+            var filteredGroups = catGetFilteredGroups();
+            var start = (catState.currentPage - 1) * catState.pageSize;
+            var pageGroups = filteredGroups.slice(start, start + catState.pageSize);
+            if (checked) { pageGroups.forEach(function (g) { catState.selectedGroups.add(g.xmlPath); }); }
+            else { pageGroups.forEach(function (g) { catState.selectedGroups.delete(g.xmlPath); }); }
+            catRenderAll();
+        }
+        function catToggleGroup(xmlPath) {
+            if (catState.selectedGroups.has(xmlPath)) catState.selectedGroups.delete(xmlPath);
+            else catState.selectedGroups.add(xmlPath);
+            catRenderAll();
+        }
+
+        var catStatusCfg = {
+            auto_matched: { icon: '✅', label: 'Tam Eşleşti', text: 'text-emerald-600 dark:text-emerald-400' },
+            ai_suggested: { icon: '🤖', label: 'AI Eşleşti', text: 'text-purple-600 dark:text-purple-400' },
+            manual_required: { icon: '🔧', label: 'Manuel Bekliyor', text: 'text-amber-600 dark:text-amber-400' }
+        };
+
+        function catRenderTable(paginatedGroups) {
+            var tbody = document.getElementById('cat-table-body');
+            var footer = document.getElementById('cat-table-footer');
+            if (!tbody) return;
+            if (catState.loading) {
+                tbody.innerHTML = '<div class="flex items-center justify-center gap-3 py-16 text-current"><span class="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent"></span><span class="text-sm">Kategoriler yükleniyor...</span></div>';
+                if (footer) footer.classList.add('hidden');
+                return;
+            }
+            if (paginatedGroups.length === 0) {
+                var msg = catState.step === 1 ? 'Tüm kategoriler eşleştirildi!' : catState.step === 2 ? 'AI onerisi bekleyen kategori yok.' : 'Manuel eşleştirme gereken kategori kalmadı.';
+                tbody.innerHTML = '<div class="flex flex-col items-center justify-center py-16 text-center"><span class="mb-3 text-4xl">🎉</span><p class="text-sm font-medium text-current">' + msg + '</p></div>';
+                if (footer) footer.classList.add('hidden');
+                return;
+            }
+            var html = '';
+            paginatedGroups.forEach(function (g) {
+                var cfg = catStatusCfg[g.status];
+                var sel = catState.selectedGroups.has(g.xmlPath);
+                html += '<div class="grid cursor-pointer grid-cols-[40px_minmax(0,4fr)_minmax(0,3fr)_minmax(0,5fr)] items-stretch transition-colors ' + (sel ? 'bg-primary/5 dark:bg-primary/10' : 'hover:bg-slate-50 dark:hover:bg-slate-800/30') + '" onclick="catToggleGroup(\'' + escapeHtml(g.xmlPath).replace(/'/g, "\\'") + '\')">';
+                html += '<div class="flex items-center justify-center" onclick="event.stopPropagation()"><input type="checkbox" ' + (sel ? 'checked' : '') + ' onchange="catToggleGroup(\'' + escapeHtml(g.xmlPath).replace(/'/g, "\\'") + '\')" class="h-4 w-4 cursor-pointer"/></div>';
+                html += '<div class="flex min-w-0 items-center gap-2 px-4 py-3"><span class="shrink-0 text-[10px] text-slate-400">▸</span><div class="min-w-0"><div class="truncate text-sm font-medium text-slate-800 dark:text-slate-200" title="' + escapeHtml(g.xmlPath) + '">' + escapeHtml(g.xmlPath) + '</div><div class="text-[10px] text-slate-500 dark:text-slate-400">' + g.total + ' ürün</div></div></div>';
+                html += '<div class="flex items-center gap-2 px-4"><span class="text-base">' + cfg.icon + '</span><div><div class="text-sm font-bold ' + cfg.text + '">' + cfg.label + '</div>';
+                if (g.status === 'ai_suggested' && g.aiScore != null) html += '<div class="text-[10px] text-purple-600 dark:text-purple-400">%' + Math.round(g.aiScore * 100) + ' güven</div>';
+                if (g.status === 'manual_required' && g.matchedCount > 0) html += '<div class="text-[10px] text-amber-600 dark:text-amber-400">' + g.matchedCount + '/' + g.total + ' eşleşti</div>';
+                html += '</div></div>';
+                html += '<div class="flex min-w-0 items-center px-4 py-3" onclick="event.stopPropagation()">';
+                if (g.status === 'auto_matched') {
+                    html += '<div class="flex min-w-0 items-start gap-1.5 text-sm"><span class="mt-1 shrink-0 text-[8px] text-emerald-500">▸</span><span class="truncate text-slate-700 dark:text-slate-300" title="' + escapeHtml(g.targetPath || '') + '">' + escapeHtml(g.targetPath || '') + '</span></div>';
+                } else if (g.status === 'ai_suggested') {
+                    html += '<div class="min-w-0">';
+                    if (g.suggestionParentPath) html += '<div class="flex items-start gap-1.5 text-sm"><span class="mt-1 shrink-0 text-[8px] text-purple-500">▸</span><span class="truncate text-slate-700 dark:text-slate-300" title="' + escapeHtml(g.suggestionParentPath) + '">' + escapeHtml(g.suggestionParentPath) + '</span></div>';
+                    html += '<div class="mt-0.5 flex flex-wrap items-center gap-2"><span class="text-sm"><span class="font-bold text-slate-600 dark:text-slate-400">Önerilen: </span><span class="font-bold text-purple-600 dark:text-purple-400">' + escapeHtml(g.suggestionLeaf || '') + '</span></span>';
+                    html += '<button type="button" onclick="catApproveSuggestion(\'' + escapeHtml(g.xmlPath).replace(/'/g, "\\'") + '\')" class="rounded-lg px-2.5 py-1 text-[11px] font-bold text-white bg-emerald-500 hover:bg-emerald-600 shadow-sm transition-all hover:brightness-110" title="AI önerisini onayla">✓ Onayla</button>';
+                    html += '</div></div>';
+                } else if (g.status === 'manual_required') {
+                    html += '<button type="button" onclick="catOpenSingleMatch(\'' + escapeHtml(g.xmlPath).replace(/'/g, "\\'") + '\')" class="inline-flex items-center gap-2 rounded-xl bg-primary hover:bg-primary-hover text-white px-4 py-2.5 text-sm font-semibold shadow-lg shadow-primary/25 transition-all"><span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px]">🔍</span>Kategori Seç</button>';
+                }
+                html += '</div></div>';
+            });
+            tbody.innerHTML = html;
+            if (footer) {
+                footer.classList.remove('hidden');
+                footer.innerHTML = '<span>' + paginatedGroups.length + ' kategori gösteriliyor</span>' + (catState.selectedGroups.size > 0 ? '<span>Seçili: <b class="text-current">' + catState.selectedGroups.size + '</b></span>' : '');
+            }
+        }
+
+        function catRenderSummary(autoCount, aiCount, manualCount, percent) {
+            var sumAuto = document.getElementById('cat-sum-auto');
+            var sumAi = document.getElementById('cat-sum-ai');
+            var sumManual = document.getElementById('cat-sum-manual');
+            var ringPctLg = document.getElementById('cat-ring-pct-lg');
+            var ringFgLg = document.getElementById('cat-ring-fg-lg');
+            if (sumAuto) sumAuto.textContent = fmt(autoCount);
+            if (sumAi) sumAi.textContent = fmt(aiCount);
+            if (sumManual) sumManual.textContent = fmt(manualCount);
+            if (ringPctLg) ringPctLg.textContent = '%' + percent;
+            if (ringFgLg) { var c = 320.44; ringFgLg.setAttribute('stroke-dashoffset', c * (1 - percent / 100)); }
+        }
+
+        function catRenderGuardWarn() {
+            var el = document.getElementById('cat-guard-warn');
+            if (!el) return;
+            var content = document.getElementById('cat-content');
+            var hasXml = !!contextState.xmlSourceId;
+            var hasMp = !!contextState.marketplaceId;
+            if (!hasXml || !hasMp) {
+                el.classList.remove('hidden');
+                // Hide category content when context is empty - only original message stays
+                if (content) content.classList.add('hidden');
+                var toolbar = document.getElementById('cat-toolbar');
+                if (toolbar) toolbar.classList.add('hidden');
+                var stepper = document.getElementById('cat-stepper');
+                if (stepper) stepper.classList.add('hidden');
+            } else {
+                el.classList.add('hidden');
+                // Show category content when context is valid
+                if (content) content.classList.remove('hidden');
+                var toolbar = document.getElementById('cat-toolbar');
+                if (toolbar) toolbar.classList.remove('hidden');
+                var stepper = document.getElementById('cat-stepper');
+                if (stepper) stepper.classList.remove('hidden');
+            }
+        }
+
+        function catShowLoading() {
+            var tbody = document.getElementById('cat-table-body');
+            if (tbody) tbody.innerHTML = '<div class="flex items-center justify-center gap-3 py-16 text-current"><span class="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent"></span><span class="text-sm">Kategoriler yükleniyor...</span></div>';
+        }
+
+        function catRequireMarketplace() {
+            if (!contextState.xmlSourceId || !contextState.marketplaceId) {
+                // Guard warning already shows the original "İşleme devam etmek..." message.
+                // No modal, no duplicate warnings. Blocks the action.
+                catRenderGuardWarn();
+                return false;
+            }
+            // Context is valid
+            catRenderGuardWarn();
+            return true;
+        }
+
+        function catCloseWarning() { /* kaldırıldı - modal yok */ }
+
+        /* --- AUTO MATCH --- */
+        async function catAutoMatch() {
+            if (!catRequireMarketplace()) return;
+            catState.autoMatchRunning = true;
+            catState.autoMatchLive = null;
+            showToast('Otomatik eşleştirme başlatılıyor...', 'info');
+            try {
+                var mpId = catGetMarketplaceId();
+                var res = await api('/categories/auto-match-all/start', { method: 'POST', body: { marketplaceId: mpId } });
+                if (res && res.ok !== false) {
+                    showToast(res.message || 'Otomatik eşleştirme başlatıldı', 'success');
+                    var total = (res.progress && res.progress.totalProducts) || 0;
+                    catState.autoMatchLive = { processed: 0, total: total, matched: 0 };
+                    catRenderAll();
+                    if (catState.pollTimer) clearInterval(catState.pollTimer);
+                    catState.pollTimer = setInterval(async function () {
+                        try {
+                            var pr = await api('/categories/auto-match-all/progress');
+                            if (pr) {
+                                catState.autoMatchLive = { processed: pr.processedProducts || 0, total: pr.totalProducts || 0, matched: pr.matchedCount || 0 };
+                                catRenderAll();
+                                if (pr.status === 'completed' || pr.status === 'error') {
+                                    if (catState.pollTimer) { clearInterval(catState.pollTimer); catState.pollTimer = null; }
+                                    catState.autoMatchRunning = false;
+                                    catFetchAll();
+                                    showToast((pr.matchedCount || 0) + ' kategori başarıyla eşleştirildi!', 'success');
+                                    setTimeout(function () { catState.autoMatchLive = null; catRenderAll(); }, 5000);
+                                }
+                            }
+                        } catch (e) { /* polling hatası */ }
+                    }, 3000);
+                } else {
+                    showToast((res && res.message) || 'Otomatik eşleştirme başarısız', 'error');
+                    catState.autoMatchRunning = false;
+                }
+            } catch (e) {
+                showToast('Otomatik eşleştirme başlatılamadı', 'error');
+                catState.autoMatchRunning = false;
+            }
+        }
+
+        /* --- AI MATCH --- */
+        async function catAiMatch() {
+            if (!catRequireMarketplace()) return;
+            catState.aiRunning = true;
+            showToast('AI eşleştirme başlatılıyor...', 'info');
+            try {
+                var mpId = catGetMarketplaceId();
+                var productIds = [];
+                catState.products.forEach(function (p) {
+                    if (!p.categoryMatch) productIds.push(p.id);
+                });
+                if (productIds.length === 0) { showToast('Eşleşmemiş ürün bulunamadı', 'error'); catState.aiRunning = false; return; }
+                var res = await api('/categories/ai-match', { method: 'POST', body: { productIds: productIds, marketplaceId: mpId } });
+                if (res && res.matchedCount != null) {
+                    showToast(res.message || 'AI eşleştirme tamamlandı', 'success');
+                    catState.step = 2;
+                    catFetchAll();
+                } else {
+                    showToast((res && res.message) || 'AI eşleştirme başarısız', 'error');
+                }
+            } catch (e) {
+                showToast('AI Match Hatası: ' + (e.message || String(e)), 'error');
+            }
+            catState.aiRunning = false;
+        }
+
+        /* --- MANUAL MATCH (BULK) --- */
+        function catManualMatch() {
+            if (!catRequireMarketplace()) return;
+            var manualGroups = (catState.groups || []).filter(function (g) { return g.status === 'manual_required'; });
+            if (manualGroups.length === 0) { showToast('Manuel eşleştirme gereken kategori yok.', 'info'); return; }
+            catState.selectedGroups = new Set(manualGroups.map(function (g) { return g.xmlPath; }));
+            catState.modalGroup = null;
+            catState.modalBulk = true;
+            catOpenPickerModal();
+        }
+
+        function catOpenSingleMatch(xmlPath) {
+            var group = (catState.groups || []).find(function (g) { return g.xmlPath === xmlPath; });
+            if (!group) return;
+            catState.modalGroup = group;
+            catState.modalBulk = false;
+            catOpenPickerModal();
+        }
+
+        function catOpenBulkMatch() {
+            if (catState.selectedGroups.size === 0) { showToast('Önce listeden en az bir XML kategorisi seçin', 'error'); return; }
+            catState.modalGroup = null;
+            catState.modalBulk = true;
+            catOpenPickerModal();
+        }
+
+        /* --- APPROVE AI SUGGESTION --- */
+        async function catApproveSuggestion(xmlPath) {
+            if (!catRequireMarketplace()) return;
+            var group = (catState.groups || []).find(function (g) { return g.xmlPath === xmlPath; });
+            if (!group || !group.suggestionId || group.aiProductIds.length === 0) return;
+            var mpId = catGetMarketplaceId();
+            try {
+                var res = await api('/categories/match', { method: 'POST', body: { categoryId: group.suggestionId, productIds: group.aiProductIds, marketplaceId: mpId } });
+                if (res && res.ok !== false) {
+                    showToast('"' + (group.suggestionLeaf || '') + '" onaylandı (' + group.aiProductIds.length + ' ürün)', 'success');
+                    catFetchAll();
+                } else {
+                    showToast((res && res.message) || 'Onaylama başarısız', 'error');
+                }
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        /* --- CATEGORY PICKER MODAL --- */
+        var catPickerState = { tree: [], treeLoading: true, selectedCatId: '', selectedCatName: '', expanded: new Set(), search: '', activeMpId: '', saving: false };
+
+        function catOpenPickerModal() {
+            var modal = document.getElementById('cat-picker-modal');
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            catPickerState.selectedCatId = '';
+            catPickerState.selectedCatName = '';
+            catPickerState.search = '';
+            catPickerState.expanded = new Set();
+            catPickerState.treeLoading = true;
+            catPickerState.saving = false;
+
+            catPickerState.activeMpId = catGetMarketplaceId();
+
+            var title = document.getElementById('cat-picker-title');
+            var sub = document.getElementById('cat-picker-sub');
+            var searchInput = document.getElementById('cat-picker-search');
+            var confirmBtn = document.getElementById('cat-picker-confirm');
+            var selText = document.getElementById('cat-picker-sel-text');
+
+            if (catState.modalBulk) {
+                var cnt = 0;
+                (catState.modalGroup ? [catState.modalGroup] : []).forEach(function (g) { cnt += g.total; });
+                var bulkGroups = (catState.groups || []).filter(function (g) { return catState.selectedGroups.has(g.xmlPath); });
+                var totalItems = bulkGroups.reduce(function (s, g) { return s + g.total; }, 0);
+                if (title) title.textContent = 'Toplu Eşleştirme (' + bulkGroups.length + ' kategori)';
+                if (sub) sub.textContent = totalItems + ' ürün tek kategoriye eşleştirilecek';
+            } else {
+                if (title) title.textContent = 'Pazaryeri Kategorisi Seç';
+                if (sub) sub.textContent = catState.modalGroup ? catState.modalGroup.xmlPath : '';
+            }
+            if (searchInput) searchInput.value = '';
+            if (confirmBtn) confirmBtn.disabled = true;
+            if (selText) selText.textContent = 'Ağaçtan bir kategori seçin';
+
+            catRenderMpTabs();
+            catLoadPickerTree();
+        }
+
+        function catClosePicker() {
+            var modal = document.getElementById('cat-picker-modal');
+            if (modal) modal.classList.add('hidden');
+            catState.modalOpen = false;
+        }
+
+        function catRenderMpTabs() {
+            var el = document.getElementById('cat-picker-mp-tabs');
+            if (!el) return;
+            var html = '';
+            catState.marketplaces.forEach(function (mp) {
+                html += '<button type="button" onclick="catPickerSetMp(\'' + mp.id + '\')" class="rounded-lg px-3 py-1.5 text-xs font-medium transition-all ' + (catPickerState.activeMpId === mp.id ? 'bg-primary text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700') + '">' + escapeHtml(mp.name) + '</button>';
+            });
+            el.innerHTML = html;
+        }
+
+        async function catPickerSetMp(mpId) {
+            catPickerState.activeMpId = mpId;
+            catRenderMpTabs();
+            await catLoadPickerTree();
+        }
+
+        async function catLoadPickerTree() {
+            catPickerState.treeLoading = true;
+            var treeEl = document.getElementById('cat-picker-tree');
+            if (treeEl) treeEl.innerHTML = '<div class="flex items-center justify-center gap-2 py-10 text-slate-500"><span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-primary"></span><span class="text-xs">Kategoriler yükleniyor...</span></div>';
+            try {
+                var params = new URLSearchParams();
+                if (catPickerState.activeMpId) params.append('marketplaceId', catPickerState.activeMpId);
+                var d = await api('/categories/tree?' + params.toString());
+                catPickerState.tree = (d && d.items) || [];
+            } catch (e) { catPickerState.tree = []; }
+            catPickerState.treeLoading = false;
+            catRenderPickerTree();
+        }
+
+        function catRenderPickerTree() {
+            var treeEl = document.getElementById('cat-picker-tree');
+            if (!treeEl) return;
+            if (catPickerState.treeLoading) return;
+            var filteredTree = catPickerState.tree;
+            if (catPickerState.search.trim()) {
+                var q = catPickerState.search.toLowerCase();
+                var filterFn = function (nodes) {
+                    return nodes.map(function (n) {
+                        var copy = Object.assign({}, n, { children: filterFn(n.children || []) });
+                        return copy;
+                    }).filter(function (n) { return n.name.toLowerCase().indexOf(q) > -1 || (n.children && n.children.length > 0); });
+                };
+                filteredTree = filterFn(catPickerState.tree);
+            }
+            if (filteredTree.length === 0) { treeEl.innerHTML = '<div class="py-10 text-center text-xs text-slate-500">Kategori bulunamadı</div>'; return; }
+            treeEl.innerHTML = catRenderTreeNodes(filteredTree, 0);
+        }
+
+        function catRenderTreeNodes(nodes, depth) {
+            var html = '';
+            nodes.forEach(function (cat) {
+                var hasChildren = (cat.children && cat.children.length > 0);
+                var isOpen = catPickerState.expanded.has(cat.id) || catPickerState.search.trim().length > 0;
+                var isSel = catPickerState.selectedCatId === cat.id;
+                html += '<div>';
+                html += '<div role="button" tabindex="0" onclick="catPickerPick(\'' + cat.id + '\',\'' + escapeHtml(cat.name).replace(/'/g, "\\'") + '\')" onkeydown="if(event.key===\'Enter\')catPickerPick(\'' + cat.id + '\',\'' + escapeHtml(cat.name).replace(/'/g, "\\'") + '\')" class="flex w-full cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 text-left text-xs transition-colors" style="padding-left:' + (8 + depth * 14) + 'px;font-weight:' + (isSel ? 600 : 40) + '">';
+                if (hasChildren) html += '<span role="button" tabindex="-1" onclick="event.stopPropagation();catPickerToggleExpand(\'' + cat.id + '\')" class="w-4 shrink-0 text-center text-[9px] text-current">' + (isOpen ? '▼' : '▶') + '</span>';
+                else html += '<span class="w-4 shrink-0 text-center text-current">•</span>';
+                html += '<span class="flex-1 truncate">' + escapeHtml(cat.name) + '</span>';
+                if (cat.productCount != null && cat.productCount > 0) html += '<span class="text-[9px] text-current">(' + cat.productCount + ')</span>';
+                html += '</div>';
+                if (hasChildren && isOpen) html += catRenderTreeNodes(cat.children, depth + 1);
+                html += '</div>';
+            });
+            return html;
+        }
+
+        function catPickerToggleExpand(id) {
+            if (catPickerState.expanded.has(id)) catPickerState.expanded.delete(id);
+            else catPickerState.expanded.add(id);
+            catRenderPickerTree();
+        }
+
+        function catPickerPick(id, name) {
+            catPickerState.selectedCatId = id;
+            catPickerState.selectedCatName = name;
+            var selText = document.getElementById('cat-picker-sel-text');
+            var confirmBtn = document.getElementById('cat-picker-confirm');
+            if (selText) selText.innerHTML = 'Secili: <span class="font-semibold text-slate-800 dark:text-slate-200">' + escapeHtml(name) + '</span>';
+            if (confirmBtn) confirmBtn.disabled = false;
+        }
+
+        function catPickerSearch() {
+            var input = document.getElementById('cat-picker-search');
+            catPickerState.search = input ? input.value : '';
+            catRenderPickerTree();
+        }
+
+        async function catPickerConfirm() {
+            if (!catPickerState.selectedCatId) return;
+            var targetGroups = [];
+            if (catState.modalBulk) {
+                targetGroups = (catState.groups || []).filter(function (g) { return catState.selectedGroups.has(g.xmlPath); });
+            } else if (catState.modalGroup) {
+                targetGroups = [catState.modalGroup];
+            }
+            if (targetGroups.length === 0) return;
+            catPickerState.saving = true;
+            var confirmBtn = document.getElementById('cat-picker-confirm');
+            if (confirmBtn) confirmBtn.textContent = 'Eşleştiriliyor...';
+            try {
+                if (catState.modalBulk) {
+                    var matches = targetGroups.map(function (g) { return { xmlCategoryPath: g.xmlPath, systemCategoryId: catPickerState.selectedCatId }; });
+                    var res = await api('/categories/bulk-match', { method: 'POST', body: { matches: matches } });
+                    if (res && (res.ok !== false || res.matchedCount != null)) {
+                        showToast((res.message || res.matchedCount + ' ürün eşleştirildi'), 'success');
+                        catClosePicker();
+                        catFetchAll();
+                    } else {
+                        showToast((res && res.message) || 'Toplu eşleştirme başarısız', 'error');
+                    }
+                } else {
+                    var res2 = await api('/categories/match', { method: 'POST', body: { categoryId: catPickerState.selectedCatId, productIds: targetGroups[0].productIds } });
+                    if (res2 && (res2.ok !== false || res2.matchedCount != null)) {
+                        showToast('"' + catPickerState.selectedCatName + '" kategorisine ' + targetGroups[0].total + ' ürün eşleştirildi', 'success');
+                        catClosePicker();
+                        catFetchAll();
+                    } else {
+                        showToast((res2 && res2.message) || 'Eşleştirme başarısız', 'error');
+                    }
+                }
+            } catch (e) { showToast(e.message, 'error'); }
+            catPickerState.saving = false;
+            if (confirmBtn) confirmBtn.textContent = '✓ Eşleştir';
+        }
+
+        function catMatchDone() { catClosePicker(); catFetchAll(); }
+
+                /* ===================== ÜRÜN HAZIRLAMA: MARKA — SADE AKIŞ V5 ===================== */
+
+        var prepBrandState = {
+            xmlSources: [], xmlBrands: [], products: [], marketplaces: [],
+            selectedXmlSource: '', selectedXmlBrandName: '', selectedMarketplaceKey: '',
+            pageSize: 50, currentPage: 1, totalProducts: 0,
+            selectedProducts: new Set(), allSelected: false, loading: false,
+            previewData: null, matchedCount: 0
+        };
+
+        async function prepBrandsLoad() {
+            if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); clearAllPageData(); return; }
+            prepBrandState.loading = true;
+            prepBrandState.loading = false;
+        }
+
+        async function prepBrandOnSourceChange() {
+            var srcId = document.getElementById('br-xml-source').value;
+            prepBrandState.selectedXmlSource = srcId;
+            prepBrandState.selectedXmlBrandName = '';
+            var xmlBrandEl = document.getElementById('br-xml-brand');
+            if (!srcId) { if (xmlBrandEl) { xmlBrandEl.innerHTML = '<option value="">Önce XML kaynağı seçin</option>'; xmlBrandEl.disabled = true; } return; }
+            try {
+                var res = await api('/brands/xml-brands?xmlSourceId=' + srcId);
+                prepBrandState.xmlBrands = (res && res.items) || [];
+                if (xmlBrandEl) {
+                    var h = '<option value="">XML Markası Seç...</option>';
+                    prepBrandState.xmlBrands.forEach(function (b) { h += '<option value="' + escapeHtml(b.name) + '">' + escapeHtml(b.name) + '</option>'; });
+                    xmlBrandEl.innerHTML = h;
+                    xmlBrandEl.disabled = false;
+                }
+            } catch (e) { if (xmlBrandEl) xmlBrandEl.innerHTML = '<option value="">Hata oluştu</option>'; }
+            document.getElementById('br-products-section').classList.add('hidden');
+            document.getElementById('br-summary').classList.add('hidden');
+            document.getElementById('br-save-btn').disabled = true;
+            prepBrandState.previewData = null;
+        }
+
+        async function prepBrandOnXmlBrandChange() {
+            var name = document.getElementById('br-xml-brand').value;
+            prepBrandState.selectedXmlBrandName = name;
+            prepBrandState.currentPage = 1;
+            prepBrandState.selectedProducts.clear();
+            prepBrandState.allSelected = false;
+            prepBrandState.previewData = null;
+            document.getElementById('br-save-btn').disabled = true;
+            prepBrandCheckMatchBtn();
+            if (name) await prepBrandLoadProducts();
+            else { document.getElementById('br-products-section').classList.add('hidden'); document.getElementById('br-summary').classList.add('hidden'); }
+        }
+
+        function prepBrandCheckMatchBtn() {
+            var xmlBrand = prepBrandState.selectedXmlBrandName;
+            var manualBrand = (document.getElementById('br-manual-brand').value || '').trim();
+            document.getElementById('br-match-btn').disabled = !(xmlBrand && manualBrand);
+        }
+
+        async function prepBrandLoadProducts() {
+            var name = prepBrandState.selectedXmlBrandName;
+            if (!name) return;
+            if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); return; }
+            var sec = document.getElementById('br-products-section');
+            sec.classList.remove('hidden');
+            var body = document.getElementById('br-products-body');
+            body.innerHTML = '<tr><td class="py-10 text-center text-slate-400" colspan="5"><i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Ürünler yükleniyor...</td></tr>';
+            try {
+                var res = await api('/brands/products?page=' + prepBrandState.currentPage + '&limit=' + prepBrandState.pageSize + '&xmlBrandName=' + encodeURIComponent(name));
+                prepBrandState.products = (res && res.items) || [];
+                prepBrandState.totalProducts = (res && res.pagination && res.pagination.total) || 0;
+                prepBrandRenderProducts();
+                prepBrandRenderPagination();
+                document.getElementById('br-selection-info').textContent = 'Seçili: 0 / ' + prepBrandState.totalProducts.toLocaleString('tr-TR');
+            } catch (e) { body.innerHTML = '<tr><td class="py-10 text-center text-red-400" colspan="5">Ürünler yüklenemedi</td></tr>'; }
+        }
+
+        function prepBrandRenderProducts() {
+            var body = document.getElementById('br-products-body');
+            var prods = prepBrandState.products;
+            var xmlName = prepBrandState.selectedXmlBrandName;
+            var manualBrand = (document.getElementById('br-manual-brand').value || '').trim();
+            var targetBrandName = manualBrand;
+            if (!prods || prods.length === 0) { body.innerHTML = '<tr><td class="py-16 text-center text-slate-400" colspan="5">Bu markada ürün bulunamadı</td></tr>'; return; }
+            var html = '';
+            prods.forEach(function (p) {
+                var origTitle = p.originalTitle || p.title || '';
+                var cleanTitle = origTitle;
+                var prefixPat = /^[A-Za-z\u00c0-\u024f\u0130\u0131\s]+ ® /;
+                var match = cleanTitle.match(prefixPat);
+                if (match) cleanTitle = cleanTitle.substring(match[0].length);
+                var displayName = targetBrandName ? targetBrandName + ' ® ' + cleanTitle : cleanTitle;
+                var isMatched = p.brandMatch;
+                var statusLabel = isMatched ? 'Eşleşti' : 'Bekliyor';
+                var statusClass = isMatched ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400';
+                var checked = prepBrandState.selectedProducts.has(p.id) ? 'checked' : '';
+                html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">';
+                html += '<td class="py-2.5 px-3"><input type="checkbox" ' + checked + ' onchange="prepBrandToggleProduct(\'' + p.id + '\')" class="w-3.5 h-3.5 rounded accent-[var(--primary-color)]"></td>';
+                html += '<td class="py-2.5 px-4 text-xs font-semibold text-slate-900 dark:text-white max-w-[400px] truncate" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</td>';
+                html += '<td class="py-2.5 px-4 text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(xmlName) + '</td>';
+                html += '<td class="py-2.5 px-4 text-xs font-medium text-slate-700 dark:text-slate-300">' + escapeHtml(targetBrandName || '-') + '</td>';
+                html += '<td class="py-2.5 px-4"><span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ' + statusClass + '">' + statusLabel + '</span></td>';
+                html += '</tr>';
+            });
+            body.innerHTML = html;
+        }
+
+        function prepBrandRenderPagination() {
+            var total = prepBrandState.totalProducts;
+            var ps = prepBrandState.pageSize;
+            var totalPages = Math.max(1, Math.ceil(total / ps));
+            var page = Math.min(prepBrandState.currentPage, totalPages);
+            prepBrandState.currentPage = page;
+            var start = (page - 1) * ps + 1;
+            var end = Math.min(page * ps, total);
+            document.getElementById('br-page-prev').disabled = page <= 1;
+            document.getElementById('br-page-next').disabled = page >= totalPages;
+            var nums = document.getElementById('br-page-numbers');
+            var html = '';
+            var s = Math.max(1, Math.min(page - 3, totalPages - 6));
+            for (var i = 0; i < Math.min(totalPages, 7); i++) { var pg = s + i; if (pg > totalPages) break; html += '<button onclick="prepBrandGoPage(' + pg + ')" class="min-w-[28px] rounded-md px-2 py-0.5 text-[11px] font-bold transition-colors ' + (pg === page ? 'bg-primary text-white shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800') + '">' + pg + '</button>'; }
+            nums.innerHTML = html;
+            var info = document.getElementById('br-page-info');
+            if (info) info.innerHTML = '<span class="font-semibold text-slate-900 dark:text-white">' + start.toLocaleString('tr-TR') + '-' + end.toLocaleString('tr-TR') + '</span> / <span class="font-semibold text-slate-900 dark:text-white">' + total.toLocaleString('tr-TR') + '</span> ürün';
+            document.querySelectorAll('.br-size-btn').forEach(function (btn) { var act = btn.textContent.trim() === String(ps); btn.classList.toggle('bg-primary', act); btn.classList.toggle('text-white', act); btn.classList.toggle('shadow-sm', act); btn.classList.toggle('text-slate-600', !act); btn.classList.toggle('dark:text-slate-400', !act); });
+        }
+
+        function prepBrandGoPage(p) { prepBrandState.currentPage = p; prepBrandLoadProducts(); }
+        function prepBrandPagePrev() { if (prepBrandState.currentPage > 1) { prepBrandState.currentPage--; prepBrandLoadProducts(); } }
+        function prepBrandPageNext() { var tp = Math.max(1, Math.ceil(prepBrandState.totalProducts / prepBrandState.pageSize)); if (prepBrandState.currentPage < tp) { prepBrandState.currentPage++; prepBrandLoadProducts(); } }
+        function prepBrandSetSize(s) { prepBrandState.pageSize = s; prepBrandState.currentPage = 1; prepBrandLoadProducts(); }
+
+        function prepBrandToggleProduct(id) {
+            if (prepBrandState.selectedProducts.has(id)) prepBrandState.selectedProducts.delete(id); else prepBrandState.selectedProducts.add(id);
+            document.getElementById('br-selection-info').textContent = 'Seçili: ' + prepBrandState.selectedProducts.size.toLocaleString('tr-TR') + ' / ' + prepBrandState.totalProducts.toLocaleString('tr-TR');
+        }
+
+        function prepBrandSelectAll() {
+            var chk = document.getElementById('br-select-all').checked;
+            prepBrandState.allSelected = chk;
+            prepBrandState.selectedProducts.clear();
+            if (chk) prepBrandState.products.forEach(function (p) { prepBrandState.selectedProducts.add(p.id); });
+            document.getElementById('br-selection-info').textContent = 'Seçili: ' + prepBrandState.selectedProducts.size.toLocaleString('tr-TR') + ' / ' + prepBrandState.totalProducts.toLocaleString('tr-TR');
+            prepBrandRenderProducts();
+        }
+
+        async function prepBrandPreview() {
+            var xmlBrand = prepBrandState.selectedXmlBrandName;
+            var manualBrand = (document.getElementById('br-manual-brand').value || '').trim();
+            var mpKey = document.getElementById('br-marketplace').value || '';
+            if (!xmlBrand || !manualBrand) { showToast('XML markası ve Manuel marka girin', 'error'); return; }
+            var btn = document.getElementById('br-match-btn');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Hesaplanıyor...'; }
+            try {
+                var brandRes = await api('/brands?search=' + encodeURIComponent(manualBrand));
+                var existingBrand = ((brandRes && brandRes.items) || []).find(function (b) { return b.name.toLocaleLowerCase('tr-TR') === manualBrand.toLocaleLowerCase('tr-TR'); });
+                var dgBrandId = existingBrand ? existingBrand.id : null;
+                if (!dgBrandId) {
+                    var cr = await api('/brands', { method: 'POST', body: { name: manualBrand } });
+                    if (cr && cr.item) { dgBrandId = cr.item.id; } else { showToast('Marka oluşturulamadı', 'error'); return; }
+                }
+                var previewRes = await api('/brands/preview', { method: 'POST', body: { xmlBrandName: xmlBrand, dgBrandId: dgBrandId, marketplaceKey: mpKey || null } });
+                prepBrandState.previewData = { xmlBrandName: xmlBrand, dgBrandId: dgBrandId, marketplaceKey: mpKey, count: previewRes.count, brandName: previewRes.brandName, preview: previewRes.preview };
+                prepBrandState.matchedCount = previewRes.count;
+                var sumEl = document.getElementById('br-summary');
+                if (sumEl) sumEl.classList.remove('hidden');
+                document.getElementById('br-sum-xml').textContent = document.getElementById('br-xml-source').selectedOptions[0] ? document.getElementById('br-xml-source').selectedOptions[0].text : '';
+                var mpSel = document.getElementById('br-marketplace');
+                document.getElementById('br-sum-mp').textContent = mpSel && mpSel.selectedOptions[0] && mpSel.value ? mpSel.selectedOptions[0].text : 'Genel';
+                document.getElementById('br-sum-from').textContent = xmlBrand;
+                document.getElementById('br-sum-to').textContent = manualBrand;
+                document.getElementById('br-sum-count').textContent = previewRes.count.toLocaleString('tr-TR');
+                var statusEl = document.getElementById('br-sum-status');
+                if (statusEl) { statusEl.innerHTML = '<i class="fa-solid fa-eye"></i> Önizleme'; statusEl.className = 'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400'; }
+                document.getElementById('br-save-btn').disabled = false;
+                showToast(xmlBrand + ' → ' + manualBrand + ': ' + previewRes.count + ' ürün eşleşecek', 'success');
+            } catch (e) { showToast(e.message, 'error'); }
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-eye mr-1.5"></i>Marka Eşleştir'; prepBrandCheckMatchBtn(); }
+        }
+
+        async function prepBrandSave() {
+            var pd = prepBrandState.previewData;
+            if (!pd) { showToast('Önce Marka Eşleştir butonuna basın', 'error'); return; }
+            var btn = document.getElementById('br-save-btn');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Kaydediliyor...'; }
+            try {
+                var r = await api('/brands/match', { method: 'POST', body: { xmlBrandName: pd.xmlBrandName, dgBrandId: pd.dgBrandId, marketplaceKey: pd.marketplaceKey || null } });
+                var count = r.matchedCount || 0;
+                var statusEl = document.getElementById('br-sum-status');
+                if (statusEl) { statusEl.innerHTML = '<i class="fa-solid fa-check-circle"></i> Kaydedildi'; statusEl.className = 'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'; }
+                showToast(pd.xmlBrandName + ' → ' + pd.brandName + ': ' + count + ' ürün kaydedildi', 'success');
+                prepBrandState.previewData = null;
+                await prepBrandLoadProducts();
+            } catch (e) { showToast(e.message, 'error'); }
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-floppy-disk mr-1.5"></i>Kaydet'; }
+        }
+/* ===================== VARYANT EŞLEŞTİRME V3.1 ===================== */
+        var varState = { step: 1, loading: false, rows: [], stats: null, unmatchedTotal: 0, xmlVariantItems: [], variantRecords: [], aiRunning: false, bulkRunning: false, screenItems: [], screenPage: 1, screenTotal: 0, screenSelected: new Set() };
+
+        var VAR_COLOR_MAP = {
+            'kırmızı': '#ef4444', 'kirmizi': '#ef4444', 'mavi': '#3b82f6', 'siyah': '#1e293b',
+            'beyaz': '#f8fafc', 'sarı': '#eab308', 'sari': '#eab308', 'yeşil': '#22c55e', 'yesil': '#22c55e',
+            'mor': '#8b5cf6', 'turuncu': '#f97316', 'pembe': '#ec4899', 'gri': '#6b7280',
+            'lacivert': '#1e3a5f', 'bordo': '#7f1d1d', 'bej': '#d4a574', 'kahverengi': '#78350f',
+            'krem': '#fef3c7', 'füme': '#6b7280', 'fume': '#6b7280', 'altın': '#f59e0b', 'altin': '#f59e0b',
+            'gümüş': '#9ca3af', 'gumus': '#9ca3af', 'turkuaz': '#14b8a6', 'metalik': '#94a3b8'
+        };
+
+        function varDotColor(name, value) {
+            if (name === 'Renk') return VAR_COLOR_MAP[(value || '').toLocaleLowerCase('tr-TR')] || '#94a3b8';
+            if (name === 'Beden') return '#3b82f6';
+            if (name === 'Numara') return '#8b5cf6';
+            return '#94a3b8';
+        }
+
+        var VAR_STATUS_ORDER = { matched: 0, ai: 1, required: 2, manual: 3 };
+        var VAR_NAME_ORDER = { Renk: 0, Beden: 1, Numara: 2 };
+
+        async function prepVariantsLoad() {
+            if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); clearAllPageData(); return; }
+            syncLocalContextSelectors();
+            varState.loading = true;
+            prepVariantCheckGuard();
+            prepVariantFetchAll();
+            prepVariantLogs();
+            prepVariantLoadScreen();
+        }
+
+        function prepVariantCheckGuard() {
+            var hasXml = contextState.xmlSourceId || document.getElementById('var-xml-source').value;
+            var hasMp = contextState.marketplaceId || document.getElementById('var-marketplace').value;
+            var warn = document.getElementById('var-warning');
+            var stepper = document.getElementById('var-stepper');
+            // Always keep the new duplicate warning hidden
+            if (warn) warn.classList.add('hidden');
+            if (hasXml && hasMp) {
+                stepper.classList.remove('hidden');
+            } else {
+                stepper.classList.add('hidden');
+            }
+        }
+
+        function prepVariantGuard() {
+            if (!contextState.xmlSourceId || !contextState.marketplaceId) {
+                document.getElementById('var-warning-modal').classList.remove('hidden');
+                return false;
+            }
+            return true;
+        }
+
+        async function prepVariantFetchAll() {
+            try {
+                var [varRes, xmlRes, statsRes, unmatchedRes] = await Promise.all([
+                    api('/variants/?limit=1000'),
+                    api('/variants/xml-variants'),
+                    api('/variants/stats'),
+                    api('/variants/unmatched-products?limit=500')
+                ]);
+                varState.variantRecords = varRes.items || [];
+                varState.xmlVariantItems = xmlRes.items || [];
+                varState.stats = statsRes;
+                varState.unmatchedTotal = unmatchedRes.total || 0;
+            } catch(e) {}
+            varState.loading = false;
+            prepVariantComputeRows();
+            prepVariantRender();
+        }
+
+        function prepVariantComputeRows() {
+            var result = [];
+            var matchedKeys = {};
+            var matchedGroups = {};
+            varState.variantRecords.forEach(function(v) {
+                var key = v.name + ':' + v.value;
+                matchedKeys[key] = true;
+                if (!matchedGroups[key]) matchedGroups[key] = { name: v.name, value: v.value, productIds: {} };
+                if (v.product && v.product.id) matchedGroups[key].productIds[v.product.id] = true;
+            });
+            Object.keys(matchedGroups).forEach(function(key) {
+                var g = matchedGroups[key];
+                result.push({ key: key, name: g.name, value: g.value, productCount: Object.keys(g.productIds).length, status: 'matched', productIds: Object.keys(g.productIds) });
+            });
+
+            var detectedGroups = {};
+            varState.xmlVariantItems.forEach(function(item) {
+                (item.detectedVariants || []).forEach(function(d) {
+                    var key = d.name + ':' + d.value;
+                    if (matchedKeys[key]) return;
+                    if (!detectedGroups[key]) detectedGroups[key] = { name: d.name, value: d.value, productIds: {}, maxConf: 0 };
+                    detectedGroups[key].productIds[item.productId] = true;
+                    detectedGroups[key].maxConf = Math.max(detectedGroups[key].maxConf, d.confidence || 0);
+                });
+            });
+            Object.keys(detectedGroups).forEach(function(key) {
+                var g = detectedGroups[key];
+                result.push({ key: key, name: g.name, value: g.value, productCount: Object.keys(g.productIds).length, status: g.maxConf >= 80 ? 'ai' : 'required', productIds: Object.keys(g.productIds), confidence: g.maxConf });
+            });
+
+            var detectedProductIds = {};
+            varState.xmlVariantItems.forEach(function(i) { detectedProductIds[i.productId] = true; });
+            var undetectedCount = Math.max(0, varState.unmatchedTotal - Object.keys(detectedProductIds).length);
+            if (undetectedCount > 0) {
+                result.push({ key: '__manual__', name: 'Varyant', value: '(Tespit Edilemedi)', productCount: undetectedCount, status: 'manual', productIds: [] });
+            }
+
+            result.sort(function(a, b) {
+                var so = (VAR_STATUS_ORDER[a.status] || 0) - (VAR_STATUS_ORDER[b.status] || 0);
+                if (so !== 0) return so;
+                var no = (VAR_NAME_ORDER[a.name] ?? 9) - (VAR_NAME_ORDER[b.name] ?? 9);
+                if (no !== 0) return no;
+                return a.value.localeCompare(b.value, 'tr');
+            });
+
+            varState.rows = result;
+            prepVariantRenderStepper();
+        }
+
+        function prepVariantGetVisibleRows() {
+            if (varState.step === 2) return varState.rows.filter(function(r) { return r.status === 'ai'; });
+            if (varState.step === 3) return varState.rows.filter(function(r) { return r.status === 'required' || r.status === 'manual'; });
+            return varState.rows;
+        }
+
+        function prepVariantRenderStepper() {
+            var aiCount = varState.rows.filter(function(r) { return r.status === 'ai'; }).length;
+            var manualRow = varState.rows.find(function(r) { return r.status === 'manual'; });
+            var requiredCount = varState.rows.filter(function(r) { return r.status === 'required'; }).length;
+            var manualNeeded = (manualRow ? manualRow.productCount : 0) + requiredCount;
+            var steps = [
+                { key: 1, label: '1. Otomatik Eşleşme', tone: 'primary' },
+                { key: 2, label: '2. AI Eşleştirme', count: aiCount, tone: 'accent' },
+                { key: 3, label: '3. Manuel Eşleştirme', count: manualNeeded, tone: 'success' }
+            ];
+            var html = '';
+            steps.forEach(function(s, i) {
+                var active = varState.step === s.key;
+                var bgCls, textCls, badgeCls;
+                if (s.tone === 'primary') {
+                    bgCls = active ? 'bg-primary text-white shadow-lg shadow-primary/25' : 'bg-primary/10 text-primary hover:bg-primary/20';
+                    badgeCls = active ? 'bg-white/20 text-white' : 'bg-primary/20 text-primary';
+                } else if (s.tone === 'accent') {
+                    bgCls = active ? 'bg-violet-500 text-white shadow-lg shadow-violet-500/25' : 'bg-violet-500/10 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20';
+                    badgeCls = active ? 'bg-white/20 text-white' : 'bg-violet-500/20 text-violet-600 dark:text-violet-400';
+                } else {
+                    bgCls = active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/25' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20';
+                    badgeCls = active ? 'bg-white/20 text-white' : 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400';
+                }
+                var countBadge = s.count !== undefined && s.count > 0 ? '<span class="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold ' + badgeCls + '">' + s.count + '</span>' : '';
+                html += '<button onclick="prepVariantSetStep(' + s.key + ')" class="relative px-7 py-3 text-sm font-bold transition-all duration-200 ' + bgCls + '" style="min-width:205px;clip-path:' + (i === 0 ? 'polygon(12px 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,12px 100%,0 100%,0 0)' : 'polygon(16px 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,16px 100%,0 50%)') + ';margin-left:' + (i === 0 ? '0' : '-10px') + ';z-index:' + (active ? '2' : '1') + '">' + s.label + countBadge + '</button>';
+            });
+            document.getElementById('var-stepper').innerHTML = html;
+        }
+
+        function prepVariantSetStep(step) {
+            varState.step = step;
+            prepVariantRenderStepper();
+            prepVariantRender();
+        }
+
+        function prepVariantRender() {
+            var visibleRows = prepVariantGetVisibleRows();
+            var stats = varState.stats || {};
+            var matchedProducts = stats.matchedProducts || 0;
+            var unmatchedProducts = stats.unmatchedProducts || varState.unmatchedTotal;
+            var total = matchedProducts + unmatchedProducts;
+            var percent = total > 0 ? Math.round((matchedProducts / total) * 100) : 0;
+
+            var size = 118, stroke = 11, r = (size - stroke) / 2 - 2, c = 2 * Math.PI * r;
+            var offset = c * (1 - Math.min(100, Math.max(0, percent)) / 100);
+            document.getElementById('var-progress-ring').innerHTML = '<div class="relative" style="width:' + size + 'px;height:' + size + 'px"><svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '"><circle cx="' + (size / 2) + '" cy="' + (size / 2) + '" r="' + r + '" fill="none" stroke="currentColor" stroke-width="' + stroke + '"/><circle cx="' + (size / 2) + '" cy="' + (size / 2) + '" r="' + r + '" fill="none" stroke="' + (percent > 0 ? 'currentColor' : 'transparent') + '" stroke-width="' + stroke + '" stroke-linecap="round" stroke-dasharray="' + c + '" stroke-dashoffset="' + offset + '" transform="rotate(-90 ' + (size / 2) + ' ' + (size / 2) + ')" style="transition:stroke-dashoffset 0.8s ease"/></svg><div class="absolute inset-0 flex flex-col items-center justify-center"><span class="text-[26px] font-extrabold leading-none tracking-tight">%' + percent + '</span><span class="mt-1 text-xs font-semibold">Eşleşti</span></div></div>';
+
+            var aiPendingProducts = {};
+            varState.rows.forEach(function(r) { if (r.status === 'ai') r.productIds.forEach(function(id) { aiPendingProducts[id] = true; }); });
+            var aiPendingCount = Object.keys(aiPendingProducts).length;
+            var requiredCount = varState.rows.filter(function(r) { return r.status === 'required'; }).length;
+            var manualRow = varState.rows.find(function(r) { return r.status === 'manual'; });
+            var manualNeeded = (manualRow ? manualRow.productCount : 0) + requiredCount;
+            document.getElementById('var-summary').innerHTML = '<div class="flex items-center justify-between px-4 py-3"><div class="flex items-center gap-2"><span class="flex h-5 w-5 items-center justify-center rounded-md text-[10px]">✅</span><span class="text-xs font-semibold">Tam Eşleşti</span></div><span class="text-sm font-extrabold">' + matchedProducts.toLocaleString('tr-TR') + '</span></div><div class="flex items-center justify-between px-4 py-3" style="border-top:1px solid currentColor"><div class="flex items-center gap-2"><span class="flex h-5 w-5 items-center justify-center rounded-md text-[10px]">🤖</span><span class="text-xs font-semibold">AI ile Eşleşti</span></div><span class="text-sm font-extrabold">' + aiPendingCount.toLocaleString('tr-TR') + '</span></div><div class="flex items-center justify-between px-4 py-3" style="border-top:1px solid currentColor"><div class="flex items-center gap-2"><span class="flex h-5 w-5 items-center justify-center rounded-md text-[10px]">🔧</span><span class="text-xs font-semibold">Manuel Gereken</span></div><span class="text-sm font-extrabold">' + manualNeeded.toLocaleString('tr-TR') + '</span></div>';
+
+            var flowEl = document.getElementById('var-flow-list');
+            if (varState.loading) {
+                flowEl.innerHTML = '<div class="flex items-center justify-center gap-3 py-16 text-current"><span class="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent"></span><span class="text-sm">Varyantlar yükleniyor...</span></div>';
+            } else if (visibleRows.length === 0) {
+                var emptyMsg = varState.step === 1 ? 'Varyant bulunamadı. Önce XML kaynağından ürün aktarın.' : varState.step === 2 ? 'AI önerisi bekleyen varyant yok.' : 'Manuel eşleştirme gereken varyant kalmadı.';
+                var emptyIcon = varState.step === 1 ? '📭' : '🎉';
+                flowEl.innerHTML = '<div class="flex flex-col items-center justify-center py-16 text-center"><span class="mb-3 text-4xl">' + emptyIcon + '</span><p class="text-sm font-medium">' + emptyMsg + '</p></div>';
+            } else {
+                var html = '';
+                visibleRows.forEach(function(row, idx) {
+                    var dot = varDotColor(row.name, row.value);
+                    html += '<div class="grid grid-cols-[minmax(0,4fr)_minmax(0,4fr)_minmax(0,5fr)] items-stretch transition-colors hover:bg-gray-50/50 dark:hover:bg-current/[0.05]">';
+                    html += '<div class="flex min-w-0 items-center gap-2.5 px-6 py-4 border-l-2 border-gray-300 dark:border-gray-600"><span class="h-3.5 w-3.5 shrink-0 rounded-full shadow-sm" style="background:' + dot + '"></span><div class="min-w-0"><div class="truncate text-sm font-semibold" title="' + esc(row.name + ': ' + row.value) + '">' + esc(row.value) + '</div><div class="text-[10px] text-current/60">' + esc(row.name) + ' • ' + row.productCount + ' ürün</div></div></div>';
+                    if (row.status === 'matched') {
+                        html += '<div class="flex items-center gap-2.5 px-5 border-l border-gray-300 dark:border-gray-600"><span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-transparent/30 text-[11px] font-bold">✓</span><span class="text-sm font-bold">Tam Eşleşti</span></div>';
+                    } else if (row.status === 'ai') {
+                        html += '<div class="flex items-center gap-2.5 px-5 border-l border-gray-300 dark:border-gray-600"><span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-xs shadow-sm">🤖</span><div><div class="text-sm font-bold">AI Eşleşmesi Önerisi</div>' + (row.confidence != null ? '<div class="text-[10px]">Güven: %' + row.confidence + '</div>' : '') + '</div></div>';
+                    } else if (row.status === 'required') {
+                        html += '<div class="flex items-center gap-2.5 px-5 border-l border-gray-300 dark:border-gray-600"><span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold shadow-sm">!</span><div><div class="text-sm font-bold">AI Eşleşme Yok</div><div class="text-[11px]">Düşük güven — doğrulama gerekli</div></div></div>';
+                    } else {
+                        html += '<div class="flex items-center gap-2.5 px-5 border-l border-gray-300 dark:border-gray-600"><span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs shadow-sm">👤</span><div><div class="text-sm font-bold">Manuel Eşleştir</div><div class="text-[11px]">Otomatik tespit yapılamadı</div></div></div>';
+                    }
+                    html += '<div class="flex min-w-0 items-center gap-2 px-6 py-4 border-l border-gray-300 dark:border-gray-600">';
+                    if (row.status === 'matched') {
+                        html += '<span class="inline-flex min-w-[64px] items-center rounded-lg bg-transparent px-3 py-2 text-sm font-semibold shadow-inner">' + esc(row.value) + '</span><span class="shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] font-bold shadow-sm">Tam Eşleşti</span>';
+                    } else if (row.status === 'ai') {
+                        html += '<span class="inline-flex min-w-[64px] items-center rounded-lg bg-transparent px-3 py-2 text-sm font-semibold shadow-inner border border-gray-300 dark:border-gray-600">' + esc(row.value) + '</span><button onclick="prepVariantApproveRow(' + idx + ')" class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold shadow-sm transition-all hover:brightness-110" title="AI önerisini onayla ve eşleştir">✓ Onayla</button>';
+                    } else if (row.status === 'required') {
+                        html += '<input type="text" id="var-edit-' + idx + '" value="' + esc(row.value) + '" placeholder="Pazaryeri karşılığı..." class="w-32 rounded-lg bg-white dark:bg-current/[0.06] px-3 py-2 text-sm font-semibold outline-none transition-all border border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary/30 focus:border-primary/40"><button onclick="prepVariantApproveRowEdit(' + idx + ')" class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold shadow-sm transition-all hover:brightness-110" title="Girilen değerle eşleştir">✓ Eşleştir</button>';
+                    } else {
+                        html += '<select id="var-name-' + idx + '" class="rounded-lg bg-white dark:bg-current/[0.06] px-2.5 py-2 text-xs font-semibold outline-none border border-gray-300 dark:border-gray-600"><option value="Renk">Renk</option><option value="Beden">Beden</option><option value="Numara">Numara</option></select><input type="text" id="var-edit-' + idx + '" placeholder="Değer..." class="w-24 rounded-lg bg-white dark:bg-current/[0.06] px-3 py-2 text-sm font-semibold outline-none border border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary/30 focus:border-primary/40"><button onclick="prepVariantManualApply(' + idx + ')" class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold shadow-sm transition-all hover:brightness-110" title="' + row.productCount + ' ürüne uygula">🔧 Uygula</button>';
+                    }
+                    html += '</div></div>';
+                });
+                flowEl.innerHTML = html;
+            }
+
+            var aiCount = varState.rows.filter(function(r) { return r.status === 'ai'; }).length;
+            var tipsHtml = '';
+            if (aiCount > 0) tipsHtml += '<li class="flex items-start gap-2"><span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current"></span>' + aiCount + ' varyant değeri için AI önerisi hazır — satırdaki ✓ Onayla ile tek tıkla uygulayın.</li>';
+            if (manualNeeded > 0) tipsHtml += '<li class="flex items-start gap-2"><span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current"></span>' + manualNeeded + ' kayıt eşleşme bekliyor — "AI ile Eşleştir" otomatik tespiti çalıştırır.</li>';
+            if (aiCount === 0 && manualNeeded === 0) tipsHtml += '<li class="flex items-start gap-2"><span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current"></span>Tüm varyantlar eşleşti. Yeni XML ürünleri geldiğinde öneriler burada listelenir.</li>';
+            tipsHtml += '<li class="flex items-start gap-2"><span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current"></span>Renk ve beden değerleri pazaryeri kurallarına göre otomatik normalize edilir.</li>';
+            document.getElementById('var-ai-tips').innerHTML = tipsHtml;
+        }
+
+        async function prepVariantApproveRow(idx) {
+            if (!prepVariantGuard()) return;
+            var row = prepVariantGetVisibleRows()[idx];
+            if (!row || row.productIds.length === 0) return;
+            var matches = row.productIds.map(function(pid) { return { productId: pid, variants: [{ name: row.name, value: row.value }] }; });
+            try {
+                var r = await api('/variants/bulk-match', { method: 'POST', body: { matches: matches } });
+                showToast(r.message || 'Eşleştirildi', 'success');
+                prepVariantFetchAll();
+            } catch(e) { showToast(e.message, 'error'); }
+        }
+
+        async function prepVariantApproveRowEdit(idx) {
+            if (!prepVariantGuard()) return;
+            var row = prepVariantGetVisibleRows()[idx];
+            var editEl = document.getElementById('var-edit-' + idx);
+            var editVal = editEl ? editEl.value.trim() : '';
+            if (!editVal) { showToast('Pazaryeri karşılığını yazın', 'warning'); return; }
+            if (!row || row.productIds.length === 0) return;
+            var matches = row.productIds.map(function(pid) { return { productId: pid, variants: [{ name: row.name, value: editVal }] }; });
+            try {
+                var r = await api('/variants/bulk-match', { method: 'POST', body: { matches: matches } });
+                showToast(r.message || 'Eşleştirildi', 'success');
+                prepVariantFetchAll();
+            } catch(e) { showToast(e.message, 'error'); }
+        }
+
+        async function prepVariantManualApply(idx) {
+            if (!prepVariantGuard()) return;
+            var nameEl = document.getElementById('var-name-' + idx);
+            var editEl = document.getElementById('var-edit-' + idx);
+            var name = nameEl ? nameEl.value : 'Renk';
+            var value = editEl ? editEl.value.trim() : '';
+            if (!value) { showToast('Varyant değeri yazın', 'warning'); return; }
+            var row = prepVariantGetVisibleRows()[idx];
+            if (!row || row.productIds.length === 0) {
+                try {
+                    var unmatched = await api('/variants/unmatched-products?limit=500');
+                    var detectedIds = {};
+                    varState.xmlVariantItems.forEach(function(i) { detectedIds[i.productId] = true; });
+                    var targetIds = (unmatched.items || []).map(function(p) { return p.id; }).filter(function(id) { return !detectedIds[id]; });
+                    if (targetIds.length === 0) { showToast('Uygulanacak ürün bulunamadı', 'warning'); return; }
+                    var matches = targetIds.map(function(pid) { return { productId: pid, variants: [{ name: name, value: value }] }; });
+                    var r = await api('/variants/bulk-match', { method: 'POST', body: { matches: matches } });
+                    showToast(r.message || name + ': ' + value + ' ' + targetIds.length + ' ürüne uygulandı', 'success');
+                    prepVariantFetchAll();
+                } catch(e) { showToast(e.message, 'error'); }
+            } else {
+                var matches = row.productIds.map(function(pid) { return { productId: pid, variants: [{ name: name, value: value }] }; });
+                try {
+                    var r = await api('/variants/bulk-match', { method: 'POST', body: { matches: matches } });
+                    showToast(r.message || 'Eşleştirildi', 'success');
+                    prepVariantFetchAll();
+                } catch(e) { showToast(e.message, 'error'); }
+            }
+        }
+
+        async function prepVariantMatchAll() {
+            if (!prepVariantGuard()) return;
+            var matches = varState.xmlVariantItems.filter(function(i) { return (i.detectedVariants || []).length > 0; }).map(function(i) {
+                return { productId: i.productId, variants: i.detectedVariants.map(function(d) { return { name: d.name, value: d.value }; }) };
+            });
+            if (matches.length === 0) { showToast('Eşleştirilecek tespit edilmiş varyant bulunamadı', 'warning'); return; }
+            varState.bulkRunning = true;
+            try {
+                var r = await api('/variants/bulk-match', { method: 'POST', body: { matches: matches } });
+                showToast(r.message || r.totalCreated + ' varyant eşleştirildi', 'success');
+                prepVariantFetchAll();
+            } catch(e) { showToast(e.message, 'error'); }
+            varState.bulkRunning = false;
+        }
+
+        async function prepVariantAiMatch() {
+            if (!prepVariantGuard()) return;
+            varState.aiRunning = true;
+            try {
+                var r = await api('/variants/auto-detect', { method: 'POST', body: {} });
+                showToast(r.message || r.totalDetected + ' varyant tespit edildi', 'success');
+                varState.step = 2;
+                prepVariantFetchAll();
+            } catch(e) { showToast(e.message, 'error'); }
+            varState.aiRunning = false;
+        }
+
+        async function prepVariantAutoMatchSelected() {
+            if (!prepVariantGuard()) return;
+            try {
+                var unmatched = await api('/variants/unmatched-products?limit=500');
+                var ids = (unmatched.items || []).map(function(p) { return p.id; });
+                if (ids.length === 0) { showToast('Eşleştirilecek ürün yok', 'warning'); return; }
+                var r = await api('/variants/auto-match', { method: 'POST', body: { productIds: ids } });
+                if (r.ok && r.preview && r.preview.length > 0) {
+                    var cr = await api('/variants/confirm-match', { method: 'POST', body: { matches: r.preview } });
+                    showToast((cr.totalUpdated || 0) + ' ürün otomatik eşleştirildi', 'success');
+                } else {
+                    showToast('Otomatik eşleştirilecek ürün bulunamadı', 'warning');
+                }
+                prepVariantFetchAll();
+            } catch(e) { showToast(e.message, 'error'); }
+        }
+
+        async function prepVariantLoadScreen() {
+            try {
+                var d = await api('/variants/screen?page=' + varState.screenPage + '&limit=20');
+                varState.screenItems = d.items || [];
+                varState.screenTotal = d.total || 0;
+                prepVariantRenderScreen();
+            } catch(e) {}
+        }
+
+        function prepVariantRenderScreen() {
+            var body = document.getElementById('var-screen-body');
+            var items = varState.screenItems;
+            if (!items || items.length === 0) {
+                body.innerHTML = '<tr><td colspan="8" class="text-center py-12 text-sm text-current/50">İstisna bulunamadı</td></tr>';
+                return;
+            }
+            var html = '';
+            items.forEach(function(p) {
+                var statusLabel = p.status === 'AUTO_ACCEPTED' ? 'Otomatik Kabul' : p.status === 'AUTO_SUGGEST' ? 'Onay Bekliyor' : 'Manuel İnceleme';
+                var statusIcon = p.status === 'AUTO_ACCEPTED' ? '⚠️' : p.status === 'AUTO_SUGGEST' ? '📋' : '📋';
+                var checked = varState.screenSelected.has(p.id) ? 'checked' : '';
+                html += '<tr class="border-b border-current/12 dark:border-current/18 transition-colors hover:bg-current/[0.04] dark:hover:bg-current/[0.06]">';
+                html += '<td class="px-3 py-2.5 border-r border-current/12 dark:border-current/18"><input type="checkbox" ' + checked + ' onchange="prepVariantScreenToggle(\'' + p.id + '\')" class="rounded border-current"></td>';
+                html += '<td class="px-3 py-2.5 border-r border-current/12 dark:border-current/18"><div class="flex flex-col"><span class="text-sm font-medium truncate max-w-[190px]" title="' + esc(p.title || '') + '">' + esc(p.title || p.xmlKey) + '</span><code class="text-[10px] font-mono mt-0.5">' + esc(p.sku || p.xmlKey || '') + '</code></div></td>';
+                html += '<td class="px-3 py-2.5 border-r border-current/12 dark:border-current/18"><span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium">' + statusIcon + ' ' + statusLabel + '</span></td>';
+                html += '<td class="px-3 py-2.5 border-r border-current/12 dark:border-current/18"><span class="text-xs font-mono">%' + (p.confidence || 0) + '</span></td>';
+                html += '<td class="px-3 py-2.5 border-r border-current/12 dark:border-current/18">' + (p.hasColor ? '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px]">✓</span>' : '<span class="text-xs text-current/40">-</span>') + '</td>';
+                html += '<td class="px-3 py-2.5 border-r border-current/12 dark:border-current/18">' + (p.hasSize ? '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px]">✓</span>' : '<span class="text-xs text-current/40">-</span>') + '</td>';
+                html += '<td class="px-3 py-2.5 border-r border-current/12 dark:border-current/18">' + (p.hasNumber ? '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px]">✓</span>' : '<span class="text-xs text-current/40">-</span>') + '</td>';
+                html += '<td class="px-3 py-2.5"><div class="flex gap-1"><button onclick="prepVariantScreenAutoMatch(\'' + p.id + '\')" class="rounded px-2 py-1 text-[10px] font-medium hover:bg-current/10 transition-all">🤖 Oto</button><button onclick="prepVariantScreenApprove(\'' + p.id + '\')" class="rounded px-2 py-1 text-[10px] font-medium hover:bg-current/10 transition-all">✓ Onayla</button></div></td>';
+                html += '</tr>';
+            });
+            body.innerHTML = html;
+
+            var totalPages = Math.ceil(varState.screenTotal / 20);
+            var pgEl = document.getElementById('var-screen-pagination');
+            pgEl.innerHTML = '<div class="text-xs">Toplam ' + varState.screenTotal + ' ürün · Sayfa ' + varState.screenPage + '/' + totalPages + '</div><div class="flex items-center gap-1"><button onclick="prepVariantScreenPage(1)" class="px-2 py-1 text-xs rounded hover:bg-current/10" ' + (varState.screenPage <= 1 ? 'disabled' : '') + '>««</button><button onclick="prepVariantScreenPage(' + (varState.screenPage - 1) + ')" class="px-2 py-1 text-xs rounded hover:bg-current/10" ' + (varState.screenPage <= 1 ? 'disabled' : '') + '>«</button><span class="px-3 py-1 text-xs">' + varState.screenPage + ' / ' + totalPages + '</span><button onclick="prepVariantScreenPage(' + (varState.screenPage + 1) + ')" class="px-2 py-1 text-xs rounded hover:bg-current/10" ' + (varState.screenPage >= totalPages ? 'disabled' : '') + '>»</button><button onclick="prepVariantScreenPage(' + totalPages + ')" class="px-2 py-1 text-xs rounded hover:bg-current/10" ' + (varState.screenPage >= totalPages ? 'disabled' : '') + '>»»</button></div>';
+        }
+
+        function prepVariantScreenToggle(id) {
+            if (varState.screenSelected.has(id)) varState.screenSelected.delete(id);
+            else varState.screenSelected.add(id);
+        }
+
+        function prepVariantScreenToggleAll() {
+            var all = document.getElementById('var-screen-selectall').checked;
+            if (all) { varState.screenItems.forEach(function(p) { varState.screenSelected.add(p.id); }); }
+            else { varState.screenSelected.clear(); }
+            prepVariantRenderScreen();
+        }
+
+        function prepVariantScreenPage(page) {
+            varState.screenPage = page;
+            prepVariantLoadScreen();
+        }
+
+        async function prepVariantScreenAutoMatch(id) {
+            try {
+                var r = await api('/variants/auto-match', { method: 'POST', body: { productIds: [id] } });
+                if (r.ok && r.preview && r.preview.length > 0) {
+                    var cr = await api('/variants/confirm-match', { method: 'POST', body: { matches: r.preview } });
+                    showToast((cr.totalUpdated || 0) + ' ürün eşleştirildi', 'success');
+                } else { showToast('Eşleştirilemedi', 'warning'); }
+                prepVariantLoadScreen();
+                prepVariantFetchAll();
+            } catch(e) { showToast(e.message, 'error'); }
+        }
+
+        async function prepVariantScreenApprove(id) {
+            try {
+                var r = await api('/variants/approve', { method: 'POST', body: { productIds: [id] } });
+                showToast((r.updated || 0) + ' ürün onaylandı', 'success');
+                prepVariantLoadScreen();
+                prepVariantFetchAll();
+            } catch(e) { showToast(e.message, 'error'); }
+        }
+
+        async function prepVariantLogs() {
+            try {
+                var d = await api('/variants/logs?limit=20');
+                var el = document.getElementById('var-logs');
+                if (!d.items || d.items.length === 0) { el.innerHTML = '<p class="text-xs text-current/50">Geçmiş işlem yok</p>'; return; }
+                var html = '';
+                d.items.forEach(function(l) {
+                    html += '<div class="flex items-center gap-2 rounded-lg px-3 py-1.5 bg-current/5"><span class="font-mono text-[10px]">' + esc(l.action) + '</span><span class="flex-1 truncate">' + esc(l.details || '') + '</span><span class="whitespace-nowrap text-[10px]">' + fmtDate(l.createdAt) + '</span></div>';
+                });
+                el.innerHTML = html;
+            } catch(e) {}
+        }
+
+        function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+        /* ===================== ÜRÜN HAZIRLAMA: LİSTELEME ===================== */
+
+var prepListState = { templates: [], rules: [], logs: [], forbidden: [], xmlSources: [], marketplaces: [], xmlSourceId: '', marketplaceId: '' };
+
+function prepListGuard() {
+    var ready = isContextValid();
+    var guardEl = document.getElementById('li-guard-warn');
+    var mainEl = document.getElementById('li-main-content');
+    if (guardEl) guardEl.classList.toggle('hidden', ready);
+    if (mainEl) mainEl.classList.toggle('hidden', !ready);
+    return ready;
+}
+
+function prepListOnSourceChange() {
+    // Use global context instead
+    prepListGuard();
+    if (prepListGuard()) prepListingsLoadData();
+}
+
+function prepListOnMpChange() {
+    // Use global context instead
+    prepListGuard();
+    if (prepListGuard()) prepListingsLoadData();
+}
+
+async function prepListLoadSelects() {
+    try {
+        var [xsRes, mpRes] = await Promise.all([api('/xml-sources'), api('/marketplaces')]);
+        prepListState.xmlSources = (xsRes && xsRes.items) || [];
+        prepListState.marketplaces = (mpRes && mpRes.items) || [];
+        var srcEl = document.getElementById('li-xml-source');
+        var mpEl = document.getElementById('li-marketplace');
+        if (srcEl) {
+            var html = '<option value="">📦 Tedarikçi / XML Seçiniz...</option>';
+            prepListState.xmlSources.forEach(function(s) { html += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; });
+            srcEl.innerHTML = html;
+        }
+        if (mpEl) {
+            var html2 = '<option value="">🛒 Pazaryeri Seçiniz...</option>';
+            prepListState.marketplaces.forEach(function(m) { html2 += '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>'; });
+            mpEl.innerHTML = html2;
+        }
+    } catch (e) { /* silent */ }
+}
+
+async function prepListingsLoad() {
+    if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); clearAllPageData(); return; }
+    prepListGuard();
+    if (prepListGuard()) prepListingsLoadData();
+}
+
+async function prepListingsLoadData() {
+    prepListStats();
+    prepListTable();
+    prepListFillSelects();
+    prepListLoadMarketplaces();
+    prepListLoadRules();
+    prepListLoadLogs();
+    prepListLoadForbidden();
+}
+
+async function prepListStats() {
+    try {
+        var s = await api('/listings/stats/summary');
+        document.getElementById('li-stat-total').textContent = fmt(s.total || 0);
+        document.getElementById('li-stat-active').textContent = fmt(s.active || 0);
+        document.getElementById('li-stat-inactive').textContent = fmt(s.inactive || 0);
+        document.getElementById('li-stat-rules').textContent = fmt((s.byMarketplace || []).length);
+    } catch (e) { console.error('prepListStats error:', e); }
+    try {
+        var l = await api('/listing-v2/logs');
+        document.getElementById('li-stat-logs').textContent = fmt((l.items || []).length);
+    } catch (e) { console.error('prepListLogs error:', e); }
+}
+
+async function prepListTable() {
+    try {
+        var d = await api('/listings');
+        prepListState.templates = d.items || [];
+        var el = document.getElementById('li-tbody');
+        if (prepListState.templates.length === 0) { el.innerHTML = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="8">Şablon yok</td></tr>'; return; }
+        var html = '';
+        prepListState.templates.forEach(function (t) {
+            var rules = [];
+            try { rules = JSON.parse(t.priceRangeRules || '[]'); } catch(e) {}
+            var ruleCount = rules.length;
+            html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-all">'
+                + '<td class="py-3 px-6 font-semibold text-slate-700 dark:text-slate-300">' + escapeHtml(t.name) + '</td>'
+                + '<td class="py-3 px-6 text-xs text-slate-500">' + escapeHtml((t.marketplace && t.marketplace.name) || 'Tümü') + '</td>'
+                + '<td class="py-3 px-6 text-xs text-slate-500">' + (t.priceSource || 'XML_PURCHASE') + '</td>'
+                + '<td class="py-3 px-6 text-xs font-bold text-slate-600 dark:text-slate-300">x' + t.priceMultiplier + '</td>'
+                + '<td class="py-3 px-6 text-xs text-slate-500">' + (t.commissionRate != null ? '%' + t.commissionRate : '—') + '</td>'
+                + '<td class="py-3 px-6 text-xs text-slate-500">' + ruleCount + ' kural</td>'
+                + '<td class="py-3 px-6">' + (t.active ? '<span class="text-[10px] font-bold px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">Aktif</span>' : '<span class="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-500/10 text-slate-500">Pasif</span>') + '</td>'
+                + '<td class="py-3 px-6"><div class="flex items-center gap-1.5">'
+                + '<button onclick="prepListApplyAll(\'' + t.id + '\')" title="Tüm ürünlere uygula" class="w-7 h-7 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-all"><i class="fa-solid fa-wand-magic-sparkles text-xs"></i></button>'
+                + '<button onclick="prepListDup(\'' + t.id + '\')" title="Kopyala" class="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-slate-700 transition-all"><i class="fa-solid fa-copy text-xs"></i></button>'
+                + '<button onclick="prepListDel(\'' + t.id + '\')" title="Sil" class="w-7 h-7 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-all"><i class="fa-solid fa-trash text-xs"></i></button>'
+                + '</div></td></tr>';
+        });
+        el.innerHTML = html;
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function prepListFillSelects() {
+    try {
+        var d = await api('/listings');
+        var opts = '';
+        (d.items || []).forEach(function (t) { opts += '<option value="' + t.id + '">' + escapeHtml(t.name) + '</option>'; });
+        document.getElementById('li-preview-template').innerHTML = opts;
+        document.getElementById('li-match-template').innerHTML = opts;
+    } catch (e) { }
+}
+
+async function prepListPreview() {
+    var id = document.getElementById('li-preview-template').value;
+    var price = document.getElementById('li-preview-price').value;
+    if (!id) { showToast('Şablon seçin', 'error'); return; }
+    try {
+        var r = await api('/listings/' + id + '/price-preview', { method: 'POST', body: { purchasePrice: Number(price) || 100 } });
+        var box = document.getElementById('li-preview-result');
+        box.classList.remove('hidden');
+        document.getElementById('li-pv-final').textContent = fmt(r.finalPrice) + ' TL';
+        document.getElementById('li-pv-profit').textContent = fmt(r.profit) + ' TL';
+        document.getElementById('li-pv-rate').textContent = '%' + r.profitRate;
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function prepListNew() {
+    var name = prompt('Şablon adı:', 'Pazaryeri Şablonu');
+    if (!name) return;
+    var mult = prompt('Fiyat çarpanı (örn: 1.35):', '1.35');
+    var margin = prompt('Kâr marjı % (örn: 25):', '25');
+    try {
+        await api('/listings', {
+            method: 'POST',
+            body: { name: name, priceMultiplier: Number(mult) || 1, priceRangeRules: JSON.stringify([{ minPrice: 0, maxPrice: 0, profitMargin: Number(margin) || 0, fixedAmount: 0, rounding: '0.90' }]) }
+        });
+        showToast('Şablon oluşturuldu', 'success');
+        prepListingsLoad();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function prepListApplyAll(id) {
+    if (!confirm('Fiyat kuralları tüm ürünlere uygulanacak. Devam edilsin mi?')) return;
+    try {
+        var r = await api('/listings/' + id + '/apply-all', { method: 'POST', body: {} });
+        showToast(r.message || 'Uygulandı', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function prepListDup(id) {
+    try {
+        await api('/listings/' + id + '/duplicate', { method: 'POST', body: {} });
+        showToast('Kopya oluşturuldu', 'success');
+        prepListingsLoad();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function prepListDel(id) {
+    if (!confirm('Şablon silinecek. Emin misiniz?')) return;
+    try {
+        await api('/listings/' + id, { method: 'DELETE' });
+        showToast('Şablon silindi', 'success');
+        prepListingsLoad();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function prepListExport() {
+    try {
+        var d = await api('/listings/export/all');
+        var blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = 'listing-templates-export.json'; a.click();
+        URL.revokeObjectURL(url);
+        showToast(fmt((d.items || []).length) + ' şablon dışa aktarıldı', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+// Tab switching
+function prepListTab(tab) {
+    document.querySelectorAll('.li-tab').forEach(function(b) { b.className = b.className.replace('bg-primary text-white', ''); });
+    document.getElementById('li-tab-' + tab).className += ' bg-primary text-white';
+    ['templates', 'rules', 'logs', 'forbidden'].forEach(function(t) {
+        document.getElementById('li-panel-' + t).classList.toggle('hidden', t !== tab);
+    });
+}
+
+// Marketplaces
+async function prepListLoadMarketplaces() {
+    try {
+        var d = await api('/marketplaces');
+        var opts = '';
+        (d.items || []).forEach(function (m) { opts += '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>'; });
+        var el = document.getElementById('li-rules-mp');
+        if (el) el.innerHTML = '<option value="">Tüm Pazaryerleri</option>' + opts;
+    } catch (e) { }
+}
+
+// Price Rules V2
+async function prepListLoadRules() {
+    var mpId = (document.getElementById('li-rules-mp') || {}).value || '';
+    try {
+        var url = '/listing-v2/rules' + (mpId ? '?marketplaceId=' + mpId : '');
+        var d = await api(url);
+        prepListState.rules = d.items || [];
+        var el = document.getElementById('li-rules-table');
+        if (prepListState.rules.length === 0) { el.innerHTML = '<p class="text-xs text-slate-400 text-center py-8">Henüz fiyat kuralı yok</p>'; return; }
+        var html = '<table class="w-full text-sm"><thead class="bg-slate-50 dark:bg-slate-800/40 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"><tr><th class="py-3 px-4">Pazaryeri</th><th class="py-3 px-4">Hedef</th><th class="py-3 px-4 text-right">Min ₺</th><th class="py-3 px-4 text-right">Max ₺</th><th class="py-3 px-4 text-right">Kar %</th><th class="py-3 px-4">Yuvarlama</th><th class="py-3 px-4">Durum</th><th class="py-3 px-4">Öncelik</th><th class="py-3 px-4 text-center">İşlem</th></tr></thead><tbody>';
+        prepListState.rules.forEach(function (r) {
+            var mp = (prepListState.marketplaces || []).find(function(m) { return m.id === r.marketplaceId; });
+            html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-all">'
+                + '<td class="py-3 px-4 text-xs">' + (mp ? mp.name : r.marketplaceId.slice(0, 8)) + '</td>'
+                + '<td class="py-3 px-4 text-xs">' + (r.productId ? 'Ürün' : r.categoryId ? 'Kategori' : 'Genel') + '</td>'
+                + '<td class="py-3 px-4 text-xs text-right">' + r.minPrice + '</td>'
+                + '<td class="py-3 px-4 text-xs text-right">' + (r.maxPrice >= 999999 ? '∞' : r.maxPrice) + '</td>'
+                + '<td class="py-3 px-4 text-xs text-right font-bold">' + r.profitMargin + '%</td>'
+                + '<td class="py-3 px-4 text-xs">' + r.rounding + '</td>'
+                + '<td class="py-3 px-4 text-xs">' + (r.active ? '<span class="text-emerald-600 dark:text-emerald-400">Aktif</span>' : '<span class="text-slate-500">Pasif</span>') + '</td>'
+                + '<td class="py-3 px-4 text-xs text-center">' + r.priority + '</td>'
+                + '<td class="py-3 px-4 text-xs text-center"><button onclick="prepListDelRule(\'' + r.id + '\')" class="text-red-500 hover:text-red-700"><i class="fa-solid fa-trash text-xs"></i></button></td>'
+                + '</tr>';
+        });
+        html += '</tbody></table>';
+        el.innerHTML = html;
+    } catch (e) { }
+}
+
+async function prepListNewRule() {
+    var mpId = (document.getElementById('li-rules-mp') || {}).value;
+    if (!mpId) { showToast('Pazaryeri seçin', 'error'); return; }
+    var minP = prompt('Min fiyat (TL):', '0');
+    var maxP = prompt('Max fiyat (TL, 0=sınırsız):', '0');
+    var margin = prompt('Kâr marjı %:', '75');
+    var round = prompt('Yuvarlama (0.90, 9.90, nearest, none):', '0.90');
+    try {
+        await api('/listing-v2/rules', { method: 'POST', body: { marketplaceId: mpId, minPrice: Number(minP) || 0, maxPrice: Number(maxP) || 999999, profitMargin: Number(margin) || 75, rounding: round || '0.90', applyVat: true, active: true, priority: 3 } });
+        showToast('Kural oluşturuldu', 'success');
+        prepListLoadRules();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function prepListDelRule(id) {
+    if (!confirm('Kural silinecek. Emin misiniz?')) return;
+    try {
+        await api('/listing-v2/rules/' + id, { method: 'DELETE' });
+        showToast('Kural silindi', 'success');
+        prepListLoadRules();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function prepListV2Calc() {
+    var price = Number(document.getElementById('li-v2-price').value) || 100;
+    var vat = Number(document.getElementById('li-v2-vat').value) || 20;
+    var margin = Number(document.getElementById('li-v2-margin').value) || 75;
+    var rounding = document.getElementById('li-v2-rounding').value;
+    try {
+        var r = await api('/listing-v2/calculate', { method: 'POST', body: { purchasePrice: price, vatRate: vat, profitMargin: margin, rounding: rounding, applyVat: true } });
+        var el = document.getElementById('li-v2-result');
+        el.classList.remove('hidden');
+        el.innerHTML = '<div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 space-y-1.5">'
+            + '<div class="flex justify-between text-sm"><span class="text-slate-500 dark:text-slate-400">KDV Dahil</span><b class="text-emerald-600 dark:text-emerald-400">' + fmt(r.vatIncluded) + ' TL</b></div>'
+            + '<div class="flex justify-between text-xs text-slate-500 dark:text-slate-400"><span>Yuvarlama Öncesi</span><span>' + fmt(r.beforeRounding) + ' TL</span></div>'
+            + '<div class="flex justify-between text-sm font-bold"><span class="text-slate-700 dark:text-slate-200">Nihai Satış Fiyatı</span><b class="text-emerald-600 dark:text-emerald-400">' + fmt(r.finalPrice) + ' TL</b></div>'
+            + '</div>';
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+// Logs
+async function prepListLoadLogs() {
+    try {
+        var d = await api('/listing-v2/logs');
+        prepListState.logs = d.items || [];
+        var el = document.getElementById('li-logs-tbody');
+        if (prepListState.logs.length === 0) { el.innerHTML = '<tr><td class="py-10 px-4 text-center text-slate-400" colspan="7">Henüz işlem yok</td></tr>'; return; }
+        var html = '';
+        prepListState.logs.forEach(function (l) {
+            var date = l.createdAt ? new Date(l.createdAt).toLocaleString('tr-TR') : '—';
+            html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-all">'
+                + '<td class="py-3 px-4 text-xs text-slate-500">' + date + '</td>'
+                + '<td class="py-3 px-4 text-xs font-semibold text-slate-700 dark:text-slate-300">' + escapeHtml(l.productId.slice(0, 8)) + '...</td>'
+                + '<td class="py-3 px-4 text-xs text-slate-500">' + escapeHtml(l.marketplaceId.slice(0, 8)) + '...</td>'
+                + '<td class="py-3 px-4 text-xs text-slate-500">' + (l.ruleType || 'NONE') + '</td>'
+                + '<td class="py-3 px-4 text-xs text-right">' + fmt(l.purchasePrice) + ' TL</td>'
+                + '<td class="py-3 px-4 text-xs text-right font-bold text-emerald-600 dark:text-emerald-400">' + fmt(l.calculatedPrice) + ' TL</td>'
+                + '<td class="py-3 px-4 text-xs text-center">' + (l.status === 'SUCCESS' ? '<span class="text-emerald-600">✓</span>' : '<span class="text-red-500">✗</span>') + '</td>'
+                + '</tr>';
+        });
+        el.innerHTML = html;
+    } catch (e) { }
+}
+
+// Forbidden Words
+async function prepListLoadForbidden() {
+    try {
+        var d = await api('/listings/forbidden-words/list');
+        prepListState.forbidden = d.items || [];
+        var el = document.getElementById('li-fw-list');
+        if (prepListState.forbidden.length === 0) { el.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Henüz yasaklı kelime yok</p>'; return; }
+        var html = '';
+        prepListState.forbidden.forEach(function (w) {
+            html += '<div class="flex items-center justify-between rounded-xl px-4 py-2.5 bg-slate-50 dark:bg-slate-800/40">'
+                + '<span class="text-sm font-medium text-slate-700 dark:text-slate-300">' + escapeHtml(w.word) + '</span>'
+                + '<button onclick="prepListDelForbidden(\'' + w.id + '\')" class="text-red-500 hover:text-red-700 text-xs"><i class="fa-solid fa-trash"></i></button>'
+                + '</div>';
+        });
+        el.innerHTML = html;
+    } catch (e) { }
+}
+
+async function prepListAddForbidden() {
+    var input = document.getElementById('li-fw-word');
+    var word = (input.value || '').trim();
+    if (!word) { showToast('Kelime girin', 'error'); return; }
+    try {
+        await api('/listings/forbidden-words', { method: 'POST', body: { word: word } });
+        input.value = '';
+        showToast('Kelime eklendi', 'success');
+        prepListLoadForbidden();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function prepListDelForbidden(id) {
+    try {
+        await api('/listings/forbidden-words/' + id, { method: 'DELETE' });
+        showToast('Kelime silindi', 'success');
+        prepListLoadForbidden();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+// Matching products
+document.getElementById('li-match-template').addEventListener('change', function () {
+    var id = this.value;
+    if (!id) { document.getElementById('li-match-list').innerHTML = '<p class="text-xs text-slate-400">Şablon seçin...</p>'; return; }
+    api('/listings/' + id + '/matching-products').then(function (d) {
+        var el = document.getElementById('li-match-list');
+        if (!d.items || d.items.length === 0) { el.innerHTML = '<p class="text-xs text-slate-400">Uygun ürün yok</p>'; return; }
+        var html = '';
+        d.items.slice(0, 30).forEach(function (p) {
+            html += '<div class="flex items-center gap-3 rounded-xl px-3 py-2 bg-slate-50 dark:bg-slate-800/40">'
+                + '<div class="flex-1 min-w-0"><div class="truncate text-slate-700 dark:text-slate-300 text-sm">' + escapeHtml(p.title || p.xmlKey) + '</div>'
+                + '<div class="text-[10px] text-slate-400 font-mono">' + escapeHtml(p.sku || p.barcode || p.xmlKey) + '</div></div>'
+                + '<div class="text-xs font-bold text-slate-600 dark:text-slate-300">' + fmt(p.salePrice) + ' TL</div></div>';
+        });
+        el.innerHTML = html;
+        showToast(fmt(d.total) + ' uygun ürün bulundu', 'success');
+    }).catch(function (e) { showToast(e.message, 'error'); });
+});
+
+// Rules mp change
+document.getElementById('li-rules-mp').addEventListener('change', function() { prepListLoadRules(); });
+document.getElementById('global-search-input').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') globalSearch();
+        });
+
+        window.addEventListener('DOMContentLoaded', function () {
+            var savedTheme = localStorage.getItem('theme') || 'dark';
+            var savedColor = localStorage.getItem('primaryColor') || '#6366f1';
+            var savedHover = localStorage.getItem('primaryHover') || '#4f46e5';
+            var savedDarkBg = localStorage.getItem('darkBg') || '#090d16';
+            var savedDarkPanel = localStorage.getItem('darkPanel') || '#111827';
+
+            if (savedTheme === 'light') {
+                document.documentElement.classList.remove('dark');
+                var icon = document.getElementById('theme-icon');
+                if (icon) icon.classList.replace('fa-moon', 'fa-sun');
+            } else {
+                document.documentElement.classList.add('dark');
+                var iconD = document.getElementById('theme-icon');
+                if (iconD) iconD.classList.replace('fa-sun', 'fa-moon');
+            }
+
+            setThemeColor(savedColor, savedHover);
+            setDarkBg(savedDarkBg, savedDarkPanel);
+
+            var savedDensity = localStorage.getItem('uiDensity') || 'comfortable';
+            setDensity(savedDensity);
+            var savedPanelStyle = localStorage.getItem('uiPanelStyle') || 'standard';
+            setPanelStyle(savedPanelStyle);
+
+            updateDashboardLastUpdate();
+            setInterval(updateDashboardLastUpdate, 1000);
+
+            checkAuth();
+        });
+    
+;

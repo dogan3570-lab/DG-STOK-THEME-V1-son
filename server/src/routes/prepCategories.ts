@@ -6,9 +6,29 @@ import { matchCategoriesWithAI, type ProductForMatch, type CategoryCandidate } f
 
 const router = Router();
 
-// ==================== LIST (PUBLIC) ====================
-router.get('/', async (_req: Request, res: Response) => {
+// Query parametresi çiftlenirse (array) ilk değeri güvenle alır
+function readQueryValue(value: unknown): string | null {
+  if (Array.isArray(value)) return value.length > 0 ? String(value[0]) : null;
+  return value ? String(value) : null;
+}
+
+// ==================== LIST (AUTH REQUIRED) ====================
+router.get('/', requireAuth, async (req: Request, res: Response) => {
   try {
+    const xmlSourceId = readQueryValue(req.query?.xmlSourceId);
+
+    // CONTEXT-001: xmlSourceId verildiyse o kaynağa ait ürünlerin kategorilerini döndür
+    if (xmlSourceId) {
+      const productCategories = await prisma.product.findMany({
+        where: { xmlSourceId, categoryId: { not: null } },
+        select: { categoryId: true },
+        distinct: ['categoryId'],
+      });
+      const categoryIds = productCategories.map((p) => p.categoryId).filter((id): id is string => Boolean(id));
+      const items = await prisma.category.findMany({ where: { id: { in: categoryIds } }, orderBy: { name: 'asc' } });
+      return res.json({ items });
+    }
+
     const items = await prisma.category.findMany({ orderBy: { name: 'asc' } });
     return res.json({ items });
   } catch (error) {
@@ -47,7 +67,7 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
 router.get('/xml-categories', requireAuth, async (req: Request, res: Response) => {
   try {
     const search = String(req.query?.search ?? '').trim();
-    const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
+    const xmlSourceId = readQueryValue(req.query?.xmlSourceId);
     const where: any = { supplierCategory: { not: null } };
     if (search) where.supplierCategory = { contains: search };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
@@ -87,7 +107,7 @@ router.get('/xml-categories', requireAuth, async (req: Request, res: Response) =
 router.get('/tree', requireAuth, async (req: Request, res: Response) => {
   try {
     const search = String(req.query?.search ?? '').trim();
-    const marketplaceId = req.query?.marketplaceId ? String(req.query.marketplaceId) : null;
+    const marketplaceId = readQueryValue(req.query?.marketplaceId);
     const where: any = {};
     if (search) where.name = { contains: search };
 
@@ -232,7 +252,7 @@ const autoMatchState: { running: boolean; status: string; processedProducts: num
   running: false, status: 'idle', processedProducts: 0, totalProducts: 0, matchedCount: 0, lastError: null,
 };
 
-async function runAutoMatch() {
+async function runAutoMatch(xmlSourceId: string | null = null) {
   try {
     autoMatchState.status = 'running';
     const systemCategories = await prisma.category.findMany();
@@ -240,7 +260,9 @@ async function runAutoMatch() {
     const exactIndex: Record<string, { id: string; name: string }> = {};
     for (const cat of systemCategories) { const n = normalize(cat.name); if (n && !exactIndex[n]) exactIndex[n] = { id: cat.id, name: cat.name }; }
 
-    const distinctCats = await prisma.product.groupBy({ by: ['supplierCategory'], where: { categoryMatch: false }, _count: { id: true } });
+    const where: any = { categoryMatch: false };
+    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
+    const distinctCats = await prisma.product.groupBy({ by: ['supplierCategory'], where, _count: { id: true } });
     autoMatchState.totalProducts = distinctCats.reduce((s, r) => s + r._count.id, 0);
     autoMatchState.processedProducts = 0;
     autoMatchState.matchedCount = 0;
@@ -256,7 +278,7 @@ async function runAutoMatch() {
       else if (normLeaf && exactIndex[normLeaf]) bestId = exactIndex[normLeaf].id;
       if (bestId) {
         await prisma.product.updateMany({
-          where: { supplierCategory: row.supplierCategory, categoryMatch: false },
+          where: { supplierCategory: row.supplierCategory, categoryMatch: false, ...(xmlSourceId ? { xmlSourceId } : {}) },
           data: { categoryId: bestId, categoryMatch: true, matchedBy: 'auto', lastMatchDate: new Date(), aiSuggestedCategoryId: bestId, aiScore: 1.0 },
         });
         autoMatchState.matchedCount += row._count.id;
@@ -279,7 +301,8 @@ router.post('/auto-match-all/start', requireAuth, async (req: Request, res: Resp
     autoMatchState.processedProducts = 0;
     autoMatchState.matchedCount = 0;
     autoMatchState.lastError = null;
-    void runAutoMatch();
+    const { xmlSourceId } = (req.body || {}) as { xmlSourceId?: string };
+    void runAutoMatch(xmlSourceId || null);
     return res.json({ ok: true, message: 'Otomatik eşleştirme başlatıldı', progress: { ...autoMatchState } });
   } catch (error) {
     return res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Otomatik eşleştirme başlatılamadı' } });
@@ -560,7 +583,7 @@ router.get('/products', requireAuth, async (req: Request, res: Response) => {
     const page = parseInt(String(req.query.page || '1'));
     const limit = parseInt(String(req.query.limit || '50'));
     const search = String(req.query.search || '').trim();
-    const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
+    const xmlSourceId = readQueryValue(req.query?.xmlSourceId);
     const uncategorized = req.query?.uncategorized === 'true';
     const categoryIdParam = req.query?.categoryId ? String(req.query.categoryId) : null;
     const status = req.query?.status ? String(req.query.status) : null;

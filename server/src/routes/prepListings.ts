@@ -275,9 +275,18 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, 
 
 router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    await prisma.listingTemplate.delete({ where: { id: String(req.params.id) } });
+    const id = String(req.params.id);
+    const existing = await prisma.listingTemplate.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Şablon bulunamadı' } });
+    await prisma.listingTemplate.delete({ where: { id } });
     return res.json({ ok: true });
-  } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
+  } catch (error: any) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Şablon bulunamadı' } });
+    }
+    console.error('Error deleting listing template:', error);
+    return res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to delete listing template' } });
+  }
 });
 
 // ==================== ŞABLON İŞLEMLERİ ====================
@@ -430,7 +439,10 @@ router.post('/:id/apply-all', requireAuth, requireRole(['ADMIN', 'OPERATOR']), a
     if (!template) return res.status(404).json({ ok: false, error: 'Şablon bulunamadı' });
     const rules: Array<{ minPrice: number; maxPrice: number; profitMargin: number; fixedAmount: number; rounding: string }> = template.priceRangeRules ? JSON.parse(template.priceRangeRules) : [];
     if (rules.length === 0) return res.status(400).json({ ok: false, error: 'Fiyat kuralı bulunamadı' });
-    const products = await prisma.product.findMany({ where: { status: { not: 'ERROR' }, purchasePrice: { not: null, gt: 0 } }, select: { id: true, purchasePrice: true, salePrice: true } });
+    const { xmlSourceId } = (req.body || {}) as { xmlSourceId?: string };
+    const productWhere: any = { status: { not: 'ERROR' }, purchasePrice: { not: null, gt: 0 } };
+    if (xmlSourceId) productWhere.xmlSourceId = xmlSourceId;
+    const products = await prisma.product.findMany({ where: productWhere, select: { id: true, purchasePrice: true, salePrice: true } });
     let updatedCount = 0;
     const batchSize = 100;
     for (let i = 0; i < products.length; i += batchSize) {

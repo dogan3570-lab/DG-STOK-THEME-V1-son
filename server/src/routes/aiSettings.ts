@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
 import { encryptApiKey } from '../services/crypto.ts';
-import { getAllProviders, testProvider } from '../services/aiGateway.ts';
+import { getAllProviders, testProvider, getOpenRouterFreeModels } from '../services/aiGateway.ts';
 
 const router = Router();
 
@@ -46,6 +46,47 @@ router.get('/', requireAuth, async (_req: Request, res: Response) => {
   } catch (error) {
     console.error('[ai-settings] GET error:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'AI ayarları alınamadı' } });
+  }
+});
+
+// GET /ai-settings/openrouter/models — Gerçek OpenRouter katalogundan free modeller
+router.get('/openrouter/models', requireAuth, requireRole(['ADMIN']), async (_req: Request, res: Response) => {
+  try {
+    const items = await getOpenRouterFreeModels();
+    res.json({ items });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : 'Katalog alınamadı';
+    const status = msg.includes('yapılandırılmamış') ? 400 : 502;
+    res.status(status).json({ ok: false, error: { code: 'OPENROUTER_CATALOG_FAILED', message: msg } });
+  }
+});
+
+// DELETE /ai-settings/:provider/key — API key sil (credential DB'den kaldırılır)
+router.delete('/:provider/key', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
+  try {
+    const provider = String(req.params.provider);
+    const existing = await prisma.aIProviderConfig.findUnique({ where: { provider } });
+    if (!existing) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Sağlayıcı bulunamadı' } });
+
+    await prisma.aIProviderConfig.update({
+      where: { provider },
+      data: { apiKeyEncrypted: null, apiKeyIv: null, apiKeyTag: null, lastStatus: 'unknown', lastError: null },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        action: 'AI_PROVIDER_KEY_DELETE',
+        entity: 'ai_provider',
+        entityId: existing.id,
+        details: `${existing.displayName} API key silindi`,
+        actorUserId: (req as any).actor?.userId || null,
+      },
+    });
+
+    res.json({ ok: true, message: 'API key silindi' });
+  } catch (error) {
+    console.error('[ai-settings] DELETE key error:', error);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'API key silinemedi' } });
   }
 });
 
@@ -139,7 +180,8 @@ router.put('/:provider', requireAuth, requireRole(['ADMIN']), async (req: Reques
 router.post('/:provider/test', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
     const provider = String(req.params.provider);
-    const result = await testProvider(provider);
+    const modelOverride = typeof req.body?.model === 'string' && req.body.model.trim().length > 0 ? req.body.model.trim() : undefined;
+    const result = await testProvider(provider, modelOverride);
     res.json(result);
   } catch (error) {
     console.error('[ai-settings] POST /:provider/test error:', error);

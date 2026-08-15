@@ -47,6 +47,7 @@ export interface TestResult {
   latencyMs: number;
   error?: string;
   errorCode?: string;
+  catalogModels?: number;
 }
 
 const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
@@ -69,6 +70,10 @@ const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
   openai: {
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4',
+  },
+  openrouter: {
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: '',
   },
 };
 
@@ -118,7 +123,11 @@ function serializeProvider(p: any): ProviderConfig {
 async function getDecryptedApiKey(provider: string): Promise<string | null> {
   const p = await prisma.aIProviderConfig.findUnique({ where: { provider } });
   if (!p || !p.apiKeyEncrypted || !p.apiKeyIv || !p.apiKeyTag) return null;
-  return decryptApiKey(p.apiKeyEncrypted, p.apiKeyIv, p.apiKeyTag);
+  try {
+    return decryptApiKey(p.apiKeyEncrypted, p.apiKeyIv, p.apiKeyTag);
+  } catch {
+    return null;
+  }
 }
 
 async function incrementRequestCount(provider: string, success: boolean): Promise<void> {
@@ -189,6 +198,113 @@ async function callNvidiaApi(
   }
 }
 
+async function callOpenRouterApi(
+  apiKey: string,
+  model: string,
+  request: ChatCompletionRequest,
+  timeoutMs: number = 30000
+): Promise<{ content: string; usage?: any }> {
+  const url = `${PROVIDER_DEFAULTS.openrouter.baseUrl}/chat/completions`;
+
+  const body = {
+    model,
+    messages: request.messages,
+    temperature: request.temperature ?? 0.1,
+    max_tokens: request.max_tokens ?? 1024,
+    ...(request.response_format ? { response_format: request.response_format } : {}),
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'http://localhost:4000',
+        'X-Title': 'DG STOK',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => '');
+      let errorCode = `HTTP_${res.status}`;
+      if (res.status === 429) errorCode = 'RATE_LIMIT';
+      else if (res.status === 401) errorCode = 'INVALID_KEY';
+      else if (res.status === 403) errorCode = 'FORBIDDEN';
+      else if (res.status === 404) errorCode = 'MODEL_NOT_FOUND';
+      else if (res.status >= 500) errorCode = 'SERVER_ERROR';
+      throw new Error(`${errorCode} ${errorBody}`.slice(0, 500));
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content ?? null;
+    return { content, usage: data.usage };
+  } catch (err: any) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('TIMEOUT');
+    throw err;
+  }
+}
+
+async function fetchOpenRouterModels(apiKey: string): Promise<any[]> {
+  const url = `${PROVIDER_DEFAULTS.openrouter.baseUrl}/models`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const res = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      let code = `HTTP_${res.status}`;
+      if (res.status === 429) code = 'RATE_LIMIT';
+      else if (res.status === 401) code = 'INVALID_KEY';
+      else if (res.status === 403) code = 'FORBIDDEN';
+      else if (res.status >= 500) code = 'SERVER_ERROR';
+      throw new Error(`${code} ${body}`.slice(0, 500));
+    }
+
+    const data = await res.json();
+    return Array.isArray(data?.data) ? data.data : [];
+  } catch (err: any) {
+    clearTimeout(timeout);
+    if (err?.name === 'AbortError') throw new Error('TIMEOUT');
+    throw err;
+  }
+}
+
+export async function getOpenRouterFreeModels(): Promise<Array<{ id: string; name: string; context: number | null; pricing: any }>> {
+  const apiKey = await getDecryptedApiKey('openrouter');
+  if (!apiKey) throw new Error('API key yapılandırılmamış');
+
+  const models = await fetchOpenRouterModels(apiKey);
+  return models
+    .filter((m: any) => {
+      const p = m?.pricing;
+      if (!p) return false;
+      const prompt = parseFloat(String(p.prompt ?? ''));
+      const completion = parseFloat(String(p.completion ?? ''));
+      return Number.isFinite(prompt) && Number.isFinite(completion) && prompt === 0 && completion === 0;
+    })
+    .map((m: any) => ({
+      id: m.id,
+      name: m.name || m.id,
+      context: m.context_length ?? null,
+      pricing: m.pricing ?? null,
+    }));
+}
+
 export async function chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
   const providers = await getActiveProvidersByPriority();
 
@@ -224,6 +340,12 @@ export async function chatCompletion(request: ChatCompletionRequest): Promise<Ch
 
       if (provider.provider === 'nvidia') {
         result = await callNvidiaApi(apiKey, model, request);
+      } else if (provider.provider === 'openrouter') {
+        if (!provider.model) {
+          errors.push(`${provider.displayName}: Model seçilmemiş`);
+          continue;
+        }
+        result = await callOpenRouterApi(apiKey, provider.model, request);
       } else {
         errors.push(`${provider.displayName}: Desteklenmeyen sağlayıcı`);
         continue;
@@ -477,6 +599,17 @@ export async function matchCategoriesWithAI(
           max_tokens: 4096,
           response_format: { type: 'json_object' },
         });
+      } else if (provider.provider === 'openrouter') {
+        if (!provider.model) {
+          errors.push(`${provider.displayName}: Model seçilmemiş`);
+          continue;
+        }
+        result = await callOpenRouterApi(apiKey, provider.model, {
+          messages,
+          temperature: 0.05,
+          max_tokens: 4096,
+          response_format: { type: 'json_object' },
+        });
       } else {
         errors.push(`${provider.displayName}: Desteklenmeyen sağlayıcı`);
         continue;
@@ -537,7 +670,7 @@ export async function matchCategoriesWithAI(
   };
 }
 
-export async function testProvider(provider: string): Promise<TestResult> {
+export async function testProvider(provider: string, modelOverride?: string): Promise<TestResult> {
   const config = await getProvider(provider);
   if (!config) {
     return { ok: false, provider, model: 'unknown', latencyMs: 0, error: 'Sağlayıcı bulunamadı', errorCode: 'NOT_FOUND' };
@@ -548,7 +681,8 @@ export async function testProvider(provider: string): Promise<TestResult> {
     return { ok: false, provider, model: config.model || 'unknown', latencyMs: 0, error: 'API key yapılandırılmamış', errorCode: 'NO_KEY' };
   }
 
-  const displayModel = config.model || PROVIDER_DEFAULTS[provider]?.model || 'default';
+  const configuredModel = modelOverride || config.model;
+  const displayModel = configuredModel || PROVIDER_DEFAULTS[provider]?.model || 'default';
   const model = provider === 'nvidia' && NVIDIA_MODEL_MAP[displayModel]
     ? NVIDIA_MODEL_MAP[displayModel]
     : displayModel;
@@ -565,6 +699,32 @@ export async function testProvider(provider: string): Promise<TestResult> {
       await incrementRequestCount(provider, true);
 
       return { ok: true, provider, model, latencyMs };
+    }
+
+    if (provider === 'openrouter') {
+      if (!configuredModel) {
+        return { ok: false, provider, model: '(model seçilmedi)', latencyMs: Date.now() - startTime, error: 'Model seçilmemiş — önce Free Models listesinden model seçin', errorCode: 'NO_MODEL' };
+      }
+
+      const models = await fetchOpenRouterModels(apiKey);
+      const modelTest = await callOpenRouterApi(apiKey, configuredModel, {
+        messages: [{ role: 'user', content: 'Return exactly: OPENROUTER_TEST_OK' }],
+        max_tokens: 20,
+      }, 120000);
+
+      const latencyMs = Date.now() - startTime;
+      await incrementRequestCount(provider, true);
+
+      const ok = !!modelTest.content && String(modelTest.content).toUpperCase().includes('OPENROUTER_TEST_OK');
+      return {
+        ok,
+        provider,
+        model: configuredModel,
+        latencyMs,
+        catalogModels: models.length,
+        error: ok ? undefined : `Model testi OPENROUTER_TEST_OK döndürmedi: ${String(modelTest.content ?? '').slice(0, 80)}`,
+        errorCode: ok ? undefined : 'MODEL_TEST_FAILED',
+      };
     }
 
     return { ok: false, provider, model, latencyMs: Date.now() - startTime, error: 'Desteklenmeyen sağlayıcı', errorCode: 'UNSUPPORTED' };

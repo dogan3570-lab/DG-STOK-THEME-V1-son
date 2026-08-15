@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../db/prisma.ts';
+import { requireAuth } from '../auth/authMiddleware.ts';
+import { READY_FILTER } from '../services/readiness.ts';
 
 const router = Router();
 
@@ -11,7 +13,7 @@ export function invalidateDashboardStatsCache() {
 }
 
 // GET /dashboard/stats - Cached real DB KPI'ları
-router.get('/stats', async (_req, res) => {
+router.get('/stats', requireAuth, async (_req, res) => {
   try {
     if (dashboardStatsCache && Date.now() - dashboardStatsCache.timestamp < DASHBOARD_STATS_CACHE_TTL) {
       return res.json(dashboardStatsCache.data);
@@ -31,7 +33,7 @@ router.get('/stats', async (_req, res) => {
       prisma.order.count({ where: { createdAt: { gte: todayStart } } }),
       prisma.xmlSource.count({ where: { connectionStatus: 'error' } }),
       prisma.xmlImportRun.count({ where: { startedAt: { gte: todayStart }, status: { not: 'running' } } }),
-      prisma.product.count({ where: { status: 'READY' } }),
+      prisma.product.count({ where: READY_FILTER }),
       prisma.brand.count(),
       prisma.category.count(),
       prisma.variant.count(),

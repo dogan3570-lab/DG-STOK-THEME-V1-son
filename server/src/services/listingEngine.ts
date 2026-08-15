@@ -519,7 +519,7 @@ export async function simulatePrices(
 
   const products = await prisma.product.findMany({
     where: { id: { in: productIds } },
-    select: { id: true, title: true, purchasePrice: true, salePrice: true, vatRate: true, commissionRate: true, currency: true },
+    select: { id: true, title: true, purchasePrice: true, salePrice: true, vatRate: true, currency: true },
   });
 
   const results: PriceSimulationResult[] = [];
@@ -531,7 +531,7 @@ export async function simulatePrices(
       priceFixedAmount: template.priceFixedAmount,
       priceRangeRules: template.priceRangeRules,
       vatRate: template.vatRate ?? product.vatRate,
-      commissionRate: template.commissionRate ?? product.commissionRate,
+      commissionRate: template.commissionRate,
     });
 
     results.push({
@@ -585,7 +585,7 @@ export async function generatePreview(
     priceFixedAmount: template.priceFixedAmount,
     priceRangeRules: template.priceRangeRules,
     vatRate: template.vatRate ?? product.vatRate,
-    commissionRate: template.commissionRate ?? product.commissionRate,
+    commissionRate: template.commissionRate,
   });
 
   const images = product.images ? product.images.split(',').filter(Boolean) : [];
