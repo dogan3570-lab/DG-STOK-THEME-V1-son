@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="tr" class="dark">
 <head>
     <meta charset="UTF-8">
@@ -565,6 +565,45 @@
                         </div>
                     </div>
 
+                    <!-- STOK OTOMASYONU (inline, Ürün Havuzu içinde) -->
+                    <div id="stock-auto-panel" class="panel-theme p-5 rounded-2xl border-2 border-primary/40 bg-primary/5 space-y-4">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <h3 class="text-base font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2"><i class="fa-solid fa-boxes-stacked text-primary"></i> STOK OTOMASYONU</h3>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Tüm ürünler için global satış aç/kapat ve hazırlama stok kuralları.</p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button onclick="stockAutoSave()" class="px-4 py-2.5 bg-primary hover:bg-primaryHover text-white text-xs font-semibold rounded-xl shadow-lg shadow-primary/25 transition-all flex items-center gap-2"><i class="fa-solid fa-floppy-disk"></i> Kaydet</button>
+                                <button onclick="stockAutoRun()" class="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all flex items-center gap-2"><i class="fa-solid fa-play"></i> Motoru Çalıştır</button>
+                            </div>
+                        </div>
+
+                        <!-- A) Otomatik Satış Kontrolü -->
+                        <div class="rounded-xl bg-white/60 dark:bg-slate-900/40 p-4 space-y-3">
+                            <h4 class="font-bold text-sm text-slate-900 dark:text-white">OTOMATİK SATIŞ KONTROLÜ</h4>
+                            <label class="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer">
+                                <input type="checkbox" id="stock-auto-enabled" class="w-4 h-4 rounded accent-[var(--primary-color)]"> Otomasyonu Aç/Kapat
+                            </label>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Satış Kapatma Stoku (stok ≤)</label><input id="stock-auto-close" type="number" min="0" step="1" value="3" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Satış Açma Stoku (stok ≥)</label><input id="stock-auto-open" type="number" min="0" step="1" value="5" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-slate-400">stok ≤ kapatma → <b>SATIŞI KAPAT</b> · kapatma ile açma arası stok → <b>MEVCUT DURUMU KORU</b> · stok ≥ açma → <b>SATIŞI AÇ</b></p>
+                        </div>
+
+                        <!-- B) Ürün Hazırlama Stok Aralığı (ayrı kural) -->
+                        <div class="rounded-xl bg-white/60 dark:bg-slate-900/40 p-4 space-y-3 border-l-4 border-amber-400">
+                            <h4 class="font-bold text-sm text-slate-900 dark:text-white">ÜRÜN HAZIRLAMA STOK ARALIĞI <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase">ayrı kural</span></h4>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Minimum Stok</label><input id="stock-auto-prepmin" type="number" min="0" step="1" value="1" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Maximum Stok</label><input id="stock-auto-prepmax" type="number" min="0" step="1" value="999999" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-slate-400">min altı stok → hazırlamaya gönderme · min ile max arası stok → hazırlamaya uygun · max üstü stok → filtreye göre gönderme. <b>Satış aç/kapat motorunu etkilemez.</b></p>
+                        </div>
+
+                        <div id="stock-auto-status" class="text-xs font-semibold text-slate-600 dark:text-slate-300"></div>
+                    </div>
+
                     <!-- FİLTRE BAR -->
                     <div class="panel-theme p-4 rounded-2xl flex flex-wrap items-end gap-3">
                         <div class="flex-1 min-w-[220px]">
@@ -591,6 +630,14 @@
                                 <option value="SENT">Gönderildi</option>
                                 <option value="ERROR">Hatalı</option>
                             </select>
+                        </div>
+                        <div>
+                            <label class="text-[10px] uppercase tracking-wider font-bold text-slate-500 dark:text-slate-400 block mb-1.5">Hazırlama Min Stok</label>
+                            <input type="number" id="pool-minstock" min="0" placeholder="Min" onchange="poolOnStockFilterChange()" class="field-input text-xs px-3 py-2.5 rounded-xl w-24 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">
+                        </div>
+                        <div>
+                            <label class="text-[10px] uppercase tracking-wider font-bold text-slate-500 dark:text-slate-400 block mb-1.5">Hazırlama Max Stok</label>
+                            <input type="number" id="pool-maxstock" min="0" placeholder="Max" onchange="poolOnStockFilterChange()" class="field-input text-xs px-3 py-2.5 rounded-xl w-28 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">
                         </div>
                         <div>
                             <label class="text-[10px] uppercase tracking-wider font-bold text-slate-500 dark:text-slate-400 block mb-1.5">Sayfa Boyutu</label>
@@ -738,9 +785,9 @@
                                     </div>
                                 </div>
                                 <div class="w-full overflow-hidden rounded-2xl panel-theme">
-                                    <div class="flex items-center justify-between px-4 py-3"><div class="flex items-center gap-2"><span class="flex h-5 w-5 items-center justify-center rounded-md text-[10px] text-emerald-600 dark:text-emerald-400">✅</span><span class="text-xs font-semibold text-slate-700 dark:text-slate-300">Tam Eşleşti</span></div><span id="cat-sum-auto" class="text-sm font-extrabold text-slate-800 dark:text-slate-200">0</span></div>
-                                    <div class="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-slate-800/60"><div class="flex items-center gap-2"><span class="flex h-5 w-5 items-center justify-center rounded-md text-[10px] text-purple-600 dark:text-purple-400">🤖</span><span class="text-xs font-semibold text-slate-700 dark:text-slate-300">AI Eşleşti</span></div><span id="cat-sum-ai" class="text-sm font-extrabold text-slate-800 dark:text-slate-200">0</span></div>
-                                    <div class="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-slate-800/60"><div class="flex items-center gap-2"><span class="flex h-5 w-5 items-center justify-center rounded-md text-[10px] text-amber-600 dark:text-amber-400">🔧</span><span class="text-xs font-semibold text-slate-700 dark:text-slate-300">Manuel</span></div><span id="cat-sum-manual" class="text-sm font-extrabold text-slate-800 dark:text-slate-200">0</span></div>
+                                    <div class="flex items-center justify-between px-4 py-3"><div class="flex items-center gap-2"><span class="flex h-5 w-5 items-center justify-center rounded-md text-[10px] text-emerald-600 dark:text-emerald-400">✅</span><span class="text-xs font-semibold text-slate-700 dark:text-slate-300">Tam Eşleşti (Ürün)</span></div><span id="cat-sum-auto" class="text-sm font-extrabold text-slate-800 dark:text-slate-200">0</span></div>
+                                    <div class="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-slate-800/60"><div class="flex items-center gap-2"><span class="flex h-5 w-5 items-center justify-center rounded-md text-[10px] text-purple-600 dark:text-purple-400">🤖</span><span class="text-xs font-semibold text-slate-700 dark:text-slate-300">AI Eşleşti (Ürün)</span></div><span id="cat-sum-ai" class="text-sm font-extrabold text-slate-800 dark:text-slate-200">0</span></div>
+                                    <div class="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-slate-800/60"><div class="flex items-center gap-2"><span class="flex h-5 w-5 items-center justify-center rounded-md text-[10px] text-amber-600 dark:text-amber-400">🔧</span><span class="text-xs font-semibold text-slate-700 dark:text-slate-300">Manuel Bekleyen (Ürün)</span></div><span id="cat-sum-manual" class="text-sm font-extrabold text-slate-800 dark:text-slate-200">0</span></div>
                                 </div>
                             </div>
                         </div>
@@ -762,6 +809,7 @@
                             <div id="cat-picker-mp-tabs" class="mt-3 flex flex-wrap gap-1"></div>
                             <input type="text" id="cat-picker-search" oninput="catPickerSearch()" placeholder="Pazaryeri kategorilerinde ara..." class="field-input mt-3 w-full px-3 py-2 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"/>
                         </div>
+                        <div id="cat-picker-product-info" class="hidden max-h-44 shrink-0 overflow-y-auto border-b border-slate-100 dark:border-slate-800/60 px-5 py-3"></div>
                         <div id="cat-picker-tree" class="flex-1 space-y-0.5 overflow-y-auto p-3 text-sm"></div>
                         <div class="flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800/60 px-5 py-3.5">
                             <div id="cat-picker-sel-text" class="min-w-0 text-xs text-slate-600 dark:text-slate-400">Ağaçtan bir kategori seçin</div>
@@ -775,6 +823,28 @@
 
                 <!-- MARKA EŞLEŞTİRME V6 — SADE AKIŞ -->
                 <div id="page-prep-brands" class="space-y-5 hidden">
+                    <!-- CONTEXT BAŞLIĞI (3 saniye UX) -->
+                    <div class="panel-theme p-5 rounded-2xl">
+                        <div class="flex items-center gap-3 mb-3">
+                            <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary"><i class="fa-solid fa-tags text-sm"></i></span>
+                            <div>
+                                <h2 class="text-base font-bold text-slate-900 dark:text-white">MARKA EŞLEŞTİRME</h2>
+                                <p class="text-[11px] text-slate-500 dark:text-slate-400">Bu XML'deki ürünlerin markalarını seçili pazaryeri için eşleştiriyorsunuz.</p>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs mb-3">
+                            <span><span class="font-bold text-slate-500 dark:text-slate-400">XML:</span> <span id="br-ctx-xml" class="ml-1 font-semibold text-slate-900 dark:text-white">Seçilmedi</span></span>
+                            <span class="text-slate-300 dark:text-slate-600">|</span>
+                            <span><span class="font-bold text-slate-500 dark:text-slate-400">PAZARYERİ:</span> <span id="br-ctx-mp" class="ml-1 font-semibold text-purple-600 dark:text-purple-400">Seçilmedi</span></span>
+                        </div>
+                        <div class="flex flex-wrap gap-x-5 gap-y-2 text-[11px] text-slate-600 dark:text-slate-300">
+                            <span>Ürünler: <b id="br-ctx-total" class="text-slate-900 dark:text-white">-</b></span>
+                            <span>Eşleşen: <b id="br-ctx-matched" class="text-emerald-600 dark:text-emerald-400">-</b></span>
+                            <span>XML markası kullanılacak: <b id="br-ctx-fallback" class="text-sky-600 dark:text-sky-400">-</b></span>
+                            <span>Bekleyen: <b id="br-ctx-waiting" class="text-amber-600 dark:text-amber-400">-</b></span>
+                        </div>
+                    </div>
+
                     <!-- ÜST: Marka Eşleştirme Formu -->
                     <div class="panel-theme p-5 sm:p-7 rounded-2xl">
                         <div class="flex items-center gap-3 mb-5">
@@ -841,17 +911,19 @@
                                 <div class="flex items-center gap-3">
                                     <label class="flex items-center gap-2 cursor-pointer">
                                         <input type="checkbox" id="br-select-all" onchange="prepBrandSelectAll()" class="w-4 h-4 rounded accent-[var(--primary-color)]">
-                                        <span class="text-[11px] font-bold text-slate-600 dark:text-slate-400">Tümünü Seç</span>
+                                        <span class="text-[11px] font-bold text-slate-600 dark:text-slate-400">Bu sayfadaki tümünü seç</span>
                                     </label>
                                     <span id="br-selection-info" class="text-[11px] text-slate-500 dark:text-slate-400">Seçili: 0 / 0</span>
                                 </div>
-                                <div class="flex items-center gap-1.5">
-                                    <span class="text-[10px] text-slate-500 dark:text-slate-400 mr-1">Göster:</span>
-                                    <button onclick="prepBrandSetSize(50)" class="br-size-btn rounded-md px-2 py-1 text-[11px] font-semibold transition-all">50</button>
-                                    <button onclick="prepBrandSetSize(100)" class="br-size-btn rounded-md px-2 py-1 text-[11px] font-semibold transition-all">100</button>
-                                    <button onclick="prepBrandSetSize(200)" class="br-size-btn rounded-md px-2 py-1 text-[11px] font-semibold transition-all">200</button>
-                                    <button onclick="prepBrandSetSize(500)" class="br-size-btn rounded-md px-2 py-1 text-[11px] font-semibold transition-all">500</button>
-                                    <button onclick="prepBrandSetSize(1000)" class="br-size-btn rounded-md px-2 py-1 text-[11px] font-semibold transition-all">1000</button>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[11px] font-bold text-slate-600 dark:text-slate-400">Sayfa başına:</span>
+                                    <select id="br-page-size" onchange="prepBrandSetSize(parseInt(this.value, 10))" class="field-input rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                                        <option value="50">50</option>
+                                        <option value="100">100</option>
+                                        <option value="200">200</option>
+                                        <option value="500">500</option>
+                                        <option value="1000">1000</option>
+                                    </select>
                                 </div>
                             </div>
                             <div id="br-page-info" class="mt-2 text-[11px] text-slate-500 dark:text-slate-400"></div>
@@ -864,13 +936,11 @@
                                     <tr class="bg-slate-50 dark:bg-slate-800/30 text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
                                         <th class="py-3 px-3 w-10"></th>
                                         <th class="py-3 px-4 font-bold">Ürün</th>
-                                        <th class="py-3 px-4 font-bold">XML Marka</th>
-                                        <th class="py-3 px-4 font-bold">Uygulanan Marka</th>
                                         <th class="py-3 px-4 font-bold">Durum</th>
                                     </tr>
                                 </thead>
                                 <tbody id="br-products-body" class="divide-y divide-slate-100 dark:divide-slate-800/60">
-                                    <tr><td class="py-16 text-center text-slate-400" colspan="5">XML markası seçin...</td></tr>
+                                    <tr><td class="py-16 text-center text-slate-400" colspan="3">XML markası seçin...</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -899,7 +969,74 @@
                         </select>
                     </div>
 
-                    <div class="panel-theme rounded-[28px] p-5 sm:p-7">
+                    <!-- V4 DASHBOARD -->
+                    <div class="panel-theme p-5 rounded-2xl">
+                        <div class="flex items-center gap-3 mb-3">
+                            <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary"><i class="fa-solid fa-code-branch text-sm"></i></span>
+                            <div>
+                                <h2 class="text-base font-bold text-slate-900 dark:text-white">VARIANT EŞLEŞTİRME</h2>
+                                <p class="text-[11px] text-slate-500 dark:text-slate-400">XML varyantlarını seçili pazaryerinin varyant yapısına hazırlayın.</p>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs mb-4">
+                            <span><span class="font-bold text-slate-500 dark:text-slate-400">XML:</span> <b id="var-ctx-xml" class="text-slate-900 dark:text-white">Seçilmedi</b></span>
+                            <span class="text-slate-300 dark:text-slate-600">|</span>
+                            <span><span class="font-bold text-slate-500 dark:text-slate-400">PAZARYERİ:</span> <b id="var-ctx-mp" class="text-purple-600 dark:text-purple-400">Seçilmedi</b></span>
+                        </div>
+                        <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3 mb-4">
+                            <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Toplam Ürün</div><div id="var-total" class="text-xl font-extrabold text-slate-900 dark:text-white">-</div></div>
+                            <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Varyantlı</div><div id="var-has" class="text-xl font-extrabold text-blue-600 dark:text-blue-400">-</div></div>
+                            <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Varyantsız</div><div id="var-none" class="text-xl font-extrabold text-slate-500 dark:text-slate-400">-</div></div>
+                            <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Otomatik Eşleşti</div><div id="var-auto" class="text-xl font-extrabold text-emerald-600 dark:text-emerald-400">-</div></div>
+                            <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">AI ile Eşleşti</div><div id="var-ai" class="text-xl font-extrabold text-blue-600 dark:text-blue-400">-</div></div>
+                            <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Manuel Bekliyor</div><div id="var-manual" class="text-xl font-extrabold text-amber-600 dark:text-amber-400">-</div></div>
+                            <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">AI Bekliyor</div><div id="var-waiting" class="text-xl font-extrabold text-indigo-600 dark:text-indigo-400">-</div></div>
+                        </div>
+                        <div id="var-action-hint" class="mb-4 rounded-xl px-4 py-3 text-sm font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20"></div>
+                        <div class="flex flex-wrap items-center gap-4">
+                            <div id="var-donut" class="flex items-center gap-3"></div>
+                            <div class="flex flex-wrap gap-2">
+                                <button id="var-btn-auto" onclick="prepVariantAutoMatch()" class="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">✓ Seçtiğim Ürünleri Otomatik Eşleştir</button>
+                                <button id="var-btn-ai" onclick="prepVariantAiMatch()" class="px-4 py-2.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">🤖 Seçtiğim Ürünleri AI ile Eşleştir</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- V4 ÜRÜN LİSTESİ -->
+                    <div id="var-products-section" class="hidden">
+                        <div class="panel-theme p-3 rounded-2xl mb-3 flex flex-wrap items-center justify-between gap-3">
+                            <div class="flex items-center gap-3">
+                                <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="var-select-all" onchange="prepVariantSelectAll()" class="w-4 h-4 rounded accent-[var(--primary-color)]"><span class="text-[11px] font-bold text-slate-600 dark:text-slate-400">Bu sayfadaki tümünü seç</span></label>
+                                <span id="var-selection-info" class="text-[11px] text-slate-500 dark:text-slate-400">0 ürün seçildi</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-[11px] font-bold text-slate-600 dark:text-slate-400">Sayfa başına:</span>
+                                <select id="var-page-size" onchange="prepVariantSetSize(parseInt(this.value,10))" class="field-input rounded-xl px-3 py-2 text-xs font-semibold">
+                                    <option value="50">50</option><option value="100">100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="panel-theme rounded-2xl overflow-hidden">
+                            <table class="w-full text-left text-xs">
+                                <thead><tr class="bg-slate-50 dark:bg-slate-800/30 text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                                    <th class="py-3 px-3 w-10"></th><th class="py-3 px-4 font-bold">Ürün</th><th class="py-3 px-4 font-bold">Varyant</th><th class="py-3 px-4 font-bold">Durum</th>
+                                </tr></thead>
+                                <tbody id="var-products-body" class="divide-y divide-slate-100 dark:divide-slate-800/60">
+                                    <tr><td class="py-16 text-center text-slate-400" colspan="4">XML + Pazaryeri seçin...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="mt-3 flex items-center justify-between">
+                            <div class="flex items-center gap-1.5">
+                                <button onclick="prepVariantPagePrev()" id="var-page-prev" class="rounded-md px-3 py-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-25">&laquo; Önceki</button>
+                                <span id="var-page-numbers"></span>
+                                <button onclick="prepVariantPageNext()" id="var-page-next" class="rounded-md px-3 py-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-25">Sonraki &raquo;</button>
+                            </div>
+                            <div id="var-page-info" class="text-[11px] text-slate-500 dark:text-slate-400"></div>
+                        </div>
+                    </div>
+
+                    <div class="panel-theme rounded-[28px] p-5 sm:p-7 hidden">
                         <!-- UYARI -->
                         <div id="var-warning" class="flex items-center gap-3 p-3 my-4 border border-current rounded-xl text-sm">
                             <span class="text-lg">⚠️</span>
@@ -946,8 +1083,48 @@
                         </div>
                     </div>
 
+                    <!-- MANUEL EŞLEŞTİRME MODAL (GERÇEK TRENDYOL ATTRIBUTE/VALUE) -->
+                    <div id="var-manual-modal" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm hidden">
+                        <div class="panel-theme p-6 rounded-2xl shadow-xl max-w-lg w-full mx-4 max-h-[85vh] overflow-y-auto" onclick="event.stopPropagation()">
+                            <div class="flex items-start justify-between">
+                                <h3 class="text-base font-bold">Manuel Varyant Eşleştirme</h3>
+                                <button onclick="prepVariantCloseManual()" class="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition"><i class="fa-solid fa-xmark"></i></button>
+                            </div>
+                            <div class="mt-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 px-3 py-2.5">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">ÜRÜN BİLGİSİ</div>
+                                <div id="var-manual-product" class="mt-1 text-sm font-bold text-slate-900 dark:text-white"></div>
+                                <div id="var-manual-product-meta" class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400"></div>
+                            </div>
+                            <div class="mt-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 px-3 py-2.5">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">XML VARYANTLARI</div>
+                                <div id="var-manual-xml" class="mt-1 text-xs text-slate-600 dark:text-slate-300"></div>
+                            </div>
+                            <div id="var-manual-existing" class="mt-3 hidden rounded-xl px-3 py-2.5 text-xs font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20"></div>
+                            <div id="var-manual-cat-hint" class="mt-3 hidden rounded-xl px-3 py-2.5 text-xs font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20"></div>
+                            <div id="var-manual-fields" class="mt-3 space-y-3 hidden">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">TRENDYOL VARYANTLARI</div>
+                                <div>
+                                    <label class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Trendyol Varyantı (Attribute)</label>
+                                    <select id="var-manual-attr" onchange="prepVariantManualLoadValues()" class="field-input w-full rounded-xl px-3 py-2.5 text-sm mt-1">
+                                        <option value="">Varyant seçiniz...</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Trendyol Değeri</label>
+                                    <select id="var-manual-value" class="field-input w-full rounded-xl px-3 py-2.5 text-sm mt-1" disabled>
+                                        <option value="">Önce varyant seçiniz...</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mt-4 flex items-center justify-end gap-2">
+                                <button onclick="prepVariantCloseManual()" class="px-4 py-2.5 rounded-xl text-xs font-bold border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition">Vazgeç</button>
+                                <button id="var-manual-save" onclick="prepVariantManualSave()" class="px-4 py-2.5 bg-primary text-white rounded-xl text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">Kaydet</button>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- 1. ISTISNA EKRANI -->
-                    <div class="mt-6 panel-theme rounded-2xl border border-current/20 dark:border-current/30 overflow-hidden">
+                    <div class="mt-6 panel-theme rounded-2xl border border-current/20 dark:border-current/30 overflow-hidden hidden">
                         <div class="flex items-center justify-between px-5 py-4 border-b border-current/15 dark:border-current/20 bg-current/[0.03] dark:bg-current/[0.05]">
                             <h3 class="font-bold text-base flex items-center gap-2"><i class="fa-solid fa-triangle-exclamation text-amber-500"></i> İstisna Ekranı (Sorunlu Varyantlar)</h3>
                             <button onclick="prepVariantLoadScreen()" class="text-xs px-3 py-1.5 rounded-lg border border-current/30 hover:bg-current/5 transition font-medium">Yenile</button>
@@ -977,7 +1154,7 @@
                     </div>
 
                     <!-- 2. AI ONERILERI -->
-                    <div class="mt-5 panel-theme rounded-2xl border border-current/20 dark:border-current/30 overflow-hidden">
+                    <div class="mt-5 panel-theme rounded-2xl border border-current/20 dark:border-current/30 overflow-hidden hidden">
                         <div class="px-5 py-4 border-b border-current/15 dark:border-current/20 bg-current/[0.03] dark:bg-current/[0.05]">
                             <h3 class="font-bold text-base flex items-center gap-2"><i class="fa-solid fa-lightbulb text-violet-500"></i> AI Önerileri</h3>
                         </div>
@@ -987,7 +1164,7 @@
                     </div>
 
                     <!-- 3. ISLEM GECMISI -->
-                    <div class="mt-5 panel-theme rounded-2xl border border-current/20 dark:border-current/30 overflow-hidden">
+                    <div class="mt-5 panel-theme rounded-2xl border border-current/20 dark:border-current/30 overflow-hidden hidden">
                         <div class="px-5 py-4 border-b border-current/15 dark:border-current/20 bg-current/[0.03] dark:bg-current/[0.05]">
                             <h3 class="font-bold text-base flex items-center gap-2"><i class="fa-solid fa-clock-rotate-left text-blue-500"></i> İşlem Geçmişi</h3>
                         </div>
@@ -1046,7 +1223,28 @@
                     </div>
                     <div id="li-panel-rules" class="space-y-4 hidden">
                         <div class="panel-theme p-5 rounded-2xl"><div class="flex items-center justify-between mb-4"><h3 class="font-bold text-base flex items-center gap-2 text-slate-900 dark:text-white"><i class="fa-solid fa-coins text-primary"></i> Fiyat Kuralları (V2 Motor)</h3><div class="flex items-center gap-2"><select id="li-rules-mp" class="field-input text-xs px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></select><button onclick="prepListNewRule()" class="px-3 py-2 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"><i class="fa-solid fa-plus"></i> Yeni Kural</button></div></div><div id="li-rules-table" class="overflow-x-auto"><p class="text-xs text-slate-400 text-center py-8">Pazaryeri seçin...</p></div></div>
-                        <div class="panel-theme p-5 rounded-2xl"><h3 class="font-bold text-base flex items-center gap-2 text-slate-900 dark:text-white mb-4"><i class="fa-solid fa-calculator text-primary"></i> V2 Fiyat Hesaplama</h3><div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3"><div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Alış Fiyatı</label><input id="li-v2-price" type="number" value="100" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div><div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">KDV (%)</label><input id="li-v2-vat" type="number" value="20" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div><div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Kâr (%)</label><input id="li-v2-margin" type="number" value="75" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div><div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Yuvarlama</label><select id="li-v2-rounding" class="field-input w-full text-xs px-3 py-2 rounded-xl"><option value="0.90">0,90</option><option value="9.90">9,90</option><option value="49.90">49,90</option><option value="99.90">99,90</option><option value="nearest">En Yakın Tam</option><option value="none">Yuvarlama Yok</option></select></div></div><button onclick="prepListV2Calc()" class="w-full py-2.5 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold shadow-lg transition-all">Hesapla</button><div id="li-v2-result" class="mt-3 hidden"></div></div>
+                        <div id="li-rule-form" class="hidden panel-theme p-5 rounded-2xl border border-primary/30">
+                            <div class="flex items-center justify-between mb-4"><h3 class="font-bold text-base flex items-center gap-2 text-slate-900 dark:text-white"><i class="fa-solid fa-plus text-primary"></i> <span id="li-rule-form-title">Yeni Fiyat Kuralı</span></h3><button onclick="prepListRuleCancel()" class="text-xs text-slate-400 hover:text-slate-600">✕ Kapat</button></div>
+                            <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Pazaryeri *</label><select id="li-rule-mp" onchange="prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></select></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">XML Kaynağı</label><select id="li-rule-xml" onchange="prepListRuleLoadProducts();prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></select></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Kapsam</label><select id="li-rule-scope" onchange="prepListRuleScopeChange()" class="field-input w-full text-xs px-3 py-2 rounded-xl"><option value="GENERAL">Genel</option><option value="CATEGORY">Kategori</option><option value="PRODUCT">Tek Ürün</option></select></div>
+                                <div id="li-rule-product-wrap" class="hidden"><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Ürün</label><select id="li-rule-product" onchange="prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></select></div>
+                                <div id="li-rule-category-wrap" class="hidden"><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Kategori</label><select id="li-rule-category" onchange="prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></select></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Minimum Alış (TL)</label><input id="li-rule-min" type="number" value="0" min="0" oninput="prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Maximum Alış (TL, 0=sınırsız)</label><input id="li-rule-max" type="number" value="0" min="0" oninput="prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Kâr (%)</label><input id="li-rule-margin" type="number" value="75" min="0" oninput="prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Sabit Ek (TL)</label><input id="li-rule-fixed" type="number" value="0" min="0" oninput="prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Yuvarlama</label><select id="li-rule-rounding" onchange="prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"><option value="none">Yuvarlama Yok</option><option value="0.90">0,90</option><option value="9.90">9,90</option><option value="nearest">En Yakın Tam</option></select></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Önizleme Alış Fiyatı (TL)</label><input id="li-rule-preview-price" type="number" value="20" min="0" oninput="prepListRulePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div>
+                            </div>
+                            <div id="li-rule-preview" class="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-xs space-y-1"></div>
+                            <div class="mt-4 flex items-center gap-2">
+                                <button onclick="prepListRuleSave()" class="px-4 py-2 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold">Kaydet</button>
+                                <button onclick="prepListRuleCancel()" class="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold">İptal</button>
+                            </div>
+                        </div>
+                        <div class="panel-theme p-5 rounded-2xl"><h3 class="font-bold text-base flex items-center gap-2 text-slate-900 dark:text-white mb-4"><i class="fa-solid fa-calculator text-primary"></i> V2 Fiyat Hesaplama</h3><div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3"><div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">KDV Dahil Alış</label><input id="li-v2-price" type="number" value="100" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div><div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Kâr (%)</label><input id="li-v2-margin" type="number" value="75" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div><div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Sabit Ek (TL)</label><input id="li-v2-fixed" type="number" value="0" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div><div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Yuvarlama</label><select id="li-v2-rounding" class="field-input w-full text-xs px-3 py-2 rounded-xl"><option value="0.90">0,90</option><option value="9.90">9,90</option><option value="49.90">49,90</option><option value="99.90">99,90</option><option value="nearest">En Yakın Tam</option><option value="none">Yuvarlama Yok</option></select></div></div><button onclick="prepListV2Calc()" class="w-full py-2.5 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold shadow-lg transition-all">Hesapla</button><div id="li-v2-result" class="mt-3 hidden"></div></div>
                     </div>
                     <div id="li-panel-logs" class="space-y-4 hidden">
                         <div class="panel-theme rounded-2xl overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-slate-50 dark:bg-slate-800/40 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"><tr><th class="py-3 px-4">Tarih</th><th class="py-3 px-4">Ürün</th><th class="py-3 px-4">Pazaryeri</th><th class="py-3 px-4">Kural Tipi</th><th class="py-3 px-4 text-right">Alış</th><th class="py-3 px-4 text-right">Hesaplanan</th><th class="py-3 px-4 text-center">Durum</th></tr></thead><tbody id="li-logs-tbody" class="divide-y divide-slate-100 dark:divide-slate-800/60"><tr><td class="py-10 px-4 text-center text-slate-400" colspan="7">Yükleniyor...</td></tr></tbody></table></div></div>
@@ -1314,6 +1512,7 @@
                         <button onclick="settingsTab('api')" id="set-tab-api" class="set-tab flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all"><i class="fa-solid fa-plug"></i> API</button>
                         <button onclick="settingsTab('ai')" id="set-tab-ai" class="set-tab flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all"><i class="fa-solid fa-brain"></i> AI</button>
                         <button onclick="settingsTab('password')" id="set-tab-password" class="set-tab flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all"><i class="fa-solid fa-lock"></i> Şifre</button>
+                        <button onclick="settingsTab('stock')" id="set-tab-stock" class="set-tab flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all"><i class="fa-solid fa-boxes-stacked"></i> Stok</button>
                     </div>
                     <div id="set-panel-general" class="panel-theme p-6 rounded-2xl space-y-4">
                         <h3 class="font-bold text-sm text-slate-900 dark:text-white">Genel Ayarlar</h3>
@@ -1345,6 +1544,31 @@
                             <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Yeni Şifre</label><input id="set-new-pw" type="password" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
                             <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Tekrar</label><input id="set-confirm-pw" type="password" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
                         </div>
+                    </div>
+                    <div id="set-panel-stock" class="panel-theme p-6 rounded-2xl space-y-4 hidden border-2 border-primary/40 bg-primary/5">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <h3 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i class="fa-solid fa-boxes-stacked text-primary"></i> STOK OTOMASYONU</h3>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Ürün Havuzu'ndaki Stok Otomasyonu ile aynı ayar — tek kaynak.</p>
+                            </div>
+                            <button onclick="stockAutoSettingsSave()" class="px-4 py-2.5 bg-primary hover:bg-primaryHover text-white text-xs font-semibold rounded-xl shadow-lg shadow-primary/25 transition-all flex items-center gap-2"><i class="fa-solid fa-floppy-disk"></i> Kaydet</button>
+                        </div>
+                        <div class="rounded-xl bg-white/60 dark:bg-slate-900/40 p-4 space-y-3">
+                            <h4 class="font-bold text-xs text-slate-900 dark:text-white uppercase">Otomatik Satış Kontrolü</h4>
+                            <label class="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"><input type="checkbox" id="set-stock-enabled" class="w-4 h-4 rounded accent-[var(--primary-color)]"> Otomasyonu Aç/Kapat</label>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Satış Kapatma Stoku (stok ≤)</label><input id="set-stock-close" type="number" min="0" step="1" value="3" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Satış Açma Stoku (stok ≥)</label><input id="set-stock-open" type="number" min="0" step="1" value="5" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
+                            </div>
+                        </div>
+                        <div class="rounded-xl bg-white/60 dark:bg-slate-900/40 p-4 space-y-3 border-l-4 border-amber-400">
+                            <h4 class="font-bold text-xs text-slate-900 dark:text-white uppercase">Ürün Hazırlama Stok Aralığı <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400">ayrı kural</span></h4>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Minimum Stok</label><input id="set-stock-prepmin" type="number" min="0" step="1" value="1" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Maximum Stok</label><input id="set-stock-prepmax" type="number" min="0" step="1" value="999999" class="field-input w-full text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></div>
+                            </div>
+                        </div>
+                        <div id="set-stock-status" class="text-xs font-semibold text-slate-600 dark:text-slate-300"></div>
                     </div>
                 </div>
 
@@ -1827,8 +2051,37 @@
             if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
             tbody = document.getElementById('br-tbody');
             if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="7">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('br-products-body');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-16 text-center text-slate-400" colspan="3">Context seçilmedi</td></tr>';
+            var brSec = document.getElementById('br-products-section');
+            if (brSec) brSec.classList.add('hidden');
+            var brSum = document.getElementById('br-summary');
+            if (brSum) brSum.classList.add('hidden');
+            var brSa = document.getElementById('br-select-all');
+            if (brSa) brSa.checked = false;
+            if (typeof prepBrandState !== 'undefined') {
+                prepBrandState.products = [];
+                prepBrandState.totalProducts = 0;
+                prepBrandState.selectedProducts.clear();
+                prepBrandState.allSelected = false;
+            }
+            var brInfo = document.getElementById('br-selection-info');
+            if (brInfo) brInfo.textContent = '0 ürün seçildi';
             tbody = document.getElementById('var-tbody');
             if (tbody) tbody.innerHTML = '<tr><td class="py-8 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
+            tbody = document.getElementById('var-products-body');
+            if (tbody) tbody.innerHTML = '<tr><td class="py-16 text-center text-slate-400" colspan="4">Context seçilmedi</td></tr>';
+            var varSec = document.getElementById('var-products-section');
+            if (varSec) varSec.classList.add('hidden');
+            if (typeof varState !== 'undefined') {
+                varState.products = [];
+                varState.totalProducts = 0;
+                varState.selectedProducts.clear();
+            }
+            var varInfo = document.getElementById('var-selection-info');
+            if (varInfo) varInfo.textContent = '0 ürün seçildi';
+            var varSa = document.getElementById('var-select-all');
+            if (varSa) varSa.checked = false;
             tbody = document.getElementById('li-tbody');
             if (tbody) tbody.innerHTML = '<tr><td class="py-10 px-6 text-center text-slate-400" colspan="8">Context seçilmedi</td></tr>';
         }
@@ -1852,7 +2105,33 @@
         }
 
         function syncLocalContextSelectors() {
-            // Otomatik seçim YAPILMAZ — kullanıcı her alt modülün kendi select'inden seçer.
+            // ORTAK WORKSPACE CONTEXT: global seçim dört alt modülün select ve state'lerine yansıtılır.
+            var xsId = contextState.xmlSourceId || '';
+            var mpId = contextState.marketplaceId || '';
+            var pairs = [
+                ['cat-xml-source', 'cat-marketplace'],
+                ['br-xml-source', 'br-marketplace'],
+                ['var-xml-source', 'var-marketplace'],
+                ['li-xml-source', 'li-marketplace']
+            ];
+            pairs.forEach(function (pair) {
+                var xs = document.getElementById(pair[0]);
+                var mp = document.getElementById(pair[1]);
+                if (xs && xs.options && xs.options.length > 0 && xsId) xs.value = xsId;
+                if (mp && mp.options && mp.options.length > 0 && mpId) mp.value = mpId;
+            });
+            if (xsId) {
+                if (typeof catState !== 'undefined') catState.xmlSupplierId = xsId;
+                if (typeof varState !== 'undefined') varState.xmlSourceId = xsId;
+                if (typeof prepBrandState !== 'undefined') prepBrandState.selectedXmlSource = xsId;
+                if (typeof prepListState !== 'undefined') prepListState.xmlSourceId = xsId;
+            }
+            if (mpId) {
+                if (typeof catState !== 'undefined') catState.marketplaceId = mpId;
+                if (typeof varState !== 'undefined') varState.marketplaceId = mpId;
+                if (typeof prepBrandState !== 'undefined') prepBrandState.selectedMarketplaceId = mpId;
+                if (typeof prepListState !== 'undefined') prepListState.marketplaceId = mpId;
+            }
             if (typeof catRenderGuardWarn === 'function') catRenderGuardWarn();
             if (typeof prepVariantCheckGuard === 'function') prepVariantCheckGuard();
             if (typeof prepListGuard === 'function') prepListGuard();
@@ -2293,11 +2572,16 @@
 
         async function checkAuth() {
             try {
-                await api('/auth/me');
+                var me = await api('/auth/me');
+                // PASSWORD CHANGE DEADLOCK DÜZELTMESİ: sayfa yenilendiğinde de
+                // mustChangePassword=true ise uygulama yerine şifre değişikliği ekranı açılır.
+                if (me && me.mustChangePassword) {
+                    showChangePassword();
+                    return;
+                }
                 loadApp();
             } catch (e) {
-                if (e.status === 401) { showLogin(); }
-                else { showLogin(); }
+                showLogin();
             }
         }
 
@@ -2338,7 +2622,7 @@ if (needsContext && !isContextValid()) {
             }
 
             if (name === 'xml') showXmlPage('list');
-            if (name === 'products') refreshProducts(currentProductsPage);
+            if (name === 'products') { refreshProducts(currentProductsPage); stockAutoLoad(); }
             if (name === 'prep-categories') prepCategoriesLoad();
             if (name === 'prep-brands') prepBrandsLoad();
             if (name === 'prep-variants') prepVariantsLoad();
@@ -2347,7 +2631,7 @@ if (needsContext && !isContextValid()) {
             if (name === 'marketplace') mpManageLoad();
             if (name === 'orders') ordersLoad();
             if (name === 'reports') reportsLoad();
-            if (name === 'settings') settingsLoad();
+            if (name === 'settings') { settingsLoad(); stockAutoSettingsLoad(); }
             if (name === 'ai-image') aiImageLoad();
             if (name === 'ai-sales') aiSalesLoad();
             if (name === 'ai-copilot') aiCopilotLoad();
@@ -2977,7 +3261,7 @@ if (needsContext && !isContextValid()) {
 
                 /* ===================== ÜRÜN HAVUZU (STABLE mirror) ===================== */
 
-        var poolState = { page: 1, limit: 50, search: '', status: '', xmlSourceId: '', selected: {}, items: [], total: 0, totalPages: 1, sources: [] };
+        var poolState = { page: 1, limit: 50, search: '', status: '', xmlSourceId: '', minStock: '', maxStock: '', selected: {}, items: [], total: 0, totalPages: 1, sources: [] };
         var poolSearchTimer = null;
 
         function poolEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -3020,9 +3304,21 @@ if (needsContext && !isContextValid()) {
 
         function poolBuildQuery() {
             var q = '/products?page=' + poolState.page + '&limit=' + poolState.limit + '&includeVariants=true';
+            if (poolState.xmlSourceId) q += '&xmlSourceId=' + encodeURIComponent(poolState.xmlSourceId);
             if (poolState.search) q += '&search=' + encodeURIComponent(poolState.search);
             if (poolState.status) q += '&status=' + encodeURIComponent(poolState.status);
+            if (poolState.minStock !== '') q += '&minStock=' + encodeURIComponent(poolState.minStock);
+            if (poolState.maxStock !== '') q += '&maxStock=' + encodeURIComponent(poolState.maxStock);
             return q;
+        }
+
+        function poolOnStockFilterChange() {
+            var mn = document.getElementById('pool-minstock');
+            var mx = document.getElementById('pool-maxstock');
+            poolState.minStock = mn ? mn.value.trim() : '';
+            poolState.maxStock = mx ? mx.value.trim() : '';
+            poolState.page = 1;
+            refreshProducts(1);
         }
 
         function poolNum(v) { return (v === null || v === undefined) ? '0' : Number(v).toLocaleString('tr-TR'); }
@@ -3143,7 +3439,9 @@ if (needsContext && !isContextValid()) {
 
         async function poolLoadStats() {
             try {
-                var st = await api('/products/stats');
+                var q = '/products/stats';
+                if (poolState.xmlSourceId) q += '?xmlSourceId=' + encodeURIComponent(poolState.xmlSourceId);
+                var st = await api(q);
                 poolRenderKpi(st);
             } catch (e) { /* sessiz */ }
         }
@@ -3209,6 +3507,7 @@ if (needsContext && !isContextValid()) {
             poolState.page = 1;
             poolState.selected = {};
             poolLoad();
+            poolLoadStats();
             poolRenderSelection();
             updateContextUI();
             syncLocalContextSelectors();
@@ -3696,25 +3995,63 @@ if (needsContext && !isContextValid()) {
             document.getElementById('rts-selection-bar').classList.add('hidden');
         }
 
+        function rtsSendResultSummary(results) {
+            var list = Array.isArray(results) ? results : [];
+            var active = 0, dup = 0, err = 0, errLabel = '';
+            list.forEach(function (r) {
+                if (r.status === 'ACTIVE') active++;
+                else if (r.duplicate) dup++;
+                else { err++; if (!errLabel && r.errorCode) errLabel = rtsSendErrorLabel(r.errorCode); }
+            });
+            if (err > 0 && active === 0 && dup === 0) {
+                return { ok: false, message: errLabel || ('Gönderim hatası: ' + err + ' ürün') };
+            }
+            return { ok: true, message: active + ' başarılı, ' + dup + ' zaten gönderilmiş' + (err > 0 ? ', ' + err + ' hata' : '') };
+        }
+
+        function rtsSendErrorLabel(code) {
+            var labels = {
+                CREDENTIAL_ERROR: 'Pazaryeri kimlik bilgisi hatası',
+                VALIDATION_ERROR: 'Doğrulama hatası',
+                RESOURCE_NOT_FOUND: 'Kaynak bulunamadı',
+                DUPLICATE: 'Zaten gönderilmiş',
+                RATE_LIMIT: 'İstek limiti aşıldı',
+                PROVIDER_ERROR: 'Pazaryeri hatası',
+                TIMEOUT: 'Zaman aşımı',
+                NETWORK_ERROR: 'Ağ hatası',
+                NOT_CONFIGURED: 'Pazaryeri yapılandırılmamış',
+                PARSE_ERROR: 'Pazaryeri yanıtı ayrıştırılamadı',
+                NOT_READY: 'Ürün 4/4 gönderime hazır değil',
+                WRONG_XML_CONTEXT: 'Yanlış XML bağlamı',
+                MARKETPLACE_NOT_FOUND: 'Pazaryeri bulunamadı',
+                PRODUCT_NOT_FOUND: 'Ürün bulunamadı'
+            };
+            return labels[code] || ('Hata: ' + code);
+        }
+
         async function rtsBulkSend() {
             var ids = Array.from(rtsState.selectedIds);
             if (ids.length === 0) { showToast('Önce ürün seçin', 'error'); return; }
             if (!confirm(ids.length + ' ürün gönderime alınacak. Devam edilsin mi?')) return;
+            showToast('Gönderim başlatıldı, işleniyor...', 'info');
             try {
-                var r = await api('/ready-to-ship/send', { method: 'POST', body: { productIds: ids } });
-                showToast(r.message || 'İşlem başarılı', 'success');
+                var r = await api('/marketplace-send/send', { method: 'POST', body: { productIds: ids, xmlSourceId: contextState.xmlSourceId, marketplaceId: contextState.marketplaceId } });
+                var s = rtsSendResultSummary(r.results);
+                showToast(s.message, s.ok ? 'success' : 'error');
                 rtsClearSelection();
                 rtsLoad();
-            } catch (e) { showToast(e.message, 'error'); }
+            } catch (e) { showToast(e.message || 'Gönderim hatası', 'error'); }
         }
 
         async function rtsSendSingle(id) {
             if (!confirm('Bu ürün gönderime alınacak. Devam edilsin mi?')) return;
+            showToast('Gönderim başlatıldı, işleniyor...', 'info');
             try {
-                var r = await api('/ready-to-ship/send', { method: 'POST', body: { productIds: [id] } });
-                showToast(r.message || 'Ürün gönderime alındı', 'success');
+                var r = await api('/marketplace-send/send', { method: 'POST', body: { productIds: [id], xmlSourceId: contextState.xmlSourceId, marketplaceId: contextState.marketplaceId } });
+                var s = rtsSendResultSummary(r.results);
+                showToast(s.message, s.ok ? 'success' : 'error');
                 rtsLoad();
-            } catch (e) { showToast(e.message, 'error'); }
+            } catch (e) { showToast(e.message || 'Gönderim hatası', 'error'); }
         }
 
         async function rtsRecheck() {
@@ -3994,6 +4331,8 @@ if (needsContext && !isContextValid()) {
             }
         }
 
+        var mpEditConfigured = { apiKey: false, apiSecret: false, refreshToken: false };
+
         function mpCheckSaveBtn() {
             var typeEl = document.getElementById('mp-type');
             var nameEl = document.getElementById('mp-name');
@@ -4003,10 +4342,14 @@ if (needsContext && !isContextValid()) {
             if (!btn) return;
             var type = typeEl ? typeEl.value : '';
             var name = nameEl ? nameEl.value.trim() : '';
+            var editId = (document.getElementById('mp-edit-id') || {}).value || '';
             var apiKey = apiKeyEl ? apiKeyEl.value.trim() : '';
             var apiSecret = apiSecretEl ? apiSecretEl.value.trim() : '';
-            var canSave = !!(type && name && apiKey && apiSecret);
-            btn.disabled = !canSave;
+            var needKey = editId ? !mpEditConfigured.apiKey : true;
+            var needSecret = editId ? !mpEditConfigured.apiSecret : true;
+            var okKey = !needKey || !!apiKey;
+            var okSecret = !needSecret || !!apiSecret;
+            btn.disabled = !(type && name && okKey && okSecret);
         }
 
         function mpGetFieldValues() {
@@ -4065,6 +4408,9 @@ if (needsContext && !isContextValid()) {
 
         function mpManageAdd() {
             document.getElementById('mp-edit-id').value = '';
+            mpEditConfigured.apiKey = false;
+            mpEditConfigured.apiSecret = false;
+            mpEditConfigured.refreshToken = false;
             document.getElementById('mp-modal-title').innerHTML = '<i class="fa-solid fa-store text-primary"></i> Pazaryeri Ekle';
             document.getElementById('mp-type').value = '';
             document.getElementById('mp-type').disabled = false;
@@ -4098,17 +4444,23 @@ if (needsContext && !isContextValid()) {
                 document.getElementById('mp-test-result').classList.add('hidden');
                 if (mpFieldConfig[mpTypeValue]) {
                     mpTypeChanged();
+                    mpEditConfigured.apiKey = !!mp.apiKeyConfigured;
+                    mpEditConfigured.apiSecret = !!mp.apiSecretConfigured;
+                    mpEditConfigured.refreshToken = !!mp.refreshTokenConfigured;
                     setTimeout(function() {
                         var vals = {};
-                        if (mp.apiKey) vals['mp-apiKey'] = mp.apiKey;
-                        if (mp.apiSecret) vals['mp-apiSecret'] = mp.apiSecret;
                         if (mp.merchantId) vals['mp-merchantId'] = mp.merchantId;
                         if (mp.storeId) vals['mp-storeId'] = mp.storeId;
                         var settings = {};
                         try { settings = JSON.parse(mp.settings || '{}'); } catch(e) {}
                         if (settings.sellerId) vals['mp-sellerId'] = settings.sellerId;
-                        if (settings.refreshToken) vals['mp-refreshToken'] = settings.refreshToken;
                         mpSetFieldValues(vals);
+                        var keyEl = document.getElementById('mp-apiKey');
+                        if (keyEl) { keyEl.value = ''; keyEl.placeholder = mp.apiKeyConfigured ? '•••••••• (kayıtlı — değiştirmek için yeni girin)' : (keyEl.placeholder || ''); }
+                        var secEl = document.getElementById('mp-apiSecret');
+                        if (secEl) { secEl.value = ''; secEl.placeholder = mp.apiSecretConfigured ? '•••••••• (kayıtlı — değiştirmek için yeni girin)' : (secEl.placeholder || ''); }
+                        var rtEl = document.getElementById('mp-refreshToken');
+                        if (rtEl) { rtEl.value = ''; rtEl.placeholder = mp.refreshTokenConfigured ? '•••••••• (kayıtlı — değiştirmek için yeni girin)' : (rtEl.placeholder || ''); }
                         mpCheckSaveBtn();
                     }, 100);
                 }
@@ -4128,9 +4480,13 @@ if (needsContext && !isContextValid()) {
             var cfg = mpFieldConfig[type];
             if (!cfg) return true;
             var allFields = [].concat(cfg.apiFields || [], cfg.sellerFields || []);
+            var editId = (document.getElementById('mp-edit-id') || {}).value || '';
             for (var i = 0; i < allFields.length; i++) {
                 var f = allFields[i];
                 if (f.required) {
+                    if (editId && f.id === 'mp-apiKey' && mpEditConfigured.apiKey) continue;
+                    if (editId && f.id === 'mp-apiSecret' && mpEditConfigured.apiSecret) continue;
+                    if (editId && f.id === 'mp-refreshToken' && mpEditConfigured.refreshToken) continue;
                     var el = document.getElementById(f.id);
                     if (!el || !el.value.trim()) {
                         showToast(f.label + ' zorunludur', 'error');
@@ -4151,19 +4507,23 @@ if (needsContext && !isContextValid()) {
             var active = document.getElementById('mp-active').checked;
             var fieldVals = mpGetFieldValues();
             var settings = {};
-            if (fieldVals['mp-refreshToken']) settings.refreshToken = fieldVals['mp-refreshToken'];
 
             var body = {
                 name: name,
                 apiUrl: apiUrl || null,
                 active: active,
-                apiKey: fieldVals['mp-apiKey'] || null,
-                apiSecret: fieldVals['mp-apiSecret'] || null,
                 merchantId: fieldVals['mp-merchantId'] || null,
                 sellerId: fieldVals['mp-sellerId'] || null,
                 storeId: fieldVals['mp-storeId'] || null,
                 settings: JSON.stringify(settings)
             };
+            if (fieldVals['mp-apiKey']) body.apiKey = fieldVals['mp-apiKey'];
+            if (fieldVals['mp-apiSecret']) body.apiSecret = fieldVals['mp-apiSecret'];
+            if (fieldVals['mp-refreshToken']) body.refreshToken = fieldVals['mp-refreshToken'];
+            if (!editId) {
+                if (!body.apiKey) body.apiKey = null;
+                if (!body.apiSecret) body.apiSecret = null;
+            }
 
             try {
                 if (editId) {
@@ -4353,7 +4713,7 @@ if (needsContext && !isContextValid()) {
         function settingsTab(tab) {
             document.querySelectorAll('.set-tab').forEach(function (b) { b.className = b.className.replace('bg-primary text-white', ''); });
             document.getElementById('set-tab-' + tab).className += ' bg-primary text-white';
-            ['general', 'api', 'ai', 'password'].forEach(function (t) {
+            ['general', 'api', 'ai', 'password', 'stock'].forEach(function (t) {
                 document.getElementById('set-panel-' + t).classList.toggle('hidden', t !== tab);
             });
         }
@@ -4388,6 +4748,88 @@ if (needsContext && !isContextValid()) {
                 await api('/settings', { method: 'PUT', body: { settings: settings } });
                 showToast('Ayarlar kaydedildi', 'success');
             } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        async function stockAutoSettingsLoad() {
+            try {
+                var data = await api('/stock-automation');
+                var c = (data && data.config) || {};
+                var en = document.getElementById('set-stock-enabled');
+                var close = document.getElementById('set-stock-close');
+                var open = document.getElementById('set-stock-open');
+                var pmin = document.getElementById('set-stock-prepmin');
+                var pmax = document.getElementById('set-stock-prepmax');
+                if (en) en.checked = !!c.enabled;
+                if (close) close.value = (c.closeAt != null) ? c.closeAt : 3;
+                if (open) open.value = (c.openAt != null) ? c.openAt : 5;
+                if (pmin) pmin.value = (c.prepMin != null) ? c.prepMin : 1;
+                if (pmax) pmax.value = (c.prepMax != null) ? c.prepMax : 999999;
+                var s = (data && data.summary) || {};
+                var el = document.getElementById('set-stock-status');
+                if (el) el.textContent = 'Açık ürün: ' + (s.open != null ? s.open : 0) + ' · Kapalı ürün: ' + (s.closed != null ? s.closed : 0);
+            } catch (e) { /* sessiz */ }
+        }
+
+        async function stockAutoSettingsSave() {
+            var body = {
+                enabled: document.getElementById('set-stock-enabled').checked,
+                closeAt: Number(document.getElementById('set-stock-close').value || 0),
+                openAt: Number(document.getElementById('set-stock-open').value || 0),
+                prepMin: Number(document.getElementById('set-stock-prepmin').value || 0),
+                prepMax: Number(document.getElementById('set-stock-prepmax').value || 0),
+            };
+            try {
+                await api('/stock-automation', { method: 'PUT', body: body });
+                showToast('Stok otomasyonu ayarları kaydedildi', 'success');
+                stockAutoSettingsLoad();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        /* ===================== STOK OTOMASYONU ===================== */
+
+        async function stockAutoLoad() {
+            try {
+                var data = await api('/stock-automation');
+                var c = (data && data.config) || {};
+                document.getElementById('stock-auto-enabled').checked = !!c.enabled;
+                document.getElementById('stock-auto-close').value = (c.closeAt != null) ? c.closeAt : 3;
+                document.getElementById('stock-auto-open').value = (c.openAt != null) ? c.openAt : 5;
+                document.getElementById('stock-auto-prepmin').value = (c.prepMin != null) ? c.prepMin : 1;
+                document.getElementById('stock-auto-prepmax').value = (c.prepMax != null) ? c.prepMax : 999999;
+                var s = (data && data.summary) || {};
+                var el = document.getElementById('stock-auto-status');
+                if (el) el.textContent = 'Açık ürün: ' + (s.open != null ? s.open : 0) + ' · Kapalı ürün: ' + (s.closed != null ? s.closed : 0);
+            } catch (e) { /* sessiz */ }
+        }
+
+        async function stockAutoSave() {
+            var body = {
+                enabled: document.getElementById('stock-auto-enabled').checked,
+                closeAt: Number(document.getElementById('stock-auto-close').value || 0),
+                openAt: Number(document.getElementById('stock-auto-open').value || 0),
+                prepMin: Number(document.getElementById('stock-auto-prepmin').value || 0),
+                prepMax: Number(document.getElementById('stock-auto-prepmax').value || 0),
+            };
+            try {
+                await api('/stock-automation', { method: 'PUT', body: body });
+                showToast('Stok otomasyonu ayarları kaydedildi', 'success');
+                stockAutoLoad();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        async function stockAutoRun() {
+            var el = document.getElementById('stock-auto-status');
+            if (el) el.textContent = 'Motor çalışıyor...';
+            try {
+                var data = await api('/stock-automation/run', { method: 'POST', body: {} });
+                var st = (data && data.stats) || {};
+                if (el) el.textContent = 'Tarandı: ' + (st.scanned || 0) + ' · Kapatılan: ' + (st.closed || 0) + ' · Açılan: ' + (st.opened || 0) + ' · Hata: ' + (st.errors || 0) + ' · Atlandı: ' + (st.skipped || 0);
+                showToast('Stok otomasyonu tamamlandı', 'success');
+                stockAutoLoad();
+            } catch (e) {
+                if (el) el.textContent = 'Hata: ' + e.message;
+                showToast(e.message, 'error');
+            }
         }
 
         /* ===================== AI GÖRSEL MERKEZİ ===================== */
@@ -4685,7 +5127,9 @@ if (needsContext && !isContextValid()) {
 
         function catGetXmlSourceId() {
             var sel = document.getElementById('cat-xml-source');
-            return sel ? sel.value : (catState.xmlSupplierId || '');
+            if (sel && sel.value) return sel.value;
+            if (typeof contextState !== 'undefined' && contextState.xmlSourceId) return contextState.xmlSourceId;
+            return catState.xmlSupplierId || '';
         }
 
         function catRenderXmlSourceOptions() {
@@ -4712,6 +5156,10 @@ if (needsContext && !isContextValid()) {
         function catOnXmlSourceChange() {
             var sel = document.getElementById('cat-xml-source');
             catState.xmlSupplierId = sel ? sel.value : '';
+            // Eski polling/operation yeni context'e sonuç yazmamalı.
+            if (catState.pollTimer) { clearInterval(catState.pollTimer); catState.pollTimer = null; }
+            catState.autoMatchRunning = false;
+            catState.autoMatchLive = null;
             catRenderGuardWarn();
             if (catGetXmlSourceId() && catGetMarketplaceId()) catFetchAll();
             else catRenderAll();
@@ -4719,12 +5167,18 @@ if (needsContext && !isContextValid()) {
 
         function catGetMarketplaceId() {
             var sel = document.getElementById('cat-marketplace');
-            return sel ? sel.value : '';
+            if (sel && sel.value) return sel.value;
+            if (typeof contextState !== 'undefined' && contextState.marketplaceId) return contextState.marketplaceId;
+            return catState.marketplaceId || '';
         }
 
         function catOnMarketplaceChange() {
             var sel = document.getElementById('cat-marketplace');
             catState.marketplaceId = sel ? sel.value : '';
+            // Eski polling/operation yeni context'e sonuç yazmamalı.
+            if (catState.pollTimer) { clearInterval(catState.pollTimer); catState.pollTimer = null; }
+            catState.autoMatchRunning = false;
+            catState.autoMatchLive = null;
             catRenderGuardWarn();
             if (catGetXmlSourceId() && catGetMarketplaceId()) catFetchAll();
             else catRenderAll();
@@ -4734,12 +5188,12 @@ if (needsContext && !isContextValid()) {
             catState.loading = true;
             catShowLoading();
             try {
-                var params = new URLSearchParams({ limit: '1000' });
+                var params = new URLSearchParams({ limit: '20000' });
                 var catXmlId = catGetXmlSourceId();
                 if (catXmlId) params.append('xmlSourceId', catXmlId);
                 var catMpId = catGetMarketplaceId();
                 if (catMpId) params.append('marketplaceId', catMpId);
-                params.append('status', 'XML');
+                // Eşleşmiş + eşleşmemiş TÜM kategoriler görünmeli (status filtresi kaldırıldı).
                 var pr = api('/categories/products?' + params.toString());
                 var tr = api('/categories/tree?' + params.toString());
                 var prData = await pr;
@@ -4770,12 +5224,14 @@ if (needsContext && !isContextValid()) {
             var result = [];
             byCat.forEach(function (items, xmlPath) {
                 var pids = items.map(function (p) { return p.id; });
-                var matched = items.filter(function (p) { return p.categoryMatch && p.categoryId; });
+                // TEK AUTHORITATIVE KURAL (backend readiness.ts ile birebir): kategori eşleşmiş = categoryMatch === true.
+                // categoryId set ama categoryMatch=false olan ürünler (map edilmemiş lokal kategori) EŞLEŞMEMİŞ kabul edilir.
+                var matched = items.filter(function (p) { return p.categoryMatch === true; });
                 if (matched.length === items.length && items.length > 0) {
                     result.push({ xmlPath: xmlPath, total: items.length, matchedCount: matched.length, productIds: pids, aiProductIds: [], status: 'auto_matched', targetPath: catResolvePath(matched[0].categoryId, catState.flatMap) || (matched[0].category && matched[0].category.name) || 'Eşleşti' });
                     return;
                 }
-                var aiOnes = items.filter(function (p) { return !p.categoryMatch && p.aiSuggestedCategoryId; });
+                var aiOnes = items.filter(function (p) { return p.categoryMatch !== true && !p.categoryId && p.aiSuggestedCategoryId; });
                 if (aiOnes.length > 0) {
                     var freq = new Map();
                     aiOnes.forEach(function (p) { var id = p.aiSuggestedCategoryId; freq.set(id, (freq.get(id) || 0) + 1); });
@@ -4816,14 +5272,12 @@ if (needsContext && !isContextValid()) {
             var start = (catState.currentPage - 1) * catState.pageSize;
             var paginatedGroups = filteredGroups.slice(start, start + catState.pageSize);
 
-            var autoCount = 0, aiCount = 0, manualCount = 0;
-            (catState.groups || []).forEach(function (g) {
-                if (g.status === 'auto_matched') autoCount++;
-                else if (g.status === 'ai_suggested') aiCount++;
-                else manualCount++;
-            });
+            // TEK AUTHORITATIVE KURAL (backend readiness.ts ile birebir): kategori eşleşmiş = categoryMatch === true.
+            var autoCount = catState.products.filter(function (p) { return p.categoryMatch === true; }).length;
+            var aiCount = catState.products.filter(function (p) { return p.categoryMatch !== true && !p.categoryId && !!p.aiSuggestedCategoryId; }).length;
+            var manualCount = catState.products.filter(function (p) { return p.categoryMatch !== true && !(!p.categoryId && !!p.aiSuggestedCategoryId); }).length;
 
-            var matchedProductCount = catState.products.filter(function (p) { return p.categoryMatch && p.categoryId; }).length;
+            var matchedProductCount = autoCount;
             var percent = catState.products.length > 0 ? Math.round((matchedProductCount / catState.products.length) * 100) : 0;
 
             catRenderStepper(autoCount, aiCount, manualCount);
@@ -5028,7 +5482,22 @@ if (needsContext && !isContextValid()) {
                     html += '<button type="button" onclick="catApproveSuggestion(\'' + escapeHtml(g.xmlPath).replace(/'/g, "\\'") + '\')" class="rounded-lg px-2.5 py-1 text-[11px] font-bold text-white bg-emerald-500 hover:bg-emerald-600 shadow-sm transition-all hover:brightness-110" title="AI önerisini onayla">✓ Onayla</button>';
                     html += '</div></div>';
                 } else if (g.status === 'manual_required') {
-                    html += '<button type="button" onclick="catOpenSingleMatch(\'' + escapeHtml(g.xmlPath).replace(/'/g, "\\'") + '\')" class="inline-flex items-center gap-2 rounded-xl bg-primary hover:bg-primary-hover text-white px-4 py-2.5 text-sm font-semibold shadow-lg shadow-primary/25 transition-all"><span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px]">🔍</span>Kategori Seç</button>';
+                    html += '<div class="min-w-0">';
+                    html += '<button type="button" onclick="catOpenSingleMatch(\'' + escapeHtml(g.xmlPath).replace(/'/g, "\\'") + '\')" class="inline-flex items-center gap-2 rounded-xl bg-primary hover:bg-primary-hover text-white px-4 py-2.5 text-sm font-semibold shadow-lg shadow-primary/25 transition-all"><span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px]">🔍</span>Kategori Seç (Tümü)</button>';
+                    var pendingProds = catGetGroupProducts(g).filter(function (p) { return !p.categoryId; });
+                    if (pendingProds.length > 0) {
+                        html += '<div class="mt-1.5 max-h-28 overflow-y-auto rounded-lg bg-slate-50 dark:bg-slate-800/40 p-1.5 space-y-1">';
+                        pendingProds.slice(0, 5).forEach(function (p) {
+                            html += '<div class="flex items-center justify-between gap-2 rounded-md bg-white dark:bg-slate-800 px-2 py-1">'
+                                + '<div class="min-w-0"><div class="truncate text-[11px] font-semibold text-slate-700 dark:text-slate-200" title="' + escapeHtml(p.title || p.xmlKey) + '">' + escapeHtml(p.title || p.xmlKey) + '</div>'
+                                + '<div class="text-[9px] text-slate-400">' + escapeHtml(p.sku || '') + '</div></div>'
+                                + '<button type="button" onclick="catOpenProductMatch(\'' + p.id + '\')" class="shrink-0 rounded-md bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 text-[9px] font-bold">✎ Manuel Eşleştir</button>'
+                                + '</div>';
+                        });
+                        if (pendingProds.length > 5) html += '<div class="px-2 py-0.5 text-[9px] text-slate-400">+ ' + (pendingProds.length - 5) + ' ürün daha</div>';
+                        html += '</div>';
+                    }
+                    html += '</div>';
                 }
                 html += '</div></div>';
             });
@@ -5099,6 +5568,7 @@ if (needsContext && !isContextValid()) {
         /* --- AUTO MATCH --- */
         async function catAutoMatch() {
             if (!catRequireMarketplace()) return;
+            if (catState.autoMatchRunning) return; // duplicate start engeli
             catState.autoMatchRunning = true;
             catState.autoMatchLive = null;
             showToast('Otomatik eşleştirme başlatılıyor...', 'info');
@@ -5123,7 +5593,10 @@ if (needsContext && !isContextValid()) {
                                     catState.autoMatchRunning = false;
                                     catFetchAll();
                                     showToast((pr.matchedCount || 0) + ' kategori başarıyla eşleştirildi!', 'success');
-                                    setTimeout(function () { catState.autoMatchLive = null; catRenderAll(); }, 5000);
+                                    // completed: progress %100'de sabit kalır, 0'a düşmez.
+                                    var liveTotal = (catState.autoMatchLive && catState.autoMatchLive.total) || 0;
+                                    catState.autoMatchLive = { processed: liveTotal, total: liveTotal, matched: pr.matchedCount || 0 };
+                                    catRenderAll();
                                 }
                             }
                         } catch (e) { /* polling hatası */ }
@@ -5147,7 +5620,7 @@ if (needsContext && !isContextValid()) {
                 var mpId = catGetMarketplaceId();
                 var productIds = [];
                 catState.products.forEach(function (p) {
-                    if (!p.categoryMatch) productIds.push(p.id);
+                    if (!p.categoryId) productIds.push(p.id);
                 });
                 if (productIds.length === 0) { showToast('Eşleşmemiş ürün bulunamadı', 'error'); catState.aiRunning = false; return; }
                 var res = await api('/categories/ai-match', { method: 'POST', body: { productIds: productIds, marketplaceId: mpId, xmlSourceId: catGetXmlSourceId() } });
@@ -5180,6 +5653,18 @@ if (needsContext && !isContextValid()) {
             if (!group) return;
             catState.modalGroup = group;
             catState.modalBulk = false;
+            catOpenPickerModal();
+        }
+
+        /* Ürün bazlı Manuel Eşleştir: hangi satırdaki ürünse onun Product ID'si gönderilir. */
+        function catOpenProductMatch(productId) {
+            var p = (catState.products || []).find(function (x) { return x.id === productId; });
+            if (!p) return;
+            var xmlPath = (p.supplierCategory || 'Kategorisiz').trim();
+            var group = (catState.groups || []).find(function (g) { return g.xmlPath === xmlPath; });
+            catState.modalGroup = group || { xmlPath: xmlPath, total: 1, matchedCount: 0, productIds: [p.id] };
+            catState.modalBulk = false;
+            catState.modalSingleProductId = p.id;
             catOpenPickerModal();
         }
 
@@ -5220,6 +5705,7 @@ if (needsContext && !isContextValid()) {
             catPickerState.expanded = new Set();
             catPickerState.treeLoading = true;
             catPickerState.saving = false;
+            catRenderPickerProductInfo();
 
             catPickerState.activeMpId = catGetMarketplaceId();
 
@@ -5252,6 +5738,7 @@ if (needsContext && !isContextValid()) {
             var modal = document.getElementById('cat-picker-modal');
             if (modal) modal.classList.add('hidden');
             catState.modalOpen = false;
+            catState.modalSingleProductId = '';
         }
 
         function catRenderMpTabs() {
@@ -5310,7 +5797,18 @@ if (needsContext && !isContextValid()) {
                 var isOpen = catPickerState.expanded.has(cat.id) || catPickerState.search.trim().length > 0;
                 var isSel = catPickerState.selectedCatId === cat.id;
                 html += '<div>';
-                html += '<div role="button" tabindex="0" onclick="catPickerPick(\'' + cat.id + '\',\'' + escapeHtml(cat.name).replace(/'/g, "\\'") + '\')" onkeydown="if(event.key===\'Enter\')catPickerPick(\'' + cat.id + '\',\'' + escapeHtml(cat.name).replace(/'/g, "\\'") + '\')" class="flex w-full cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 text-left text-xs transition-colors" style="padding-left:' + (8 + depth * 14) + 'px;font-weight:' + (isSel ? 600 : 40) + '">';
+                if (cat.virtual === true) {
+                    // Ara düğüm (virtual): seçilemez, yalnızca aç/kapat
+                    html += '<div role="button" tabindex="0" onclick="catPickerToggleExpand(\'' + cat.id + '\')" onkeydown="if(event.key===\'Enter\')catPickerToggleExpand(\'' + cat.id + '\')" class="flex w-full cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-slate-100 dark:hover:bg-slate-800/50" style="padding-left:' + (8 + depth * 14) + 'px;">';
+                    html += '<span class="w-4 shrink-0 text-center text-[9px] text-current">' + (isOpen ? '▼' : '▶') + '</span>';
+                    html += '<span class="flex-1 truncate opacity-90">' + escapeHtml(cat.name) + '</span>';
+                    if (cat.productCount != null && cat.productCount > 0) html += '<span class="text-[9px] text-current">(' + cat.productCount + ')</span>';
+                    html += '</div>';
+                    if (isOpen) html += catRenderTreeNodes(cat.children, depth + 1);
+                    html += '</div>';
+                    return;
+                }
+                html += '<div role="button" tabindex="0" onclick="catPickerPick(\'' + cat.id + '\',\'' + escapeHtml(cat.name).replace(/'/g, "\\'") + '\')" onkeydown="if(event.key===\'Enter\')catPickerPick(\'' + cat.id + '\',\'' + escapeHtml(cat.name).replace(/'/g, "\\'") + '\')" class="flex w-full cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-slate-100 dark:hover:bg-slate-800/50" style="padding-left:' + (8 + depth * 14) + 'px;font-weight:' + (isSel ? 600 : 40) + '">';
                 if (hasChildren) html += '<span role="button" tabindex="-1" onclick="event.stopPropagation();catPickerToggleExpand(\'' + cat.id + '\')" class="w-4 shrink-0 text-center text-[9px] text-current">' + (isOpen ? '▼' : '▶') + '</span>';
                 else html += '<span class="w-4 shrink-0 text-center text-current">•</span>';
                 html += '<span class="flex-1 truncate">' + escapeHtml(cat.name) + '</span>';
@@ -5352,6 +5850,26 @@ if (needsContext && !isContextValid()) {
                 targetGroups = [catState.modalGroup];
             }
             if (targetGroups.length === 0) return;
+            // Ürün bazlı manuel: yalnızca seçilen ürünün Product ID'si gönderilir.
+            if (catState.modalSingleProductId) {
+                var sp = catState.modalSingleProductId;
+                catPickerState.saving = true;
+                var cbSingle = document.getElementById('cat-picker-confirm');
+                if (cbSingle) cbSingle.textContent = 'Eşleştiriliyor...';
+                try {
+                    var resSingle = await api('/categories/match', { method: 'POST', body: { categoryId: catPickerState.selectedCatId, productIds: [sp], xmlSourceId: catGetXmlSourceId() } });
+                    if (resSingle && (resSingle.ok !== false || resSingle.matchedCount != null)) {
+                        showToast('"' + catPickerState.selectedCatName + '" kategorisine ürün eşleştirildi', 'success');
+                        catClosePicker();
+                        catFetchAll();
+                    } else {
+                        showToast((resSingle && resSingle.message) || 'Eşleştirme başarısız', 'error');
+                    }
+                } catch (e) { showToast(e.message, 'error'); }
+                catPickerState.saving = false;
+                if (cbSingle) cbSingle.textContent = '✓ Eşleştir';
+                return;
+            }
             catPickerState.saving = true;
             var confirmBtn = document.getElementById('cat-picker-confirm');
             if (confirmBtn) confirmBtn.textContent = 'Eşleştiriliyor...';
@@ -5383,6 +5901,42 @@ if (needsContext && !isContextValid()) {
 
         function catMatchDone() { catClosePicker(); catFetchAll(); }
 
+        function catGetGroupProducts(group) {
+            if (!group) return [];
+            var ids = new Set(group.productIds || []);
+            return (catState.products || []).filter(function (p) { return ids.has(p.id); });
+        }
+
+        function catRenderPickerProductInfo() {
+            var el = document.getElementById('cat-picker-product-info');
+            if (!el) return;
+            var prods = [];
+            if (catState.modalBulk) {
+                (catState.groups || []).filter(function (g) { return catState.selectedGroups.has(g.xmlPath); }).forEach(function (g) {
+                    prods = prods.concat(catGetGroupProducts(g));
+                });
+            } else if (catState.modalGroup) {
+                prods = catGetGroupProducts(catState.modalGroup);
+            }
+            // Manuel çalışma kapsamı: yalnızca eşleşmemiş ürünler.
+            var pending = prods.filter(function (p) { return !(p.categoryMatch && p.categoryId); });
+            if (pending.length === 0) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+            el.classList.remove('hidden');
+            var html = '<div class="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">ÜRÜN BİLGİSİ (' + pending.length + ' ürün)</div>';
+            pending.slice(0, 12).forEach(function (p) {
+                html += '<div class="rounded-xl bg-slate-50 dark:bg-slate-800/50 px-3 py-2 mb-1.5">'
+                    + '<div class="text-xs font-bold text-slate-900 dark:text-white">' + escapeHtml(p.title || p.xmlKey) + '</div>'
+                    + '<div class="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400">'
+                    + '<span>SKU: <b>' + escapeHtml(p.sku || '—') + '</b></span>'
+                    + '<span>Barkod: <b>' + escapeHtml(p.barcode || '—') + '</b></span>'
+                    + '<span>Marka: <b>' + escapeHtml((p.brand && p.brand.name) || p.xmlBrandName || '—') + '</b></span>'
+                    + '<span>XML: <b>' + escapeHtml((p.xmlSource && p.xmlSource.name) || '—') + '</b></span>'
+                    + '</div></div>';
+            });
+            if (pending.length > 12) html += '<div class="text-[10px] text-slate-400">+ ' + (pending.length - 12) + ' ürün daha</div>';
+            el.innerHTML = html;
+        }
+
                 /* ===================== ÜRÜN HAZIRLAMA: MARKA — SADE AKIŞ V5 ===================== */
 
         var prepBrandState = {
@@ -5396,6 +5950,7 @@ if (needsContext && !isContextValid()) {
         async function prepBrandsLoad() {
             await prepBrandLoadSelects();
             prepBrandCheckMatchBtn();
+            await prepBrandMaybeLoadProducts();
         }
 
         async function prepBrandLoadSelects() {
@@ -5416,25 +5971,21 @@ if (needsContext && !isContextValid()) {
                 prepBrandState.marketplaces.forEach(function (m) { h2 += '<option value="' + m.id + '" data-key="' + escapeHtml(m.key || '') + '"' + (m.id === prepBrandState.selectedMarketplaceId ? ' selected' : '') + '>' + escapeHtml(m.name) + '</option>'; });
                 mpEl.innerHTML = h2;
             }
+            // Global context ile sayfaya gelindiyse XML marka listesi otomatik yüklenir (3 saniye UX).
+            if (prepBrandState.selectedXmlSource) {
+                await prepBrandLoadXmlBrands(prepBrandState.selectedXmlSource);
+            }
+            await prepBrandUpdateContextHeader();
         }
 
-        function prepBrandOnMarketplaceChange() {
-            var sel = document.getElementById('br-marketplace');
-            var val = sel ? sel.value : '';
-            prepBrandState.selectedMarketplaceId = val;
-            prepBrandState.selectedMarketplaceKey = (sel && sel.selectedIndex >= 0 && sel.options[sel.selectedIndex]) ? (sel.options[sel.selectedIndex].getAttribute('data-key') || '') : '';
-            prepBrandCheckMatchBtn();
-        }
-
-        async function prepBrandOnSourceChange() {
-            var srcId = document.getElementById('br-xml-source').value;
-            prepBrandState.selectedXmlSource = srcId;
-            prepBrandState.selectedXmlBrandName = '';
+        async function prepBrandLoadXmlBrands(srcId) {
             var xmlBrandEl = document.getElementById('br-xml-brand');
-            prepBrandCheckMatchBtn();
-            if (!srcId) { if (xmlBrandEl) { xmlBrandEl.innerHTML = '<option value="">Önce XML kaynağı seçin</option>'; xmlBrandEl.disabled = true; } return; }
+            if (!srcId) {
+                if (xmlBrandEl) { xmlBrandEl.innerHTML = '<option value="">Önce XML kaynağı seçin</option>'; xmlBrandEl.disabled = true; }
+                return;
+            }
             try {
-                var res = await api('/brands/xml-brands?xmlSourceId=' + srcId);
+                var res = await api('/brands/xml-brands?xmlSourceId=' + encodeURIComponent(srcId));
                 prepBrandState.xmlBrands = (res && res.items) || [];
                 if (xmlBrandEl) {
                     var h = '<option value="">XML Markası Seç...</option>';
@@ -5442,24 +5993,87 @@ if (needsContext && !isContextValid()) {
                     xmlBrandEl.innerHTML = h;
                     xmlBrandEl.disabled = false;
                 }
-            } catch (e) { if (xmlBrandEl) xmlBrandEl.innerHTML = '<option value="">Hata oluştu</option>'; }
-            document.getElementById('br-products-section').classList.add('hidden');
-            document.getElementById('br-summary').classList.add('hidden');
-            document.getElementById('br-save-btn').disabled = true;
+            } catch (e) {
+                if (xmlBrandEl) xmlBrandEl.innerHTML = '<option value="">Hata oluştu</option>';
+            }
+        }
+
+        async function prepBrandUpdateContextHeader() {
+            var srcEl = document.getElementById('br-xml-source');
+            var mpEl = document.getElementById('br-marketplace');
+            var srcName = (srcEl && srcEl.selectedOptions[0] && srcEl.value) ? srcEl.selectedOptions[0].text : 'Seçilmedi';
+            var mpName = (mpEl && mpEl.selectedOptions[0] && mpEl.value) ? mpEl.selectedOptions[0].text : 'Seçilmedi';
+            var set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+            set('br-ctx-xml', srcName);
+            set('br-ctx-mp', mpName);
+            if (!prepBrandState.selectedXmlSource) {
+                set('br-ctx-total', '-'); set('br-ctx-matched', '-'); set('br-ctx-fallback', '-'); set('br-ctx-waiting', '-');
+                return;
+            }
+            var qs = 'xmlSourceId=' + encodeURIComponent(prepBrandState.selectedXmlSource);
+            try {
+                var st = await api('/brands/stats?' + qs);
+                // TEK KAYNAK: üst toplam = ürün listesinin pagination.total'i (XML geneli, 13.382).
+                var total = prepBrandState.totalProducts || st.totalProducts || 0;
+                set('br-ctx-total', fmt(total));
+                set('br-ctx-matched', fmt(st.matchedProducts || 0));
+                set('br-ctx-fallback', fmt(st.xmlBrandFallback || 0));
+                set('br-ctx-waiting', fmt(st.waitingProducts || 0));
+            } catch (e) { /* sessiz */ }
+        }
+
+        function prepBrandOnMarketplaceChange() {
+            var sel = document.getElementById('br-marketplace');
+            var val = sel ? sel.value : '';
+            prepBrandState.selectedMarketplaceId = val;
+            prepBrandState.selectedMarketplaceKey = (sel && sel.selectedIndex >= 0 && sel.options[sel.selectedIndex]) ? (sel.options[sel.selectedIndex].getAttribute('data-key') || '') : '';
             prepBrandState.previewData = null;
+            var sv = document.getElementById('br-save-btn');
+            if (sv) sv.disabled = true;
+            prepBrandUpdateContextHeader();
+            prepBrandCheckMatchBtn();
+            prepBrandMaybeLoadProducts();
+        }
+
+        async function prepBrandOnSourceChange() {
+            var srcId = document.getElementById('br-xml-source').value;
+            prepBrandState.selectedXmlSource = srcId;
+            prepBrandState.selectedXmlBrandName = '';
+            prepBrandState.selectedProducts.clear();
+            prepBrandState.allSelected = false;
+            prepBrandState.currentPage = 1;
+            var xmlBrandEl = document.getElementById('br-xml-brand');
+            prepBrandCheckMatchBtn();
+            if (!srcId) {
+                if (xmlBrandEl) { xmlBrandEl.innerHTML = '<option value="">Önce XML kaynağı seçin</option>'; xmlBrandEl.disabled = true; }
+                document.getElementById('br-products-section').classList.add('hidden');
+                var brBody0 = document.getElementById('br-products-body');
+                if (brBody0) brBody0.innerHTML = '<tr><td class="py-16 text-center text-slate-400" colspan="3">Context seçilmedi</td></tr>';
+                document.getElementById('br-summary').classList.add('hidden');
+                document.getElementById('br-save-btn').disabled = true;
+                prepBrandState.previewData = null;
+                var sa0 = document.getElementById('br-select-all');
+                if (sa0) sa0.checked = false;
+                prepBrandUpdateSelectionInfo();
+                prepBrandUpdateContextHeader();
+                return;
+            }
+            await prepBrandLoadXmlBrands(srcId);
+            prepBrandState.previewData = null;
+            document.getElementById('br-save-btn').disabled = true;
+            var sa = document.getElementById('br-select-all');
+            if (sa) sa.checked = false;
+            await prepBrandUpdateContextHeader();
+            await prepBrandMaybeLoadProducts();
         }
 
         async function prepBrandOnXmlBrandChange() {
+            // XML markası seçimi yalnızca "Marka Eşleştir" aksiyonu içindir; ürün listesini FİLTRELEMEZ.
             var name = document.getElementById('br-xml-brand').value;
             prepBrandState.selectedXmlBrandName = name;
-            prepBrandState.currentPage = 1;
-            prepBrandState.selectedProducts.clear();
-            prepBrandState.allSelected = false;
             prepBrandState.previewData = null;
             document.getElementById('br-save-btn').disabled = true;
             prepBrandCheckMatchBtn();
-            if (name) await prepBrandLoadProducts();
-            else { document.getElementById('br-products-section').classList.add('hidden'); document.getElementById('br-summary').classList.add('hidden'); }
         }
 
         function prepBrandCheckMatchBtn() {
@@ -5470,48 +6084,72 @@ if (needsContext && !isContextValid()) {
             if (btn) btn.disabled = !ready;
         }
 
+        async function prepBrandMaybeLoadProducts() {
+            if (prepBrandState.selectedXmlSource && prepBrandState.selectedMarketplaceId) {
+                await prepBrandLoadProducts();
+            }
+        }
+
         async function prepBrandLoadProducts() {
-            var name = prepBrandState.selectedXmlBrandName;
-            if (!name) return;
-            if (!isContextValid()) { showToast('Önce Context (XML Kaynağı + Pazaryeri) seçiniz', 'warning'); return; }
+            // ANA DATASET: seçili XML'in TÜM ürünleri. Marka filtresi YOK (eşleşme filtresi dataset'i küçültmez).
+            if (!prepBrandState.selectedXmlSource || !prepBrandState.selectedMarketplaceId) {
+                showToast('Önce XML Kaynağı + Pazaryeri seçiniz', 'warning');
+                return;
+            }
             var sec = document.getElementById('br-products-section');
             sec.classList.remove('hidden');
             var body = document.getElementById('br-products-body');
-            body.innerHTML = '<tr><td class="py-10 text-center text-slate-400" colspan="5"><i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Ürünler yükleniyor...</td></tr>';
+            body.innerHTML = '<tr><td class="py-10 text-center text-slate-400" colspan="3"><i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Ürünler yükleniyor...</td></tr>';
             try {
-                var res = await api('/brands/products?page=' + prepBrandState.currentPage + '&limit=' + prepBrandState.pageSize + '&xmlBrandName=' + encodeURIComponent(name) + '&xmlSourceId=' + encodeURIComponent(prepBrandState.selectedXmlSource));
+                var res = await api('/brands/products?page=' + prepBrandState.currentPage + '&limit=' + prepBrandState.pageSize + '&xmlSourceId=' + encodeURIComponent(prepBrandState.selectedXmlSource));
                 prepBrandState.products = (res && res.items) || [];
                 prepBrandState.totalProducts = (res && res.pagination && res.pagination.total) || 0;
                 prepBrandRenderProducts();
                 prepBrandRenderPagination();
-                document.getElementById('br-selection-info').textContent = 'Seçili: 0 / ' + prepBrandState.totalProducts.toLocaleString('tr-TR');
-            } catch (e) { body.innerHTML = '<tr><td class="py-10 text-center text-red-400" colspan="5">Ürünler yüklenemedi</td></tr>'; }
+                prepBrandUpdateSelectionInfo();
+                prepBrandSyncSelectAll();
+                await prepBrandUpdateContextHeader();
+            } catch (e) { body.innerHTML = '<tr><td class="py-10 text-center text-red-400" colspan="3">Ürünler yüklenemedi</td></tr>'; }
         }
 
         function prepBrandRenderProducts() {
             var body = document.getElementById('br-products-body');
             var prods = prepBrandState.products;
             var xmlName = prepBrandState.selectedXmlBrandName;
-            var manualBrand = (document.getElementById('br-manual-brand').value || '').trim();
-            var targetBrandName = manualBrand;
-            if (!prods || prods.length === 0) { body.innerHTML = '<tr><td class="py-16 text-center text-slate-400" colspan="5">Bu markada ürün bulunamadı</td></tr>'; return; }
+            if (!prods || prods.length === 0) { body.innerHTML = '<tr><td class="py-16 text-center text-slate-400" colspan="3">Bu XML kaynağında ürün bulunamadı</td></tr>'; return; }
             var html = '';
             prods.forEach(function (p) {
                 var origTitle = p.originalTitle || p.title || '';
                 var cleanTitle = origTitle;
                 var prefixPat = /^[A-Za-z\u00c0-\u024f\u0130\u0131\s]+ ® /;
-                var match = cleanTitle.match(prefixPat);
-                if (match) cleanTitle = cleanTitle.substring(match[0].length);
-                var displayName = targetBrandName ? targetBrandName + ' ® ' + cleanTitle : cleanTitle;
-                var isMatched = p.brandMatch;
-                var statusLabel = isMatched ? 'Eşleşti' : 'Bekliyor';
-                var statusClass = isMatched ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400';
+                var m = cleanTitle.match(prefixPat);
+                if (m) cleanTitle = cleanTitle.substring(m[0].length);
+
+                // Gerçek marka sonucu: eşleşmiş marka → XML markası fallback → bekliyor.
+                var matchedBrandName = (p.brand && p.brand.name) || '';
+                var xmlBrandName = p.xmlBrandName || xmlName || '';
+                var isMatched = !!(p.brandMatch && matchedBrandName);
+                var useXmlBrand = !isMatched && !!xmlBrandName;
+
+                var resolvedBrand = isMatched ? matchedBrandName : (useXmlBrand ? xmlBrandName : '');
+                var displayName = resolvedBrand ? resolvedBrand + ' ® ' + cleanTitle : cleanTitle;
+
+                var statusLabel, statusClass, subLine;
+                if (isMatched) {
+                    statusLabel = '✓ Eşleşti'; statusClass = 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
+                    subLine = 'Marka: ' + (xmlBrandName || '-') + ' → ' + matchedBrandName;
+                } else if (useXmlBrand) {
+                    statusLabel = 'ℹ XML markası kullanılacak'; statusClass = 'bg-sky-500/10 text-sky-600 dark:text-sky-400';
+                    subLine = 'Marka: ' + xmlBrandName + ' → XML markası kullanılacak';
+                } else {
+                    statusLabel = '⚠ Marka eşleştirmesi bekliyor'; statusClass = 'bg-amber-500/10 text-amber-600 dark:text-amber-400';
+                    subLine = 'Marka: bekliyor';
+                }
+
                 var checked = prepBrandState.selectedProducts.has(p.id) ? 'checked' : '';
                 html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">';
                 html += '<td class="py-2.5 px-3"><input type="checkbox" ' + checked + ' onchange="prepBrandToggleProduct(\'' + p.id + '\')" class="w-3.5 h-3.5 rounded accent-[var(--primary-color)]"></td>';
-                html += '<td class="py-2.5 px-4 text-xs font-semibold text-slate-900 dark:text-white max-w-[400px] truncate" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</td>';
-                html += '<td class="py-2.5 px-4 text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(xmlName) + '</td>';
-                html += '<td class="py-2.5 px-4 text-xs font-medium text-slate-700 dark:text-slate-300">' + escapeHtml(targetBrandName || '-') + '</td>';
+                html += '<td class="py-2.5 px-4 max-w-[460px]"><div class="text-xs font-semibold text-slate-900 dark:text-white truncate" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</div><div class="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">' + escapeHtml(subLine) + '</div></td>';
                 html += '<td class="py-2.5 px-4"><span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ' + statusClass + '">' + statusLabel + '</span></td>';
                 html += '</tr>';
             });
@@ -5541,11 +6179,30 @@ if (needsContext && !isContextValid()) {
         function prepBrandGoPage(p) { prepBrandState.currentPage = p; prepBrandLoadProducts(); }
         function prepBrandPagePrev() { if (prepBrandState.currentPage > 1) { prepBrandState.currentPage--; prepBrandLoadProducts(); } }
         function prepBrandPageNext() { var tp = Math.max(1, Math.ceil(prepBrandState.totalProducts / prepBrandState.pageSize)); if (prepBrandState.currentPage < tp) { prepBrandState.currentPage++; prepBrandLoadProducts(); } }
-        function prepBrandSetSize(s) { prepBrandState.pageSize = s; prepBrandState.currentPage = 1; prepBrandLoadProducts(); }
+        function prepBrandSetSize(s) {
+            prepBrandState.pageSize = s;
+            prepBrandState.currentPage = 1;
+            var sel = document.getElementById('br-page-size');
+            if (sel) sel.value = String(s);
+            prepBrandLoadProducts();
+        }
+
+        function prepBrandUpdateSelectionInfo() {
+            var info = document.getElementById('br-selection-info');
+            if (info) info.textContent = prepBrandState.selectedProducts.size.toLocaleString('tr-TR') + ' ürün seçildi';
+        }
+
+        function prepBrandSyncSelectAll() {
+            var sa = document.getElementById('br-select-all');
+            if (!sa) return;
+            var pageIds = (prepBrandState.products || []).map(function (p) { return p.id; });
+            sa.checked = pageIds.length > 0 && pageIds.every(function (id) { return prepBrandState.selectedProducts.has(id); });
+        }
 
         function prepBrandToggleProduct(id) {
             if (prepBrandState.selectedProducts.has(id)) prepBrandState.selectedProducts.delete(id); else prepBrandState.selectedProducts.add(id);
-            document.getElementById('br-selection-info').textContent = 'Seçili: ' + prepBrandState.selectedProducts.size.toLocaleString('tr-TR') + ' / ' + prepBrandState.totalProducts.toLocaleString('tr-TR');
+            prepBrandUpdateSelectionInfo();
+            prepBrandSyncSelectAll();
         }
 
         function prepBrandSelectAll() {
@@ -5553,7 +6210,11 @@ if (needsContext && !isContextValid()) {
             prepBrandState.allSelected = chk;
             prepBrandState.selectedProducts.clear();
             if (chk) prepBrandState.products.forEach(function (p) { prepBrandState.selectedProducts.add(p.id); });
-            document.getElementById('br-selection-info').textContent = 'Seçili: ' + prepBrandState.selectedProducts.size.toLocaleString('tr-TR') + ' / ' + prepBrandState.totalProducts.toLocaleString('tr-TR');
+            var info = document.getElementById('br-selection-info');
+            if (info) {
+                if (chk) info.textContent = 'Bu sayfadaki ' + prepBrandState.products.length.toLocaleString('tr-TR') + ' ürün seçildi.';
+                else info.textContent = '0 ürün seçildi';
+            }
             prepBrandRenderProducts();
         }
 
@@ -5718,7 +6379,7 @@ if (needsContext && !isContextValid()) {
                 var [varRes, xmlRes, statsRes, unmatchedRes] = await Promise.all([
                     api('/variants/?limit=1000' + xsQ),
                     api('/variants/xml-variants' + xsQ2),
-                    api('/variants/stats'),
+                    api('/variants/stats' + (varState.xmlSourceId ? '?xmlSourceId=' + encodeURIComponent(varState.xmlSourceId) : '')),
                     api('/variants/unmatched-products?limit=500' + xsQ)
                 ]);
                 varState.variantRecords = varRes.items || [];
@@ -5964,7 +6625,7 @@ if (needsContext && !isContextValid()) {
             if (!prepVariantGuard()) return;
             varState.aiRunning = true;
             try {
-                var r = await api('/variants/auto-detect', { method: 'POST', body: {} });
+                var r = await api('/variants/auto-detect', { method: 'POST', body: { xmlSourceId: varState.xmlSourceId || contextState.xmlSourceId || '' } });
                 showToast(r.message || r.totalDetected + ' varyant tespit edildi', 'success');
                 varState.step = 2;
                 prepVariantFetchAll();
@@ -6082,6 +6743,380 @@ if (needsContext && !isContextValid()) {
         function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
         /* ===================== ÜRÜN HAZIRLAMA: LİSTELEME ===================== */
+
+/* ===================== VARYANT EŞLEŞTİRME V4 (ÜRÜN BAZLI) ===================== */
+varState = {
+    xmlSources: [], marketplaces: [], xmlSourceId: '', marketplaceId: '',
+    pageSize: 50, currentPage: 1, totalProducts: 0,
+    products: [], selectedProducts: new Set(), dashboard: null
+};
+
+async function prepVariantsLoad() {
+    await prepVariantLoadSelects();
+    // 3 saniye UX: seçim yoksa ilk XML + Trendyol (varsa) otomatik seçilir.
+    if (!varState.xmlSourceId && varState.xmlSources.length > 0) {
+        varState.xmlSourceId = varState.xmlSources[0].id;
+        var srcEl = document.getElementById('var-xml-source');
+        if (srcEl) srcEl.value = varState.xmlSourceId;
+    }
+    if (!varState.marketplaceId && varState.marketplaces.length > 0) {
+        var tt = varState.marketplaces.find(function (m) { return (m.key || '').toLowerCase() === 'tt'; }) || varState.marketplaces[0];
+        varState.marketplaceId = tt.id;
+        var mpEl = document.getElementById('var-marketplace');
+        if (mpEl) mpEl.value = varState.marketplaceId;
+    }
+    if (varState.xmlSourceId && varState.marketplaceId) {
+        await prepVariantMaybeLoad();
+    } else {
+        document.getElementById('var-products-section').classList.remove('hidden');
+        document.getElementById('var-products-body').innerHTML = '<tr><td class="py-16 text-center text-slate-400" colspan="4">XML + Pazaryeri seçin...</td></tr>';
+    }
+}
+
+async function prepVariantLoadSelects() {
+    try {
+        var [xsRes, mpRes] = await Promise.all([api('/xml-sources'), api('/marketplaces')]);
+        varState.xmlSources = (xsRes && xsRes.items) || [];
+        varState.marketplaces = (mpRes && mpRes.items) || [];
+    } catch (e) { /* sessiz */ }
+    var srcEl = document.getElementById('var-xml-source');
+    var mpEl = document.getElementById('var-marketplace');
+    if (srcEl) {
+        var h = '<option value="">📦 Tedarikçi / XML Seçiniz...</option>';
+        varState.xmlSources.forEach(function (s) { h += '<option value="' + s.id + '"' + (s.id === varState.xmlSourceId ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>'; });
+        srcEl.innerHTML = h;
+    }
+    if (mpEl) {
+        var h2 = '<option value="">🛒 Pazaryeri Seçiniz...</option>';
+        varState.marketplaces.forEach(function (m) { h2 += '<option value="' + m.id + '"' + (m.id === varState.marketplaceId ? ' selected' : '') + '>' + escapeHtml(m.name) + '</option>'; });
+        mpEl.innerHTML = h2;
+    }
+}
+
+function prepVariantOnSourceChange() {
+    varState.xmlSourceId = (document.getElementById('var-xml-source') || {}).value || '';
+    varState.selectedProducts.clear();
+    varState.currentPage = 1;
+    prepVariantMaybeLoad();
+}
+
+function prepVariantOnMpChange() {
+    varState.marketplaceId = (document.getElementById('var-marketplace') || {}).value || '';
+    varState.selectedProducts.clear();
+    varState.currentPage = 1;
+    prepVariantMaybeLoad();
+}
+
+async function prepVariantMaybeLoad() {
+    var ctxX = document.getElementById('var-ctx-xml');
+    var ctxM = document.getElementById('var-ctx-mp');
+    if (!varState.xmlSourceId || !varState.marketplaceId) {
+        document.getElementById('var-products-section').classList.add('hidden');
+        if (ctxX) ctxX.textContent = 'Seçilmedi';
+        if (ctxM) ctxM.textContent = 'Seçilmedi';
+        return;
+    }
+    document.getElementById('var-products-section').classList.remove('hidden');
+    await Promise.all([prepVariantFetchDashboard(), prepVariantLoadProducts()]);
+}
+
+async function prepVariantFetchDashboard() {
+    try {
+        var d = await api('/variants/dashboard?xmlSourceId=' + encodeURIComponent(varState.xmlSourceId) + '&marketplaceId=' + encodeURIComponent(varState.marketplaceId || ''));
+        varState.dashboard = d;
+        var srcEl = document.getElementById('var-xml-source');
+        var mpEl = document.getElementById('var-marketplace');
+        if (srcEl && srcEl.selectedOptions[0] && srcEl.value) document.getElementById('var-ctx-xml').textContent = srcEl.selectedOptions[0].text;
+        if (mpEl && mpEl.selectedOptions[0] && mpEl.value) document.getElementById('var-ctx-mp').textContent = mpEl.selectedOptions[0].text;
+        var set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+        set('var-total', fmt(d.totalProducts || 0));
+        var has = d.hasVariant !== undefined ? d.hasVariant : ((d.totalProducts || 0) - (d.notRequired || 0));
+        set('var-has', fmt(has));
+        set('var-none', fmt(d.notRequired || 0));
+        set('var-auto', fmt(d.autoMatched || 0));
+        set('var-ai', fmt(d.aiMatched || 0));
+        set('var-manual', fmt(d.manual || 0));
+        set('var-waiting', fmt(d.waitingAi || 0));
+        prepVariantRenderDonut(d);
+        prepVariantRenderActionHint(d);
+    } catch (e) { /* sessiz */ }
+}
+
+function prepVariantRenderDonut(d) {
+    var el = document.getElementById('var-donut');
+    if (!el) return;
+    var auto = d.autoMatched || 0, ai = d.aiMatched || 0, manual = d.manual || 0, none = d.notRequired || 0, waiting = d.waitingAi || 0;
+    var total = auto + ai + manual + none + waiting;
+    if (total === 0) { el.innerHTML = '<span class="text-xs text-slate-400">Veri yok</span>'; return; }
+    var pct = function (n) { return Math.round((n / total) * 1000) / 10; };
+    var seg = function (p, color) { return '<div style="width:' + p + '%;height:14px;background:' + color + '"></div>'; };
+    el.innerHTML = '<div class="flex flex-col gap-2 min-w-[250px]">'
+        + '<div class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Variant Durumu</div>'
+        + '<div class="flex w-full h-3.5 rounded-full overflow-hidden">' + seg(pct(auto), '#22c55e') + seg(pct(ai), '#3b82f6') + seg(pct(manual), '#f97316') + seg(pct(waiting), '#6366f1') + seg(pct(none), '#94a3b8') + '</div>'
+        + '<div class="flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-semibold text-slate-500 dark:text-slate-400">'
+        + '<span><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#22c55e"></span> ✓ Otomatik ' + fmt(auto) + '</span>'
+        + '<span><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#3b82f6"></span> 🤖 AI ' + fmt(ai) + '</span>'
+        + '<span><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#f97316"></span> ⚠ Manuel ' + fmt(manual) + '</span>'
+        + '<span><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#6366f1"></span> ⏳ AI Bekliyor ' + fmt(waiting) + '</span>'
+        + '<span><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#94a3b8"></span> ⚪ Gerekmiyor ' + fmt(none) + '</span>'
+        + '</div></div>';
+}
+
+function prepVariantRenderActionHint(d) {
+    var el = document.getElementById('var-action-hint');
+    if (!el) return;
+    var manual = d.manual || 0;
+    var has = d.hasVariant || 0;
+    var none = d.notRequired || 0;
+    if (manual > 0) {
+        el.className = 'mb-4 rounded-xl px-4 py-3 text-sm font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20';
+        el.innerHTML = '<i class="fa-solid fa-circle-info mr-1.5"></i>Yapmanız gereken: <b>' + fmt(manual) + ' ürün</b> manuel eşleştirme bekliyor. Listede <b>⚠ Manuel işlem gerekiyor</b> satırlarındaki <b>Manuel Eşleştir</b> butonuyla işlem yapın.';
+        el.classList.remove('hidden');
+    } else if (has === 0 && none > 0) {
+        el.className = 'mb-4 rounded-xl px-4 py-3 text-sm font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20';
+        el.innerHTML = '<i class="fa-solid fa-circle-check mr-1.5"></i>Bu XML kaynağında gerçek varyant yapısı bulunamadı. <b>Varyant eşleştirmesi gerekmiyor.</b>';
+        el.classList.remove('hidden');
+    } else {
+        el.classList.add('hidden');
+    }
+}
+
+async function prepVariantLoadProducts() {
+    if (!varState.xmlSourceId) return;
+    var sec = document.getElementById('var-products-section');
+    sec.classList.remove('hidden');
+    var body = document.getElementById('var-products-body');
+    body.innerHTML = '<tr><td class="py-10 text-center text-slate-400" colspan="4"><i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Ürünler yükleniyor...</td></tr>';
+    try {
+        var res = await api('/variants/products?page=' + varState.currentPage + '&limit=' + varState.pageSize + '&xmlSourceId=' + encodeURIComponent(varState.xmlSourceId));
+        varState.products = (res && res.items) || [];
+        varState.totalProducts = (res && res.pagination && res.pagination.total) || 0;
+        prepVariantRenderProducts();
+        prepVariantRenderPagination();
+        prepVariantUpdateSelectionInfo();
+        prepVariantSyncSelectAll();
+    } catch (e) { body.innerHTML = '<tr><td class="py-10 text-center text-red-400" colspan="4">Ürünler yüklenemedi</td></tr>'; }
+}
+
+function prepVariantRenderProducts() {
+    var body = document.getElementById('var-products-body');
+    var prods = varState.products;
+    if (!prods || prods.length === 0) {
+        var d = varState.dashboard || {};
+        if ((d.hasVariant || 0) === 0 && (d.notRequired || 0) > 0) {
+            body.innerHTML = '<tr><td class="py-14 text-center" colspan="4">'
+                + '<div class="flex flex-col items-center justify-center gap-2 py-4">'
+                + '<span class="text-3xl">✅</span>'
+                + '<div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Varyant Analizi Tamamlandı</div>'
+                + '<div class="text-base font-extrabold text-emerald-600 dark:text-emerald-400">VARYANT GEREKMİYOR</div>'
+                + '<div class="text-xs text-slate-500 dark:text-slate-400">Bu XML kaynağında analiz edilen ürünlerde gerçek varyant ailesi bulunamadı.</div>'
+                + '<div class="text-xs text-slate-600 dark:text-slate-300">Toplam ürün: <b>' + fmt(d.totalProducts || 0) + '</b> · Varyantlı ürün: <b>' + fmt(d.hasVariant || 0) + '</b> · Varyantsız ürün: <b>' + fmt(d.notRequired || 0) + '</b> · Analiz Edilemedi: <b>' + fmt(d.analysisFailed || 0) + '</b></div>'
+                + '<div class="text-xs font-semibold text-emerald-600 dark:text-emerald-400">Variant adımı 4/4 readiness kapsamında otomatik olarak tamamlandı.</div>'
+                + '<div class="text-[11px] text-slate-500 dark:text-slate-400">Ancak ürünler Kategori, Marka ve Listing adımlarından geçmeden gönderime hazır olmaz.</div>'
+                + '</div></td></tr>';
+            return;
+        }
+        body.innerHTML = '<tr><td class="py-16 text-center text-slate-400" colspan="4">Varyantlı ürün bulunamadı</td></tr>'; return;
+    }
+    var html = '';
+    prods.forEach(function (p) {
+        var variantTxt = '';
+        (p.variants || []).forEach(function (v) { variantTxt += v.name + ': ' + v.value + ' '; });
+        var statusLabel, statusClass;
+        if (p.status === 'AUTO') { statusLabel = '✓ Otomatik eşleşti'; statusClass = 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'; }
+        else if (p.status === 'MANUAL_MATCHED') { statusLabel = '✎ Manuel eşleşti'; statusClass = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'; }
+        else if (p.status === 'AI') { statusLabel = '🤖 AI ile eşleşti'; statusClass = 'bg-sky-500/10 text-sky-600 dark:text-sky-400'; }
+        else if (p.status === 'NOT_REQUIRED') { statusLabel = '⚪ Varyant Gerekmiyor'; statusClass = 'bg-slate-500/10 text-slate-500 dark:text-slate-400'; }
+        else if (p.status === 'WAITING_AI') { statusLabel = '⏳ AI Bekleniyor'; statusClass = 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400'; }
+        else { statusLabel = '⚠ Manuel işlem gerekiyor'; statusClass = 'bg-amber-500/10 text-amber-600 dark:text-amber-400'; }
+        var reasonHtml = (p.status === 'MANUAL' && p.reason) ? '<div class="mt-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">Neden: ' + escapeHtml(p.reason) + '</div>' : '';
+        var manualBtn = (p.status === 'MANUAL') ? '<button onclick="prepVariantOpenManual(\'' + p.id + '\')" class="mt-1 inline-flex items-center gap-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white px-2 py-1 text-[10px] font-bold cursor-pointer transition-all">✎ Manuel Eşleştir</button>' : '';
+        var checked = varState.selectedProducts.has(p.id) ? 'checked' : '';
+        html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">';
+        html += '<td class="py-2.5 px-3"><input type="checkbox" ' + checked + ' onchange="prepVariantToggleProduct(\'' + p.id + '\')" class="w-3.5 h-3.5 rounded accent-[var(--primary-color)]"></td>';
+        html += '<td class="py-2.5 px-4"><div class="text-xs font-semibold text-slate-900 dark:text-white truncate max-w-[440px]" title="' + escapeHtml(p.title || p.xmlKey) + '">' + escapeHtml(p.title || p.xmlKey) + '</div><div class="text-[10px] text-slate-400 font-mono">' + escapeHtml(p.sku || p.xmlKey || '') + '</div></td>';
+        html += '<td class="py-2.5 px-4 text-xs text-slate-500 dark:text-slate-400">' + escapeHtml(variantTxt.trim() || '-') + '</td>';
+        html += '<td class="py-2.5 px-4"><span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ' + statusClass + '">' + statusLabel + '</span>' + reasonHtml + manualBtn + '</td>';
+        html += '</tr>';
+    });
+    body.innerHTML = html;
+}
+
+function prepVariantRenderPagination() {
+    var total = varState.totalProducts, ps = varState.pageSize;
+    var totalPages = Math.max(1, Math.ceil(total / ps));
+    var page = Math.min(varState.currentPage, totalPages);
+    varState.currentPage = page;
+    var start = (page - 1) * ps + 1, end = Math.min(page * ps, total);
+    document.getElementById('var-page-prev').disabled = page <= 1;
+    document.getElementById('var-page-next').disabled = page >= totalPages;
+    var nums = document.getElementById('var-page-numbers');
+    var h = '';
+    var s = Math.max(1, Math.min(page - 3, totalPages - 6));
+    for (var i = 0; i < Math.min(totalPages, 7); i++) { var pg = s + i; if (pg > totalPages) break; h += '<button onclick="prepVariantGoPage(' + pg + ')" class="min-w-[28px] rounded-md px-2 py-0.5 text-[11px] font-bold transition-colors ' + (pg === page ? 'bg-primary text-white shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800') + '">' + pg + '</button>'; }
+    nums.innerHTML = h;
+    var info = document.getElementById('var-page-info');
+    if (info) info.textContent = start.toLocaleString('tr-TR') + '-' + end.toLocaleString('tr-TR') + ' / ' + total.toLocaleString('tr-TR') + ' ürün';
+    var sel = document.getElementById('var-page-size');
+    if (sel) sel.value = String(ps);
+}
+
+function prepVariantGoPage(p) { varState.currentPage = p; prepVariantLoadProducts(); }
+function prepVariantPagePrev() { if (varState.currentPage > 1) { varState.currentPage--; prepVariantLoadProducts(); } }
+function prepVariantPageNext() { var tp = Math.max(1, Math.ceil(varState.totalProducts / varState.pageSize)); if (varState.currentPage < tp) { varState.currentPage++; prepVariantLoadProducts(); } }
+function prepVariantSetSize(s) { varState.pageSize = s; varState.currentPage = 1; var sel = document.getElementById('var-page-size'); if (sel) sel.value = String(s); prepVariantLoadProducts(); }
+
+function prepVariantUpdateSelectionInfo() { var info = document.getElementById('var-selection-info'); if (info) info.textContent = varState.selectedProducts.size.toLocaleString('tr-TR') + ' ürün seçildi'; }
+function prepVariantSyncSelectAll() { var sa = document.getElementById('var-select-all'); if (!sa) return; var ids = (varState.products || []).map(function (p) { return p.id; }); sa.checked = ids.length > 0 && ids.every(function (id) { return varState.selectedProducts.has(id); }); }
+function prepVariantToggleProduct(id) { if (varState.selectedProducts.has(id)) varState.selectedProducts.delete(id); else varState.selectedProducts.add(id); prepVariantUpdateSelectionInfo(); prepVariantSyncSelectAll(); }
+function prepVariantSelectAll() {
+    var chk = document.getElementById('var-select-all').checked;
+    varState.selectedProducts.clear();
+    if (chk) varState.products.forEach(function (p) { varState.selectedProducts.add(p.id); });
+    var info = document.getElementById('var-selection-info');
+    if (info) info.textContent = chk ? ('Bu sayfadaki ' + varState.products.length.toLocaleString('tr-TR') + ' ürün seçildi.') : '0 ürün seçildi';
+    prepVariantRenderProducts();
+}
+
+async function prepVariantAutoMatch() {
+    var btn = document.getElementById('var-btn-auto');
+    if (!varState.xmlSourceId || !varState.marketplaceId) { showToast('Önce XML + Pazaryeri seçin', 'error'); return; }
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>İşleniyor...';
+    try {
+        var selIds = Array.from(varState.selectedProducts);
+        var body = { xmlSourceId: varState.xmlSourceId, marketplaceId: varState.marketplaceId, useAI: 0 };
+        if (selIds.length > 0) body.productIds = selIds;
+        var r = await api('/variants/ai-match', { method: 'POST', body: body });
+        showToast('✓ Eşleştirme tamamlandı (' + (r.autoMatched || 0) + ' otomatik, ' + (r.notRequired || 0) + ' varyantsız, ' + (r.manualCount || 0) + ' manuel)', 'success');
+    } catch (e) { showToast('⚠ İşlem başarısız: ' + e.message, 'error'); }
+    btn.disabled = false; btn.innerHTML = '✓ Seçtiğim Ürünleri Otomatik Eşleştir';
+    await prepVariantFetchDashboard();
+    await prepVariantLoadProducts();
+}
+
+async function prepVariantAiMatch() {
+    var btn = document.getElementById('var-btn-ai');
+    if (!varState.xmlSourceId || !varState.marketplaceId) { showToast('Önce XML + Pazaryeri seçin', 'error'); return; }
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>İşleniyor...';
+    try {
+        var selIds = Array.from(varState.selectedProducts);
+        var body = { xmlSourceId: varState.xmlSourceId, marketplaceId: varState.marketplaceId, useAI: 1 };
+        if (selIds.length > 0) body.productIds = selIds;
+        var r = await api('/variants/ai-match', { method: 'POST', body: body });
+        showToast('✓ AI eşleştirme tamamlandı (' + (r.autoMatched || 0) + ' otomatik, ' + (r.aiMatched || 0) + ' AI, ' + (r.manualCount || 0) + ' manuel)', 'success');
+    } catch (e) { showToast('⚠ İşlem başarısız: ' + e.message, 'error'); }
+    btn.disabled = false; btn.innerHTML = '🤖 Seçtiğim Ürünleri AI ile Eşleştir';
+    await prepVariantFetchDashboard();
+    await prepVariantLoadProducts();
+}
+
+/* ===================== MANUEL EŞLEŞTİRME (GERÇEK TRENDYOL DATA) ===================== */
+var varManualState = { productId: '', categoryMapped: false, attributes: [], values: [], attributeId: null };
+
+async function prepVariantOpenManual(productId) {
+    varManualState.productId = productId;
+    var p = (varState.products || []).find(function (x) { return x.id === productId; });
+    document.getElementById('var-manual-product').textContent = p ? (p.title || p.sku || p.xmlKey || '') : '';
+    document.getElementById('var-manual-product-meta').innerHTML = '';
+    var xmlTxt = (p && p.variants && p.variants.length) ? p.variants.map(function (v) { return v.name + ' = ' + v.value; }).join(' · ') : 'XML varyantı tespit edilemedi';
+    document.getElementById('var-manual-xml').innerHTML = escapeHtml(xmlTxt);
+    document.getElementById('var-manual-existing').classList.add('hidden');
+    document.getElementById('var-manual-cat-hint').classList.add('hidden');
+    document.getElementById('var-manual-fields').classList.add('hidden');
+    document.getElementById('var-manual-save').disabled = true;
+    document.getElementById('var-manual-modal').classList.remove('hidden');
+    try {
+        var o = await api('/variants/manual-options?productId=' + encodeURIComponent(productId) + '&marketplaceId=' + encodeURIComponent(varState.marketplaceId || ''));
+        varManualState.attributes = (o && o.attributes) || [];
+        varManualState.categoryMapped = !!(o && o.categoryMapped);
+        if (o && (o.title || o.xmlKey)) document.getElementById('var-manual-product').textContent = o.title || o.xmlKey;
+        var meta = [];
+        if (o && o.sku) meta.push('SKU: <b>' + escapeHtml(o.sku) + '</b>');
+        if (o && o.barcode) meta.push('Barkod: <b>' + escapeHtml(o.barcode) + '</b>');
+        if (o && o.brandName) meta.push('Marka: <b>' + escapeHtml(o.brandName) + '</b>');
+        if (o && o.xmlSourceName) meta.push('XML: <b>' + escapeHtml(o.xmlSourceName) + '</b>');
+        document.getElementById('var-manual-product-meta').innerHTML = meta.join('');
+        if (o && o.xmlVariants && o.xmlVariants.length) {
+            document.getElementById('var-manual-xml').innerHTML = escapeHtml(o.xmlVariants.map(function (v) { return v.name + ' = ' + v.value; }).join(' · '));
+        } else {
+            document.getElementById('var-manual-xml').innerHTML = '<span class="text-slate-400">XML varyantı tespit edilemedi</span>';
+        }
+        var ex = document.getElementById('var-manual-existing');
+        if (o && o.existingMatch && (o.existingMatch.attributeName || o.existingMatch.attributeValue)) {
+            ex.innerHTML = '✓ Eşleşti: <b>' + escapeHtml(o.existingMatch.attributeName || '—') + ' = ' + escapeHtml(o.existingMatch.attributeValue || '—') + '</b>'
+                + (o.existingMatch.attributeId ? ' (Attribute ID: ' + o.existingMatch.attributeId + ')' : '')
+                + (o.existingMatch.attributeValueId ? ' (Value ID: ' + o.existingMatch.attributeValueId + ')' : '');
+            ex.classList.remove('hidden');
+        }
+        var sel = document.getElementById('var-manual-attr');
+        var opts = '<option value="">Varyant seçiniz...</option>';
+        varManualState.attributes.forEach(function (a) {
+            opts += '<option value="' + a.attributeId + '">' + escapeHtml(a.attributeName) + (a.required ? ' (zorunlu)' : '') + '</option>';
+        });
+        sel.innerHTML = opts;
+        document.getElementById('var-manual-value').innerHTML = '<option value="">Önce varyant seçiniz...</option>';
+        document.getElementById('var-manual-value').disabled = true;
+        var hint = document.getElementById('var-manual-cat-hint');
+        if (!varManualState.categoryMapped) {
+            hint.textContent = 'Bu ürün için Trendyol kategori eşlemesi yok. Önce "Kategori Eşleştirme" ekranından kategoriyi eşleyin.';
+            hint.classList.remove('hidden');
+            document.getElementById('var-manual-fields').classList.add('hidden');
+        } else if (varManualState.attributes.length === 0) {
+            hint.textContent = 'Bu kategoride Trendyol varyant attribute bulunamadı.';
+            hint.classList.remove('hidden');
+            document.getElementById('var-manual-fields').classList.add('hidden');
+        } else {
+            document.getElementById('var-manual-fields').classList.remove('hidden');
+        }
+    } catch (e) {
+        showToast('Manuel seçenekler yüklenemedi: ' + e.message, 'error');
+    }
+}
+
+async function prepVariantManualLoadValues() {
+    var sel = document.getElementById('var-manual-attr');
+    var attrId = sel.value;
+    varManualState.attributeId = attrId || null;
+    var val = document.getElementById('var-manual-value');
+    document.getElementById('var-manual-save').disabled = true;
+    if (!attrId) { val.disabled = true; val.innerHTML = '<option value="">Önce varyant seçiniz...</option>'; return; }
+    val.disabled = true; val.innerHTML = '<option value="">Yükleniyor...</option>';
+    try {
+        var v = await api('/variants/manual-values?productId=' + encodeURIComponent(varManualState.productId) + '&marketplaceId=' + encodeURIComponent(varState.marketplaceId || '') + '&attributeId=' + encodeURIComponent(attrId));
+        varManualState.values = (v && v.values) || [];
+        var opts = '<option value="">Değer seçiniz...</option>';
+        varManualState.values.forEach(function (x) { opts += '<option value="' + x.attributeValueId + '">' + escapeHtml(x.attributeValue) + '</option>'; });
+        val.innerHTML = opts;
+        val.disabled = false;
+    } catch (e) {
+        showToast('Değerler yüklenemedi: ' + e.message, 'error');
+    }
+}
+
+function prepVariantCloseManual() {
+    document.getElementById('var-manual-modal').classList.add('hidden');
+    varManualState.productId = '';
+}
+
+async function prepVariantManualSave() {
+    var attrSel = document.getElementById('var-manual-attr');
+    var valSel = document.getElementById('var-manual-value');
+    var attrId = attrSel.value;
+    var valId = valSel.value;
+    if (!attrId || !valId) { showToast('Varyant ve değer seçin', 'error'); return; }
+    var attrName = attrSel.selectedOptions[0] ? attrSel.selectedOptions[0].textContent : '';
+    var valName = valSel.selectedOptions[0] ? valSel.selectedOptions[0].textContent : '';
+    var btn = document.getElementById('var-manual-save');
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>Kaydediliyor...';
+    try {
+        var r = await api('/variants/manual-match-v2', { method: 'POST', body: { productId: varManualState.productId, marketplaceId: varState.marketplaceId || '', attributeId: Number(attrId), attributeName: attrName, attributeValueId: Number(valId), attributeValue: valName } });
+        showToast('✓ Manuel eşleştirme kaydedildi (' + r.attributeName + ' = ' + r.attributeValue + ')', 'success');
+        prepVariantCloseManual();
+        await prepVariantFetchDashboard();
+        await prepVariantLoadProducts();
+    } catch (e) { showToast('⚠ Kaydetme başarısız: ' + e.message, 'error'); }
+    btn.disabled = false; btn.innerHTML = 'Kaydet';
+}
 
 var prepListState = { templates: [], rules: [], logs: [], forbidden: [], xmlSources: [], marketplaces: [], xmlSourceId: '', marketplaceId: '' };
 
@@ -6292,21 +7327,24 @@ async function prepListLoadRules() {
         var url = '/listing-v2/rules' + (mpId ? '?marketplaceId=' + mpId : '');
         var d = await api(url);
         prepListState.rules = d.items || [];
+        var xsD = await api('/xml-sources');
+        var xsMap = {}; (xsD.items || []).forEach(function (s) { xsMap[s.id] = s.name; });
         var el = document.getElementById('li-rules-table');
         if (prepListState.rules.length === 0) { el.innerHTML = '<p class="text-xs text-slate-400 text-center py-8">Henüz fiyat kuralı yok</p>'; return; }
-        var html = '<table class="w-full text-sm"><thead class="bg-slate-50 dark:bg-slate-800/40 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"><tr><th class="py-3 px-4">Pazaryeri</th><th class="py-3 px-4">Hedef</th><th class="py-3 px-4 text-right">Min ₺</th><th class="py-3 px-4 text-right">Max ₺</th><th class="py-3 px-4 text-right">Kar %</th><th class="py-3 px-4">Yuvarlama</th><th class="py-3 px-4">Durum</th><th class="py-3 px-4">Öncelik</th><th class="py-3 px-4 text-center">İşlem</th></tr></thead><tbody>';
+        var html = '<table class="w-full text-sm"><thead class="bg-slate-50 dark:bg-slate-800/40 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"><tr><th class="py-3 px-4">Pazaryeri</th><th class="py-3 px-4">Hedef</th><th class="py-3 px-4">XML</th><th class="py-3 px-4 text-right">Min ₺</th><th class="py-3 px-4 text-right">Max ₺</th><th class="py-3 px-4 text-right">Sabit ₺</th><th class="py-3 px-4 text-right">Kar %</th><th class="py-3 px-4">Yuvarlama</th><th class="py-3 px-4">Durum</th><th class="py-3 px-4 text-center">İşlem</th></tr></thead><tbody>';
         prepListState.rules.forEach(function (r) {
             var mp = (prepListState.marketplaces || []).find(function(m) { return m.id === r.marketplaceId; });
             html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-all">'
                 + '<td class="py-3 px-4 text-xs">' + (mp ? mp.name : r.marketplaceId.slice(0, 8)) + '</td>'
                 + '<td class="py-3 px-4 text-xs">' + (r.productId ? 'Ürün' : r.categoryId ? 'Kategori' : 'Genel') + '</td>'
+                + '<td class="py-3 px-4 text-xs">' + (r.xmlSourceId ? (xsMap[r.xmlSourceId] || r.xmlSourceId.slice(0, 8)) : 'Tümü') + '</td>'
                 + '<td class="py-3 px-4 text-xs text-right">' + r.minPrice + '</td>'
-                + '<td class="py-3 px-4 text-xs text-right">' + (r.maxPrice >= 999999 ? '∞' : r.maxPrice) + '</td>'
+                + '<td class="py-3 px-4 text-xs text-right">' + (r.maxPrice >= 999999 || r.maxPrice === 0 ? '∞' : r.maxPrice) + '</td>'
+                + '<td class="py-3 px-4 text-xs text-right">' + (r.fixedAmount || 0) + '</td>'
                 + '<td class="py-3 px-4 text-xs text-right font-bold">' + r.profitMargin + '%</td>'
                 + '<td class="py-3 px-4 text-xs">' + r.rounding + '</td>'
                 + '<td class="py-3 px-4 text-xs">' + (r.active ? '<span class="text-emerald-600 dark:text-emerald-400">Aktif</span>' : '<span class="text-slate-500">Pasif</span>') + '</td>'
-                + '<td class="py-3 px-4 text-xs text-center">' + r.priority + '</td>'
-                + '<td class="py-3 px-4 text-xs text-center"><button onclick="prepListDelRule(\'' + r.id + '\')" class="text-red-500 hover:text-red-700"><i class="fa-solid fa-trash text-xs"></i></button></td>'
+                + '<td class="py-3 px-4 text-xs text-center whitespace-nowrap"><button onclick="prepListRuleEdit(\'' + r.id + '\')" class="text-blue-500 hover:text-blue-700 mr-1"><i class="fa-solid fa-pen text-xs"></i></button><button onclick="prepListDelRule(\'' + r.id + '\')" class="text-red-500 hover:text-red-700"><i class="fa-solid fa-trash text-xs"></i></button></td>'
                 + '</tr>';
         });
         html += '</tbody></table>';
@@ -6314,16 +7352,143 @@ async function prepListLoadRules() {
     } catch (e) { }
 }
 
-async function prepListNewRule() {
-    var mpId = (document.getElementById('li-rules-mp') || {}).value;
-    if (!mpId) { showToast('Pazaryeri seçin', 'error'); return; }
-    var minP = prompt('Min fiyat (TL):', '0');
-    var maxP = prompt('Max fiyat (TL, 0=sınırsız):', '0');
-    var margin = prompt('Kâr marjı %:', '75');
-    var round = prompt('Yuvarlama (0.90, 9.90, nearest, none):', '0.90');
+var prepListRuleEditId = null;
+
+async function prepListRuleLoadSources() {
     try {
-        await api('/listing-v2/rules', { method: 'POST', body: { marketplaceId: mpId, minPrice: Number(minP) || 0, maxPrice: Number(maxP) || 999999, profitMargin: Number(margin) || 75, rounding: round || '0.90', applyVat: true, active: true, priority: 3 } });
-        showToast('Kural oluşturuldu', 'success');
+        var d = await api('/xml-sources');
+        var opts = '<option value="">Tüm XML</option>';
+        (d.items || []).forEach(function (s) { opts += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; });
+        document.getElementById('li-rule-xml').innerHTML = opts;
+    } catch (e) { }
+}
+
+async function prepListRuleLoadMarketplaces() {
+    try {
+        var d = await api('/marketplaces');
+        var opts = '';
+        (d.items || []).forEach(function (m) { opts += '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>'; });
+        document.getElementById('li-rule-mp').innerHTML = opts;
+    } catch (e) { }
+}
+
+async function prepListRuleLoadProducts() {
+    try {
+        var xs = document.getElementById('li-rule-xml').value;
+        var q = '/products?limit=200';
+        if (xs) q += '&xmlSourceId=' + encodeURIComponent(xs);
+        var d = await api(q);
+        var opts = '<option value="">Ürün seçin...</option>';
+        (d.items || []).forEach(function (p) { opts += '<option value="' + p.id + '">' + escapeHtml((p.title || p.sku || p.xmlKey)) + '</option>'; });
+        document.getElementById('li-rule-product').innerHTML = opts;
+    } catch (e) { }
+}
+
+async function prepListRuleLoadCategories() {
+    try {
+        var d = await api('/categories/all');
+        var opts = '<option value="">Kategori seçin...</option>';
+        (d.items || []).forEach(function (c) { opts += '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; });
+        document.getElementById('li-rule-category').innerHTML = opts;
+    } catch (e) { }
+}
+
+function prepListRuleScopeChange() {
+    var scope = document.getElementById('li-rule-scope').value;
+    document.getElementById('li-rule-product-wrap').classList.toggle('hidden', scope !== 'PRODUCT');
+    document.getElementById('li-rule-category-wrap').classList.toggle('hidden', scope !== 'CATEGORY');
+    if (scope === 'PRODUCT') prepListRuleLoadProducts();
+    if (scope === 'CATEGORY') prepListRuleLoadCategories();
+    prepListRulePreview();
+}
+
+function prepListRulePreview() {
+    var p = Number(document.getElementById('li-rule-preview-price').value) || 0;
+    var m = Number(document.getElementById('li-rule-margin').value) || 0;
+    var f = Number(document.getElementById('li-rule-fixed').value) || 0;
+    var min = Number(document.getElementById('li-rule-min').value) || 0;
+    var max = Number(document.getElementById('li-rule-max').value) || 0;
+    var inBand = p >= min && (max === 0 || p <= max);
+    var raw = p * (1 + m / 100) + f;
+    var rounded = Math.round(raw * 100) / 100;
+    var el = document.getElementById('li-rule-preview');
+    el.innerHTML = '<div><b>KDV dahil alış:</b> ' + fmt(p) + ' TL</div>'
+        + '<div><b>Kâr:</b> %' + m + '</div>'
+        + '<div><b>Sabit ek:</b> ' + fmt(f) + ' TL</div>'
+        + '<div class="font-bold text-emerald-600 dark:text-emerald-400"><b>Listeleme fiyatı:</b> ' + fmt(rounded) + ' TL</div>'
+        + '<div class="' + (inBand ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400') + '">' + (inBand ? '✅ Kural bu alış fiyatına UYGULANIR' : '⚠️ Alış fiyatı MIN/MAX dışında — bu kural uygulanmaz') + '</div>';
+}
+
+async function prepListNewRule() {
+    prepListRuleEditId = null;
+    document.getElementById('li-rule-form-title').textContent = 'Yeni Fiyat Kuralı';
+    document.getElementById('li-rule-min').value = '0';
+    document.getElementById('li-rule-max').value = '0';
+    document.getElementById('li-rule-margin').value = '75';
+    document.getElementById('li-rule-fixed').value = '0';
+    document.getElementById('li-rule-rounding').value = 'none';
+    document.getElementById('li-rule-preview-price').value = '20';
+    document.getElementById('li-rule-scope').value = 'GENERAL';
+    await prepListRuleLoadSources();
+    await prepListRuleLoadMarketplaces();
+    document.getElementById('li-rule-form').classList.remove('hidden');
+    prepListRuleScopeChange();
+}
+
+async function prepListRuleEdit(id) {
+    var r = (prepListState.rules || []).find(function (x) { return x.id === id; });
+    if (!r) return;
+    prepListRuleEditId = id;
+    document.getElementById('li-rule-form-title').textContent = 'Fiyat Kuralını Düzenle';
+    await prepListRuleLoadSources();
+    await prepListRuleLoadMarketplaces();
+    document.getElementById('li-rule-mp').value = r.marketplaceId || '';
+    document.getElementById('li-rule-xml').value = r.xmlSourceId || '';
+    document.getElementById('li-rule-scope').value = r.productId ? 'PRODUCT' : r.categoryId ? 'CATEGORY' : 'GENERAL';
+    document.getElementById('li-rule-min').value = r.minPrice;
+    document.getElementById('li-rule-max').value = r.maxPrice;
+    document.getElementById('li-rule-margin').value = r.profitMargin;
+    document.getElementById('li-rule-fixed').value = r.fixedAmount || 0;
+    document.getElementById('li-rule-rounding').value = r.rounding || 'none';
+    await prepListRuleLoadProducts();
+    await prepListRuleLoadCategories();
+    if (r.productId) document.getElementById('li-rule-product').value = r.productId;
+    if (r.categoryId) document.getElementById('li-rule-category').value = r.categoryId;
+    document.getElementById('li-rule-form').classList.remove('hidden');
+    prepListRuleScopeChange();
+}
+
+function prepListRuleCancel() {
+    document.getElementById('li-rule-form').classList.add('hidden');
+    prepListRuleEditId = null;
+}
+
+async function prepListRuleSave() {
+    var mpId = document.getElementById('li-rule-mp').value;
+    if (!mpId) { showToast('Pazaryeri seçin', 'error'); return; }
+    var scope = document.getElementById('li-rule-scope').value;
+    var body = {
+        marketplaceId: mpId,
+        xmlSourceId: document.getElementById('li-rule-xml').value || null,
+        minPrice: Number(document.getElementById('li-rule-min').value) || 0,
+        maxPrice: Number(document.getElementById('li-rule-max').value) || 0,
+        profitMargin: Number(document.getElementById('li-rule-margin').value) || 0,
+        fixedAmount: Number(document.getElementById('li-rule-fixed').value) || 0,
+        rounding: document.getElementById('li-rule-rounding').value,
+        productId: scope === 'PRODUCT' ? (document.getElementById('li-rule-product').value || null) : null,
+        categoryId: scope === 'CATEGORY' ? (document.getElementById('li-rule-category').value || null) : null,
+    };
+    if (scope === 'PRODUCT' && !body.productId) { showToast('Ürün seçin', 'error'); return; }
+    if (scope === 'CATEGORY' && !body.categoryId) { showToast('Kategori seçin', 'error'); return; }
+    try {
+        if (prepListRuleEditId) {
+            await api('/listing-v2/rules/' + prepListRuleEditId, { method: 'PUT', body: body });
+            showToast('Kural güncellendi', 'success');
+        } else {
+            await api('/listing-v2/rules', { method: 'POST', body: body });
+            showToast('Kural oluşturuldu', 'success');
+        }
+        prepListRuleCancel();
         prepListLoadRules();
     } catch (e) { showToast(e.message, 'error'); }
 }
@@ -6339,16 +7504,16 @@ async function prepListDelRule(id) {
 
 async function prepListV2Calc() {
     var price = Number(document.getElementById('li-v2-price').value) || 100;
-    var vat = Number(document.getElementById('li-v2-vat').value) || 20;
     var margin = Number(document.getElementById('li-v2-margin').value) || 75;
+    var fixed = Number(document.getElementById('li-v2-fixed').value) || 0;
     var rounding = document.getElementById('li-v2-rounding').value;
     try {
-        var r = await api('/listing-v2/calculate', { method: 'POST', body: { purchasePrice: price, vatRate: vat, profitMargin: margin, rounding: rounding, applyVat: true } });
+        var r = await api('/listing-v2/calculate', { method: 'POST', body: { vatIncludedPurchase: price, profitMargin: margin, fixedAmount: fixed, rounding: rounding } });
         var el = document.getElementById('li-v2-result');
         el.classList.remove('hidden');
         el.innerHTML = '<div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 space-y-1.5">'
-            + '<div class="flex justify-between text-sm"><span class="text-slate-500 dark:text-slate-400">KDV Dahil</span><b class="text-emerald-600 dark:text-emerald-400">' + fmt(r.vatIncluded) + ' TL</b></div>'
-            + '<div class="flex justify-between text-xs text-slate-500 dark:text-slate-400"><span>Yuvarlama Öncesi</span><span>' + fmt(r.beforeRounding) + ' TL</span></div>'
+            + '<div class="flex justify-between text-sm"><span class="text-slate-500 dark:text-slate-400">KDV Dahil Alış</span><b class="text-emerald-600 dark:text-emerald-400">' + fmt(r.vatIncludedPurchase) + ' TL</b></div>'
+            + '<div class="flex justify-between text-xs text-slate-500 dark:text-slate-400"><span>Kâr %' + r.profitMargin + ' + Sabit ' + fmt(r.fixedAmount) + ' TL</span></div>'
             + '<div class="flex justify-between text-sm font-bold"><span class="text-slate-700 dark:text-slate-200">Nihai Satış Fiyatı</span><b class="text-emerald-600 dark:text-emerald-400">' + fmt(r.finalPrice) + ' TL</b></div>'
             + '</div>';
     } catch (e) { showToast(e.message, 'error'); }

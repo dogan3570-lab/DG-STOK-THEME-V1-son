@@ -15,7 +15,11 @@ import ordersRoutes from './orders.ts';
 import reportsRoutes from './reports.ts';
 import settingsRoutes from './settings.ts';
 import marketplaceManageRoutes from './marketplaceManage.ts';
+import marketplaceSendRoutes from './marketplaceSend.ts';
 import aiSettingsRoutes from './aiSettings.ts';
+import trendyolMappingRoutes from './trendyolMapping.ts';
+import stockAutomationRoutes from './stockAutomation.ts';
+import categoryMatchEngineRoutes from './categoryMatchEngine.ts';
 import { fetchXmlFromUrl, importXmlProducts } from '../services/xmlImport.ts';
 
 export const router = Router();
@@ -49,7 +53,11 @@ router.use('/orders', ordersRoutes);
 router.use('/reports', reportsRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/marketplace-manage', marketplaceManageRoutes);
+router.use('/marketplace-send', marketplaceSendRoutes);
 router.use('/ai-settings', aiSettingsRoutes);
+router.use('/trendyol-mapping', trendyolMappingRoutes);
+router.use('/stock-automation', stockAutomationRoutes);
+router.use('/category-engine', categoryMatchEngineRoutes);
 
 // ==================== MARKETPLACES ====================
 // Auth + ADMIN rolü gerekli; credential alanları (apiKey, apiSecret, merchantId, storeId) ASLA döndürülmez

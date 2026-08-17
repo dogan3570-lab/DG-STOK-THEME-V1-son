@@ -37,15 +37,18 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 });
 
 // ==================== STATS ====================
-router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
+router.get('/stats', requireAuth, async (req: Request, res: Response) => {
   try {
+    const xmlSourceId = readQueryValue(req.query?.xmlSourceId);
+    const where: Record<string, unknown> = {};
+    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
     const [totalXmlCategories, categorizedProducts, uncategorizedProducts, aiSuggested, manualMatched, errorCategories, totalSystemCategories] = await Promise.all([
-      prisma.product.findMany({ where: { supplierCategory: { not: null } }, select: { supplierCategory: true }, distinct: ['supplierCategory'] }),
-      prisma.product.count({ where: { categoryId: { not: null } } }),
-      prisma.product.count({ where: { categoryId: null } }),
-      prisma.product.count({ where: { aiSuggestedCategoryId: { not: null } } }),
+      prisma.product.findMany({ where: { ...where, supplierCategory: { not: null } }, select: { supplierCategory: true }, distinct: ['supplierCategory'] }),
+      prisma.product.count({ where: { ...where, categoryId: { not: null } } }),
+      prisma.product.count({ where: { ...where, categoryId: null } }),
+      prisma.product.count({ where: { ...where, aiSuggestedCategoryId: { not: null } } }),
       prisma.categoryMapping.count({ where: { source: 'manual' } }),
-      prisma.product.count({ where: { errorMessage: { not: null }, categoryMatch: false } }),
+      prisma.product.count({ where: { ...where, errorMessage: { not: null }, categoryMatch: false } }),
       prisma.category.count(),
     ]);
     res.json({
@@ -107,20 +110,101 @@ router.get('/xml-categories', requireAuth, async (req: Request, res: Response) =
 router.get('/tree', requireAuth, async (req: Request, res: Response) => {
   try {
     const search = String(req.query?.search ?? '').trim();
-    const marketplaceId = readQueryValue(req.query?.marketplaceId);
+    // KATEGORİ AĞACI TEK PAYLAŞIMLI HİYERARŞİDİR: marketplaceId ile filtrelenmez.
+    // (Önceki davranış tt seçiliyken tree'yi 23 map edilmiş kategoriye indiriyor,
+    //  hem picker'ı boş gösteriyor hem flatMap path çözümlemesini kırıyordu.)
     const where: any = {};
     if (search) where.name = { contains: search };
 
-    let marketplaceCategoryIds: string[] | null = null;
-    if (marketplaceId) {
-      const mappings = await prisma.categoryMapping.findMany({ where: { marketplaceId }, select: { categoryId: true } });
-      marketplaceCategoryIds = mappings.map(m => m.categoryId);
-      if (marketplaceCategoryIds.length > 0) where.id = { in: marketplaceCategoryIds };
+    const allCategories = await prisma.category.findMany({ where, orderBy: { name: 'asc' }, include: { _count: { select: { products: true } } } });
+
+    // KATEGORİ AĞACI — HİBRİT:
+    // 1) parentId dolu GERÇEK Trendyol hiyerarşisi (3867 kategori, 16 root, 3361 leaf).
+    // 2) parentId null + ">>>" isimli LOKAL XML kategorileri (virtual ağaç, schema değişikliği YOK).
+    // Ara (virtual) düğümler virtual:true ile işaretlenir ve gerçek id taşımaz.
+    function buildDashTree(categories: typeof allCategories): any[] {
+      const roots: any[] = [];
+      const indexByPath = new Map<string, any>();
+
+      const ensurePath = (segments: string[], leaf: (typeof allCategories)[number]) => {
+        let current = roots;
+        let path = '';
+        for (let i = 0; i < segments.length; i++) {
+          const seg = segments[i].trim();
+          if (!seg) continue;
+          path = path ? `${path}>>>${seg}` : seg;
+          const isLeaf = i === segments.length - 1;
+          let node = indexByPath.get(path);
+          if (!node) {
+            node = {
+              id: isLeaf ? leaf.id : `virtual:${path}`,
+              name: seg,
+              externalId: isLeaf ? leaf.externalId : null,
+              parentId: isLeaf ? leaf.parentId : null,
+              productCount: isLeaf ? leaf._count.products : 0,
+              children: [],
+              virtual: !isLeaf,
+            };
+            if (isLeaf) {
+              node.createdAt = leaf.createdAt;
+              node.updatedAt = leaf.updatedAt;
+            }
+            indexByPath.set(path, node);
+            current.push(node);
+          } else if (isLeaf) {
+            node.id = leaf.id;
+            node.externalId = leaf.externalId;
+            node.parentId = leaf.parentId;
+            node.productCount = leaf._count.products;
+            node.virtual = false;
+            node.createdAt = leaf.createdAt;
+            node.updatedAt = leaf.updatedAt;
+          }
+          current = node.children;
+        }
+      };
+
+      for (const c of categories) ensurePath(c.name.split('>>>').map((s: string) => s.trim()).filter(Boolean), c);
+
+      const sumProducts = (nodes: any[]): number => nodes.reduce((s, n) => s + (n.children.length > 0 ? sumProducts(n.children) : n.productCount), 0);
+      for (const r of roots) {
+        if (r.virtual) r.productCount = sumProducts([r]);
+      }
+      return roots;
     }
 
-    const allCategories = await prisma.category.findMany({ where, orderBy: { name: 'asc' }, include: { _count: { select: { products: true } } } });
-    const buildTree = (parentId: string | null): any[] => allCategories.filter(c => c.parentId === parentId).map(c => ({ id: c.id, name: c.name, externalId: c.externalId, parentId: c.parentId, productCount: c._count.products, children: buildTree(c.id), createdAt: c.createdAt, updatedAt: c.updatedAt }));
-    res.json({ items: buildTree(null), flat: allCategories });
+    function buildCategoryTree(categories: typeof allCategories): any[] {
+      const childMap = new Map<string, any[]>();
+      for (const c of categories) {
+        if (!c.parentId) continue;
+        const arr = childMap.get(c.parentId) || [];
+        arr.push(c);
+        childMap.set(c.parentId, arr);
+      }
+      const toNode = (c: any): any => ({
+        id: c.id,
+        name: c.name,
+        externalId: c.externalId,
+        parentId: c.parentId,
+        productCount: c._count?.products ?? 0,
+        children: (childMap.get(c.id) || []).map(toNode),
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+      });
+
+      const dashIds = new Set(categories.filter(c => !c.parentId && c.name.includes('>>>')).map(c => c.id));
+      const roots = categories.filter(c => !c.parentId && !dashIds.has(c.id)).map(toNode);
+      roots.push(...buildDashTree(categories.filter(c => dashIds.has(c.id))));
+
+      const sortRec = (nodes: any[]) => {
+        nodes.sort((a, b) => String(a.name).localeCompare(String(b.name), 'tr'));
+        nodes.forEach((n) => sortRec(n.children));
+      };
+      sortRec(roots);
+      return roots;
+    }
+
+    res.json({ items: buildCategoryTree(allCategories), flat: allCategories });
   } catch (error) {
     console.error('Error fetching category tree:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch category tree' } });
@@ -132,7 +216,8 @@ router.get('/tree', requireAuth, async (req: Request, res: Response) => {
 router.post('/ai-match', requireAuth, async (req: Request, res: Response) => {
   try {
     const { productIds, xmlSourceId } = req.body;
-    const where: any = { categoryMatch: false };
+    // TEK AUTHORITATIVE KURAL: bekleyen = categoryId IS NULL (Product Pool ile birebir).
+    const where: any = { categoryId: null };
     if (Array.isArray(productIds) && productIds.length > 0) where.id = { in: productIds };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
 
@@ -203,7 +288,7 @@ router.post('/ai-match', requireAuth, async (req: Request, res: Response) => {
 
     // Uygula: her XML kategori için eşleşen ürünleri toplu güncelle
     const applyBatch = async (supplierCategory: string, categoryId: string, score: number) => {
-      const productWhere: any = { supplierCategory, categoryMatch: false };
+      const productWhere: any = { supplierCategory, categoryId: null };
       if (Array.isArray(productIds) && productIds.length > 0) productWhere.id = { in: productIds };
       await prisma.product.updateMany({
         where: productWhere,
@@ -260,7 +345,7 @@ async function runAutoMatch(xmlSourceId: string | null = null) {
     const exactIndex: Record<string, { id: string; name: string }> = {};
     for (const cat of systemCategories) { const n = normalize(cat.name); if (n && !exactIndex[n]) exactIndex[n] = { id: cat.id, name: cat.name }; }
 
-    const where: any = { categoryMatch: false };
+    const where: any = { categoryId: null };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
     const distinctCats = await prisma.product.groupBy({ by: ['supplierCategory'], where, _count: { id: true } });
     autoMatchState.totalProducts = distinctCats.reduce((s, r) => s + r._count.id, 0);
@@ -278,7 +363,7 @@ async function runAutoMatch(xmlSourceId: string | null = null) {
       else if (normLeaf && exactIndex[normLeaf]) bestId = exactIndex[normLeaf].id;
       if (bestId) {
         await prisma.product.updateMany({
-          where: { supplierCategory: row.supplierCategory, categoryMatch: false, ...(xmlSourceId ? { xmlSourceId } : {}) },
+          where: { supplierCategory: row.supplierCategory, categoryId: null, ...(xmlSourceId ? { xmlSourceId } : {}) },
           data: { categoryId: bestId, categoryMatch: true, matchedBy: 'auto', lastMatchDate: new Date(), aiSuggestedCategoryId: bestId, aiScore: 1.0 },
         });
         autoMatchState.matchedCount += row._count.id;
@@ -333,13 +418,19 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
     aiMatchState.status = 'running';
     aiMatchState.startedAt = new Date();
 
-    // Fetch system categories
-    const systemCategories = await prisma.category.findMany();
-    const categories: CategoryCandidate[] = systemCategories.map(c => ({
-      id: c.id,
-      name: c.name,
-      fullPath: c.name,
-    }));
+    // Fetch system categories — AI'ya YALNIZCA gerçek Trendyol LEAF kategorileri aday verilir.
+    // (Lokal XML ">>>" kategorileri aday listesine alınmaz; sahte categoryMatch engellenir.)
+    const systemCategories = await prisma.category.findMany({
+      where: { externalId: { not: null } },
+      select: { id: true, name: true, _count: { select: { children: true } } },
+    });
+    const categories: CategoryCandidate[] = systemCategories
+      .filter((c) => c._count.children === 0)
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        fullPath: c.name,
+      }));
 
     if (categories.length === 0) {
       aiMatchState.status = 'error';
@@ -348,7 +439,7 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
     }
 
     // Fetch unmatched products
-    const where: any = { categoryMatch: false, categoryId: null };
+    const where: any = { categoryId: null };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
 
     const unmatchedProducts = await prisma.product.findMany({
@@ -580,8 +671,8 @@ router.get('/all', requireAuth, async (req: Request, res: Response) => {
 // ==================== CATEGORIZED PRODUCTS ====================
 router.get('/products', requireAuth, async (req: Request, res: Response) => {
   try {
-    const page = parseInt(String(req.query.page || '1'));
-    const limit = parseInt(String(req.query.limit || '50'));
+    const page = Math.max(1, parseInt(String(req.query.page || '1')) || 1);
+    const limit = Math.min(20000, Math.max(1, parseInt(String(req.query.limit || '50')) || 50));
     const search = String(req.query.search || '').trim();
     const xmlSourceId = readQueryValue(req.query?.xmlSourceId);
     const uncategorized = req.query?.uncategorized === 'true';

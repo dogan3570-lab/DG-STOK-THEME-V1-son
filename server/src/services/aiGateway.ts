@@ -198,6 +198,59 @@ async function callNvidiaApi(
   }
 }
 
+async function callDeepseekApi(
+  apiKey: string,
+  model: string,
+  request: ChatCompletionRequest,
+  timeoutMs: number = 30000
+): Promise<{ content: string; usage?: any }> {
+  const url = `${PROVIDER_DEFAULTS.deepseek.baseUrl}/chat/completions`;
+
+  const body = {
+    model,
+    messages: request.messages,
+    temperature: request.temperature ?? 0.1,
+    max_tokens: request.max_tokens ?? 1024,
+    ...(request.response_format ? { response_format: request.response_format } : {}),
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => '');
+      let errorCode = `HTTP_${res.status}`;
+      if (res.status === 429) errorCode = 'RATE_LIMIT';
+      else if (res.status === 401) errorCode = 'INVALID_KEY';
+      else if (res.status === 403) errorCode = 'FORBIDDEN';
+      else if (res.status === 404) errorCode = 'MODEL_NOT_FOUND';
+      else if (res.status >= 500) errorCode = 'SERVER_ERROR';
+      throw new Error(errorBody || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content ?? null;
+    return { content, usage: data.usage };
+  } catch (err: any) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('TIMEOUT');
+    throw err;
+  }
+}
+
 async function callOpenRouterApi(
   apiKey: string,
   model: string,
@@ -340,6 +393,8 @@ export async function chatCompletion(request: ChatCompletionRequest): Promise<Ch
 
       if (provider.provider === 'nvidia') {
         result = await callNvidiaApi(apiKey, model, request);
+      } else if (provider.provider === 'deepseek') {
+        result = await callDeepseekApi(apiKey, model, request);
       } else if (provider.provider === 'openrouter') {
         if (!provider.model) {
           errors.push(`${provider.displayName}: Model seçilmemiş`);
@@ -480,6 +535,7 @@ RULES:
 5. confidence >= 0.95 = automatic match, 0.85-0.949 = suggestion, < 0.85 = manual review.
 6. If you are not confident, set confidence below 0.85.
 7. Look at the product title, supplier category path, and brand to determine the best category.
+8. Keep "reason" under 15 words, on a single line, and never use double quotes or newlines inside it.
 
 Response format (strict JSON):
 {
@@ -505,6 +561,36 @@ Return ONLY the JSON response.`;
   ];
 }
 
+/**
+ * JSON string literal içindeki ham kontrol karakterlerini (U+0000..U+001F) escape eder.
+ * LLM bazen "reason" gibi alanlarda ham newline/tab üretebilir; strict JSON.parse bunu reddeder.
+ * String dışındaki whitespace korunur.
+ */
+export function sanitizeJsonControlChars(s: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inString) {
+      if (escaped) { out += ch; escaped = false; }
+      else if (ch === '\\') { out += ch; escaped = true; }
+      else if (ch === '"') { out += ch; inString = false; }
+      else if (ch.charCodeAt(0) < 0x20) {
+        if (ch === '\n') out += '\\n';
+        else if (ch === '\r') out += '\\r';
+        else if (ch === '\t') out += '\\t';
+        else out += '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0');
+      }
+      else out += ch;
+    } else {
+      if (ch === '"') inString = true;
+      out += ch;
+    }
+  }
+  return out;
+}
+
 function parseAndValidateMatches(
   content: string,
   validCategoryIds: Set<string>,
@@ -518,35 +604,49 @@ function parseAndValidateMatches(
     jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
   }
 
-  // Try to find JSON object
-  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('AI yanıtında JSON bulunamadı');
+  const results: CategoryMatchResult[] = [];
+  const seenProducts = new Set<string>();
 
-  const parsed = JSON.parse(jsonMatch[0]);
-  if (!parsed.matches || !Array.isArray(parsed.matches)) {
-    throw new Error('AI yanıtında "matches" dizisi bulunamadı');
+  const pushValid = (m: { productId?: unknown; categoryId?: unknown; confidence?: unknown; reason?: unknown }): boolean => {
+    if (!m || typeof m.productId !== 'string' || typeof m.categoryId !== 'string') return false;
+    if (!productIds.has(m.productId) || !validCategoryIds.has(m.categoryId)) return false;
+    if (seenProducts.has(m.productId)) return false;
+    const conf = Number(m.confidence);
+    if (!Number.isFinite(conf)) return false;
+    seenProducts.add(m.productId);
+    results.push({
+      productId: m.productId,
+      categoryId: m.categoryId,
+      confidence: Math.max(0, Math.min(1, conf)),
+      reason: typeof m.reason === 'string' ? m.reason.substring(0, 200) : 'ai_match',
+    });
+    return true;
+  };
+
+  // 1) KATI YOL: geçerli JSON.parse (string içi kontrol karakterleri temizlenerek).
+  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(sanitizeJsonControlChars(jsonMatch[0]));
+      if (parsed && Array.isArray(parsed.matches)) {
+        for (const match of parsed.matches) pushValid(match);
+        if (results.length > 0) return results;
+      }
+    } catch {
+      /* LLM bozuk JSON üretti → regex recovery'ye düş */
+    }
   }
 
-  const results: CategoryMatchResult[] = [];
-  for (const match of parsed.matches) {
-    // Validate required fields
-    if (!match.productId || !match.categoryId || typeof match.confidence !== 'number') continue;
+  // 2) TOLERANSLI YOL: bozuk/kesik/uzun LLM çıktısından productId+categoryId+confidence üçlüsünü çıkar.
+  //    Her sonuç yine productIds/validCategoryIds kümeleriyle doğrulanır (fail-closed korunur).
+  const fieldRegex = /"productId"\s*:\s*"([^"]+)"\s*,\s*"categoryId"\s*:\s*"([^"]+)"\s*,\s*"confidence"\s*:\s*([0-9]+(?:\.[0-9]+)?)/g;
+  let m: RegExpExecArray | null;
+  while ((m = fieldRegex.exec(jsonStr)) !== null) {
+    pushValid({ productId: m[1], categoryId: m[2], confidence: Number(m[3]), reason: 'ai_match' });
+  }
 
-    // Validate product exists
-    if (!productIds.has(match.productId)) continue;
-
-    // Validate category exists in system
-    if (!validCategoryIds.has(match.categoryId)) continue;
-
-    // Clamp confidence
-    const confidence = Math.max(0, Math.min(1, match.confidence));
-
-    results.push({
-      productId: match.productId,
-      categoryId: match.categoryId,
-      confidence,
-      reason: typeof match.reason === 'string' ? match.reason.substring(0, 200) : 'ai_match',
-    });
+  if (results.length === 0) {
+    throw new Error('AI yanıtında geçerli eşleşme bulunamadı');
   }
 
   return results;
@@ -594,6 +694,13 @@ export async function matchCategoriesWithAI(
 
       if (provider.provider === 'nvidia') {
         result = await callNvidiaApi(apiKey, model, {
+          messages,
+          temperature: 0.05,
+          max_tokens: 4096,
+          response_format: { type: 'json_object' },
+        });
+      } else if (provider.provider === 'deepseek') {
+        result = await callDeepseekApi(apiKey, model, {
           messages,
           temperature: 0.05,
           max_tokens: 4096,
@@ -699,6 +806,26 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
       await incrementRequestCount(provider, true);
 
       return { ok: true, provider, model, latencyMs };
+    }
+
+    if (provider === 'deepseek') {
+      const result = await callDeepseekApi(apiKey, model, {
+        messages: [{ role: 'user', content: 'Return exactly: DEEPSEEK_OK' }],
+        max_tokens: 20,
+      }, 120000);
+
+      const latencyMs = Date.now() - startTime;
+      await incrementRequestCount(provider, true);
+
+      const ok = !!result.content && String(result.content).toUpperCase().includes('DEEPSEEK_OK');
+      return {
+        ok,
+        provider,
+        model,
+        latencyMs,
+        error: ok ? undefined : `Model testi DEEPSEEK_OK döndürmedi: ${String(result.content ?? '').slice(0, 80)}`,
+        errorCode: ok ? undefined : 'MODEL_TEST_FAILED',
+      };
     }
 
     if (provider === 'openrouter') {

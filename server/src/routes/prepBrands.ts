@@ -47,16 +47,28 @@ router.get('/xml-brands', requireAuth, async (req: Request, res: Response) => {
 });
 
 // ==================== STATS ====================
-router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
+router.get('/stats', requireAuth, async (req: Request, res: Response) => {
   try {
-    const [totalSystemBrands, matchedProducts, unmatchedProducts, totalMappings, totalLogs] = await Promise.all([
-      prisma.brand.count({ where: { isActive: true } }), prisma.product.count({ where: { brandMatch: true } }),
-      prisma.product.count({ where: { brandMatch: false } }), prisma.brandMapping.count(), prisma.brandLog.count(),
+    // XML context isteğe bağlıdır: Brand ekranındaki context başlığı için XML-kapsamlı sayaçlar.
+    const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
+    const xmlBrandName = req.query?.xmlBrandName ? String(req.query.xmlBrandName) : null;
+    const productWhere: Record<string, unknown> = xmlSourceId ? { xmlSourceId } : {};
+    if (xmlBrandName) productWhere.xmlBrandName = xmlBrandName;
+    const [totalSystemBrands, matchedProducts, unmatchedProducts, totalMappings, totalLogs, totalProducts, xmlBrandFallback, waitingProducts] = await Promise.all([
+      prisma.brand.count({ where: { isActive: true } }),
+      prisma.product.count({ where: { brandMatch: true, ...productWhere } }),
+      prisma.product.count({ where: { brandMatch: false, ...productWhere } }),
+      prisma.brandMapping.count(),
+      prisma.brandLog.count(),
+      prisma.product.count({ where: productWhere }),
+      prisma.product.count({ where: { brandMatch: false, xmlBrandName: { not: null }, ...productWhere } }),
+      prisma.product.count({ where: { brandMatch: false, xmlBrandName: null, ...productWhere } }),
     ]);
-    const brandUsageCounts = await prisma.product.groupBy({ by: ['brandUsageType'], _count: { brandUsageType: true } });
+    const brandUsageCounts = await prisma.product.groupBy({ by: ['brandUsageType'], where: productWhere, _count: { brandUsageType: true } });
     const usageMap: Record<string, number> = {};
     for (const u of brandUsageCounts) usageMap[u.brandUsageType] = u._count.brandUsageType;
     res.json({ totalSystemBrands, matchedProducts, unmatchedProducts, totalMappings, totalLogs,
+      totalProducts, xmlBrandFallback, waitingProducts,
       xmlBrandUsage: usageMap['XML_BRAND'] || 0, dgBrandUsage: usageMap['DG_BRAND'] || 0, customBrandUsage: usageMap['CUSTOM'] || 0,
       prefixEnabledCount: await prisma.product.count({ where: { prefixEnabled: true } }) });
   } catch (error) { console.error('[brands] GET stats error:', error); res.status(500).json({ error: { code: 'DB_ERROR', message: 'İstatistikler alınamadı' } }); }

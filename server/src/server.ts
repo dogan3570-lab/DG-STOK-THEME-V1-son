@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url';
 import { prisma } from './db/prisma.ts';
 import { env } from './env.ts';
 import { attachRoutes } from './routes/index.ts';
-import { ensureDefaultAdminUser, seedDefaultMarketplaces, seedDefaultAIProviders, ensureDefaultListingTemplates } from './bootstrap.ts';
+import { ensureDefaultAdminUser, seedDefaultMarketplaces, seedDefaultAIProviders, ensureDefaultListingTemplates, migrateMarketplaceCredentials, migrateAiProviderKeys } from './bootstrap.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -129,6 +129,18 @@ export function buildServer() {
 
     const usesDefaultPassword = await bcrypt.compare('admin123', user.password);
 
+    let prefs: Record<string, unknown> = {};
+    try { prefs = JSON.parse(user.preferences || '{}'); } catch { prefs = {}; }
+
+    // Bilinen default parola tespit edilirse kalıcı zorunlu değişim bayrağı işlenir.
+    if (usesDefaultPassword && !prefs.mustChangePassword) {
+      prefs.mustChangePassword = true;
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { preferences: JSON.stringify(prefs) },
+      });
+    }
+
     const token = jwt.sign(
       { role: user.role, sub: user.id },
       env.JWT_SECRET,
@@ -145,7 +157,7 @@ export function buildServer() {
     return res.json({
       ok: true,
       token,
-      mustChangePassword: usesDefaultPassword,
+      mustChangePassword: usesDefaultPassword || !!prefs.mustChangePassword,
       user: { id: user.id, email: user.email, role: user.role },
     });
   });
@@ -174,14 +186,24 @@ export function buildServer() {
 
       const user = await prisma.user.findUnique({
         where: { id: String(decoded.sub) },
-        select: { id: true, email: true, role: true, name: true },
+        select: { id: true, email: true, role: true, name: true, preferences: true },
       });
 
       if (!user) {
         return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'User not found' } });
       }
 
-      return res.json(user);
+      // PASSWORD CHANGE DEADLOCK DÜZELTMESİ: /auth/me mustChangePassword durumunu da döndürür;
+      // böylece frontend sayfa yenilendiğinde de şifre değişikliği ekranını gösterebilir.
+      let mustChangePassword = false;
+      try {
+        const prefs = JSON.parse(user.preferences || '{}');
+        if (prefs && typeof prefs === 'object' && !Array.isArray(prefs)) {
+          mustChangePassword = !!prefs.mustChangePassword;
+        }
+      } catch { /* bozuk preferences mustChangePassword kapısını atlamaz */ }
+
+      return res.json({ id: user.id, email: user.email, role: user.role, name: user.name, mustChangePassword });
     } catch {
       return res.status(401).json({ ok: false, error: { code: 'UNAUTHORIZED', message: 'invalid token' } });
     }
@@ -236,12 +258,30 @@ export function buildServer() {
     }
 
     const hashed = await bcrypt.hash(newPassword, 10);
-    await prisma.user.update({ where: { id: user.id }, data: { password: hashed } });
+
+    let prefs: Record<string, unknown> = {};
+    try { prefs = JSON.parse(user.preferences || '{}'); } catch { prefs = {}; }
+    prefs.mustChangePassword = false;
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { password: hashed, preferences: JSON.stringify(prefs) },
+    });
 
     return res.json({ ok: true, message: 'password_changed' });
   });
 
   attachRoutes(app);
+
+  // Cache busting: index.html / API yanıtları asla stale kalmasın (göz testi tutarlılığı).
+  app.use((req, res, next) => {
+    if (req.path === '/' || req.path.endsWith('.html') || !req.path.includes('.')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+    next();
+  });
 
   // Serve frontend static files (both dev and production)
   const possiblePaths = [
@@ -299,6 +339,10 @@ if (process.env.NODE_ENV !== 'test') {
       console.log('[server] default listing templates ensured');
       await seedDefaultAIProviders();
       console.log('[server] default AI providers seeded');
+      await migrateMarketplaceCredentials();
+      console.log('[server] marketplace credentials migrated');
+      await migrateAiProviderKeys();
+      console.log('[server] AI provider keys migrated');
     } catch (error) {
       console.error('[server] database bootstrap failed', error);
     }

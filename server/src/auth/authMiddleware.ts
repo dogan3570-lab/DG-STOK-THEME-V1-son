@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../env.ts';
+import { prisma } from '../db/prisma.ts';
 
 export type AuthedRequest = Request & {
   actor?: {
@@ -9,7 +10,7 @@ export type AuthedRequest = Request & {
   };
 };
 
-export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
+export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
   let token = req.cookies?.token;
 
   if (!token) {
@@ -39,9 +40,36 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
       });
     }
 
+    const user = await prisma.user.findUnique({
+      where: { id: String(decoded.sub) },
+      select: { id: true, role: true, preferences: true },
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        ok: false,
+        error: { code: 'UNAUTHORIZED', message: 'unauthorized' },
+      });
+    }
+
+    let mustChangePassword = false;
+    try {
+      const prefs = JSON.parse(user.preferences || '{}');
+      mustChangePassword = !!prefs.mustChangePassword;
+    } catch {
+      /* bozuk preferences parola zorunluluğunu atlamaz */
+    }
+
+    if (mustChangePassword) {
+      return res.status(403).json({
+        ok: false,
+        error: { code: 'MUST_CHANGE_PASSWORD', message: 'Password change required' },
+      });
+    }
+
     req.actor = {
-      userId: String(decoded.sub),
-      role: String(decoded.role ?? 'OPERATOR'),
+      userId: user.id,
+      role: user.role,
     };
 
     next();

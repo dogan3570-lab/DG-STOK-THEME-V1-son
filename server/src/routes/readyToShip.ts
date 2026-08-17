@@ -7,8 +7,13 @@ import { READY_FILTER, isReady, isPrepComplete, isVariantComplete } from '../ser
 const router = Router();
 
 // ==================== GÖNDERIME HAZIR İSTATİSTİK ====================
-router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
+router.get('/stats', requireAuth, async (req: Request, res: Response) => {
   try {
+    // CONTEXT-001: stats da xmlSourceId context'ine saygı duyar (UI KPI ile tablo aynı context'te kalır).
+    const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
+    const where: Record<string, unknown> = {};
+    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
+
     const [
       totalProducts,
       readyCount,
@@ -23,18 +28,18 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
       missingStock,
       errorCount,
     ] = await Promise.all([
-      prisma.product.count(),
-      prisma.product.count({ where: READY_FILTER }),
-      prisma.product.count({ where: { NOT: READY_FILTER } }),
-      prisma.product.count({ where: { categoryMatch: false } }),
-      prisma.product.count({ where: { brandMatch: false } }),
-      prisma.product.count({ where: { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } } }),
-      prisma.product.count({ where: { templateMatch: false } }),
-      prisma.product.count({ where: { images: null } }),
-      prisma.product.count({ where: { barcode: null } }),
-      prisma.product.count({ where: { salePrice: null } }),
-      prisma.product.count({ where: { stock: { lte: 0 } } }),
-      prisma.product.count({ where: { status: 'ERROR' } }),
+      prisma.product.count({ where }),
+      prisma.product.count({ where: { ...where, ...READY_FILTER } }),
+      prisma.product.count({ where: { ...where, NOT: READY_FILTER } }),
+      prisma.product.count({ where: { ...where, categoryMatch: false } }),
+      prisma.product.count({ where: { ...where, brandMatch: false } }),
+      prisma.product.count({ where: { ...where, variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } } }),
+      prisma.product.count({ where: { ...where, templateMatch: false } }),
+      prisma.product.count({ where: { ...where, images: null } }),
+      prisma.product.count({ where: { ...where, barcode: null } }),
+      prisma.product.count({ where: { ...where, salePrice: null } }),
+      prisma.product.count({ where: { ...where, stock: { lte: 0 } } }),
+      prisma.product.count({ where: { ...where, status: 'ERROR' } }),
     ]);
 
     res.json({
@@ -202,34 +207,111 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 // ==================== TOPLU GÖNDERIME ALMA ====================
 router.post('/send', requireAuth, async (req: Request, res: Response) => {
   try {
-    const productIds = req.body?.productIds;
-    if (!Array.isArray(productIds) || productIds.length === 0) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'productIds zorunludur' } });
+    const productIds = (Array.isArray(req.body?.productIds) ? req.body.productIds : []).map((x: unknown) => String(x)).filter(Boolean);
+    const xmlSourceId = String(req.query?.xmlSourceId ?? req.body?.xmlSourceId ?? '');
+    const marketplaceId = String(req.query?.marketplaceId ?? req.body?.marketplaceId ?? '');
+
+    if (productIds.length === 0) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'productIds zorunludur' } });
+    }
+    if (!xmlSourceId) {
+      return res.status(400).json({ ok: false, error: { code: 'CONTEXT_REQUIRED', message: 'xmlSourceId zorunludur' } });
+    }
+    if (!marketplaceId) {
+      return res.status(400).json({ ok: false, error: { code: 'CONTEXT_REQUIRED', message: 'marketplaceId zorunludur' } });
     }
 
-    // Only send products that are actually ready
-    const readyProducts = await prisma.product.findMany({
-      where: {
-        id: { in: productIds },
-        ...READY_FILTER,
+    const marketplace = await prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { id: true, key: true, name: true, active: true } });
+    if (!marketplace) {
+      return res.status(404).json({ ok: false, error: { code: 'MARKETPLACE_NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+    }
+
+    // Backend authoritative: DB'den yeniden oku, READY'yi sunucuda hesapla (frontend'e güvenme)
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: {
+        id: true, xmlSourceId: true, status: true, title: true,
+        categoryMatch: true, brandMatch: true, templateMatch: true,
+        variantMatch: true, variantStatus: true,
       },
-      select: { id: true, title: true },
     });
 
-    if (readyProducts.length === 0) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Seçilen ürünlerin hiçbiri gönderime uygun değil' } });
+    const invalid: Array<{ productId: string; reason: string; missing?: string[] }> = [];
+    const ready: Array<{ id: string; title: string | null }> = [];
+    const foundIds = new Set(products.map((p) => p.id));
+
+    for (const id of productIds) {
+      if (!foundIds.has(id)) invalid.push({ productId: id, reason: 'NOT_FOUND' });
     }
 
-    const result = await prisma.product.updateMany({
-      where: { id: { in: readyProducts.map((p) => p.id) } },
-      data: { status: 'SENT' },
-    });
+    for (const p of products) {
+      if (p.xmlSourceId !== xmlSourceId) {
+        invalid.push({ productId: p.id, reason: 'WRONG_XML_CONTEXT' });
+        continue;
+      }
+      const okReady = isReady({
+        status: p.status,
+        categoryMatch: p.categoryMatch,
+        brandMatch: p.brandMatch,
+        templateMatch: p.templateMatch,
+        variantMatch: p.variantMatch,
+        variantStatus: p.variantStatus,
+      });
+      if (!okReady) {
+        const missing: string[] = [];
+        if (!p.categoryMatch) missing.push('Kategori');
+        if (!p.brandMatch) missing.push('Marka');
+        if (!p.templateMatch) missing.push('Listeleme');
+        if (!isVariantComplete({ variantMatch: p.variantMatch, variantStatus: p.variantStatus })) missing.push('Varyant');
+        if (p.status !== 'READY') missing.push('Status=' + p.status);
+        invalid.push({ productId: p.id, reason: 'NOT_READY', missing });
+        continue;
+      }
+      ready.push(p);
+    }
+
+    if (ready.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: { code: 'NO_READY_PRODUCTS', message: 'Seçilen ürünlerin hiçbiri bu context için gönderime uygun değil' },
+        invalid,
+      });
+    }
+
+    // Bu fazda gerçek marketplace API YOK → sahte SENT/ACTIVE/listingId YAZILMAZ.
+    // Durum dürüstçe NOT_CONFIGURED olarak işaretlenir; idempotent (unique productId+marketplaceId).
+    const now = new Date();
+    const results: Array<{ productId: string; status: string; duplicate: boolean }> = [];
+    for (const p of ready) {
+      const existing = await prisma.productMarketplaceState.findUnique({
+        where: { productId_marketplaceId: { productId: p.id, marketplaceId } },
+        select: { id: true, status: true },
+      });
+      if (existing && ['SENDING', 'ACTIVE'].includes(existing.status)) {
+        results.push({ productId: p.id, status: existing.status, duplicate: true });
+        continue;
+      }
+      const data = {
+        status: 'NOT_CONFIGURED',
+        errorMessage: 'Gerçek marketplace API entegrasyonu henüz yapılmadı (sonraki faz)',
+        lastActionAt: now,
+      };
+      if (existing) {
+        await prisma.productMarketplaceState.update({ where: { id: existing.id }, data });
+      } else {
+        await prisma.productMarketplaceState.create({ data: { productId: p.id, marketplaceId, ...data } });
+      }
+      results.push({ productId: p.id, status: 'NOT_CONFIGURED', duplicate: false });
+    }
 
     res.json({
-      ok: true,
-      message: `${result.count} ürün gönderime alındı`,
-      sentCount: result.count,
-      skippedCount: productIds.length - result.count,
+      ok: false,
+      code: 'MARKETPLACE_NOT_CONFIGURED',
+      message: 'Gerçek marketplace API entegrasyonu yapılmadı — hiçbir ürün gönderilmedi (NOT_CONFIGURED)',
+      readyCount: ready.length,
+      invalidCount: invalid.length,
+      invalid,
+      results,
     });
   } catch (error) {
     console.error('Error sending products:', error);

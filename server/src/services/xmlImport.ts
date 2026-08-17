@@ -1,7 +1,6 @@
 import { prisma } from '../db/prisma.ts';
 import { invalidateDashboardStatsCache } from '../routes/dashboard.ts';
 import { ensureDefaultListingTemplates } from '../bootstrap.ts';
-import { detectVariantAttributes } from './readiness.ts';
 
 export type XmlImportResult = {
   ok: boolean;
@@ -47,6 +46,9 @@ export type XmlImportProduct = {
   link: string | null;
   unit: string | null;
   active: boolean;
+  // Gerçek varyant yapısı: yalnızca XML parent/group kayıtlarından tespit edilir.
+  parentId: string | null;
+  groupId: string | null;
 };
 
 function parseXmlDocument(xml: string) {
@@ -242,6 +244,10 @@ export function parseXmlImportPayload(xml: string): XmlImportProduct[] {
       const xmlKey = extractTagValue(content, 'xmlKey') || extractTagValue(content, 'id');
       if (!xmlKey) return null;
 
+      // Gerçek varyant yapısı: parent/group kayıtları (AKILLIBAYI1'de YOKTUR).
+      const parentId = extractTagValue(content, 'parentId') || extractTagValue(content, 'parent_id') || extractTagValue(content, 'itemParentId');
+      const groupId = extractTagValue(content, 'groupId') || extractTagValue(content, 'group_id') || extractTagValue(content, 'itemGroupId');
+
       const title = extractTagValue(content, 'title') || extractTagValue(content, 'name');
       const sku = extractTagValue(content, 'sku') || extractTagValue(content, 'productCode') || extractTagValue(content, 'modelCode');
       const barcode = extractTagValue(content, 'barcode');
@@ -322,6 +328,8 @@ export function parseXmlImportPayload(xml: string): XmlImportProduct[] {
         link: link || null,
         unit: unit || null,
         active: activeValue === '1',
+        parentId: parentId || null,
+        groupId: groupId || null,
       } satisfies XmlImportProduct;
     })
     .filter((item): item is XmlImportProduct => item != null);
@@ -501,6 +509,14 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
       return true;
     });
 
+    // GERÇEK VARIANT TANIMI: yalnızca aynı parent/group altında 2+ satılabilir
+    // seçenek varsa ürün varyantlıdır. Başlıktaki renk/beden/numara/ölçü ASLA varyant değildir.
+    const groupCounts = new Map<string, number>();
+    for (const it of uniqueItems) {
+      const gk = it.parentId || it.groupId;
+      if (gk) groupCounts.set(gk, (groupCounts.get(gk) || 0) + 1);
+    }
+
     for (let i = 0; i < uniqueItems.length; i += BATCH_SIZE) {
       const batch = uniqueItems.slice(i, i + BATCH_SIZE);
       const batchResults: typeof results = [];
@@ -542,8 +558,10 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
             }
           }
 
-          const detectedVariants = detectVariantAttributes([item.title, item.sku, item.description].filter(Boolean).join(' '));
-          const hasVariants = detectedVariants.length > 0;
+          // GERÇEK VARIANT: aynı parent/group altında 2+ seçenek varsa varyantlıdır.
+          // AKILLIBAYI1 XML'inde parent/group yok → hasVariants=false → NOT_REQUIRED.
+          const groupKey = item.parentId || item.groupId;
+          const hasVariants = !!groupKey && (groupCounts.get(groupKey) || 0) > 1;
 
           const created = await prisma.product.upsert({
             where: { xmlKey: item.xmlKey },
@@ -565,12 +583,14 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
               brandId: brandId || defaultBrand.id,
               xmlBrandName: item.brand || null,
               supplierCategory,
-              categoryMatch: true,
+              // KATEGORİ AUTHORITATIVE KURALI: gerçek marketplace mapping olmadan categoryMatch=true VERİLMEZ.
+              // İçe aktarma yalnızca lokal kategori atar; kategori mapping ayrı akışta doğrulanır.
+              categoryMatch: false,
               brandMatch: true,
               variantMatch: false,
               variantStatus: hasVariants ? 'WAITING_AI' : 'NOT_REQUIRED',
               templateMatch: true,
-              status: 'READY',
+              status: 'XML',
               xmlSourceId: sourceId,
             },
             create: {
@@ -592,12 +612,12 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
               brandId: brandId || defaultBrand.id,
               xmlBrandName: item.brand || null,
               supplierCategory,
-              categoryMatch: true,
+              categoryMatch: false,
               brandMatch: true,
               variantMatch: false,
               variantStatus: hasVariants ? 'WAITING_AI' : 'NOT_REQUIRED',
               templateMatch: true,
-              status: 'READY',
+              status: 'XML',
               xmlSourceId: sourceId,
             },
           });
@@ -624,27 +644,8 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
             outcome: isNew ? 'created' : 'updated'
           });
 
-          for (const dv of detectedVariants) {
-            try {
-              await prisma.variant.upsert({
-                where: {
-                  productId_name_value: {
-                    productId: created.id,
-                    name: dv.name,
-                    value: dv.value,
-                  },
-                },
-                update: {},
-                create: {
-                  name: dv.name,
-                  value: dv.value,
-                  productId: created.id,
-                },
-              });
-            } catch {
-              // Varyant zaten varsa hata verme
-            }
-          }
+          // Başlık tabanlı varyant kaydı KALDIRILDI: XML'de gerçek varyant yapısı
+          // yoksa hiçbir varyant kaydı yazılmaz (false-positive önlenir).
         } catch (err) {
           failedCount++;
           batchResults.push({ xmlKey: item.xmlKey, created: false, outcome: 'failed', errorDetail: String(err) });

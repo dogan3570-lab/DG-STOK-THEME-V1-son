@@ -2,13 +2,44 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
+import { encryptCredential } from '../services/crypto.ts';
 
 const router = Router();
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** settings JSON içinde ASLA saklanmaması gereken plaintext credential anahtarları. */
+const CREDENTIAL_PLAINTEXT_KEYS = [
+  'refreshToken', 'apiKey', 'apiSecret', 'accessToken', 'clientSecret', 'authorization', 'token', 'password',
+];
+
+function safeParseSettings(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const p = JSON.parse(raw);
+    if (p && typeof p === 'object' && !Array.isArray(p)) return p;
+  } catch {
+    /* bozuk settings boş kabul edilir */
+  }
+  return {};
+}
+
+function hasRefreshTokenConfigured(settings: Record<string, unknown>): boolean {
+  return !!(settings.refreshTokenEnc || settings.refreshToken);
+}
+
+/** Response için settings'i sanitize eder; credential (plaintext veya ciphertext) ASLA dönmez. */
+function sanitizeSettings(settings: Record<string, unknown>): { settings: string; refreshTokenConfigured: boolean } {
+  const out: Record<string, unknown> = { ...settings };
+  for (const k of CREDENTIAL_PLAINTEXT_KEYS) delete out[k];
+  delete out.refreshTokenEnc;
+  return { settings: JSON.stringify(out), refreshTokenConfigured: hasRefreshTokenConfigured(settings) };
+}
 
 // GET / - List marketplaces with stats
 router.get('/', requireAuth, requireRole(['ADMIN']), async (_req: Request, res: Response) => {
   try {
-    const items = await prisma.marketplace.findMany({
+    const rows = await prisma.marketplace.findMany({
       orderBy: { createdAt: 'desc' },
       select: {
         id: true, key: true, name: true, apiStatus: true, active: true,
@@ -17,6 +48,13 @@ router.get('/', requireAuth, requireRole(['ADMIN']), async (_req: Request, res: 
         _count: { select: { productMarketplaceStates: true, orders: true } },
       },
     });
+    // F-02 / F-CRIT-01: apiKey/apiSecret/refreshToken ASLA response'a dönmez; yalnızca configured metadata
+    const items = rows.map(({ apiKey, apiSecret, settings, ...rest }) => ({
+      ...rest,
+      apiKeyConfigured: !!apiKey,
+      apiSecretConfigured: !!apiSecret,
+      ...sanitizeSettings(safeParseSettings(settings)),
+    }));
     res.json({ items });
   } catch (error) {
     console.error('Error fetching marketplaces:', error);
@@ -43,7 +81,7 @@ router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
 // POST / - Create marketplace
 router.post('/', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
-    const { key, name, apiUrl, apiKey, apiSecret, merchantId, sellerId, storeId, settings, active } = req.body || {};
+    const { key, name, apiUrl, apiKey, apiSecret, refreshToken, merchantId, sellerId, storeId, settings, active } = req.body || {};
     if (!key || !name) {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'key ve name zorunludur' } });
     }
@@ -51,22 +89,42 @@ router.post('/', requireAuth, requireRole(['ADMIN']), async (req: Request, res: 
     if (existing) {
       return res.status(409).json({ error: { code: 'CONFLICT', message: 'Bu key ile zaten bir pazaryeri mevcut' } });
     }
-    let finalSettings: Record<string, unknown> = {};
-    try { finalSettings = JSON.parse(settings || '{}'); } catch(e) {}
+
+    const finalSettings: Record<string, unknown> = safeParseSettings(settings);
     if (sellerId) finalSettings.sellerId = sellerId;
+    if (refreshToken && String(refreshToken).trim()) {
+      finalSettings.refreshTokenEnc = encryptCredential(String(refreshToken).trim());
+    }
+    if (typeof finalSettings.refreshToken === 'string' && finalSettings.refreshToken.trim()) {
+      finalSettings.refreshTokenEnc = encryptCredential(finalSettings.refreshToken.trim());
+    }
+    for (const k of CREDENTIAL_PLAINTEXT_KEYS) delete finalSettings[k];
+
     const mp = await prisma.marketplace.create({
       data: {
         key, name,
         apiUrl: apiUrl || null,
-        apiKey: apiKey || null,
-        apiSecret: apiSecret || null,
+        apiKey: apiKey && String(apiKey).trim() ? encryptCredential(String(apiKey).trim()) : null,
+        apiSecret: apiSecret && String(apiSecret).trim() ? encryptCredential(String(apiSecret).trim()) : null,
         merchantId: merchantId || null,
         storeId: storeId || null,
         settings: JSON.stringify(finalSettings),
         active: active !== undefined ? active : true,
       },
     });
-    res.json({ ok: true, item: mp });
+    const { settings: respSettings, refreshTokenConfigured } = sanitizeSettings(safeParseSettings(mp.settings));
+    res.json({
+      ok: true,
+      item: {
+        ...mp,
+        apiKey: undefined,
+        apiSecret: undefined,
+        settings: respSettings,
+        refreshTokenConfigured,
+        apiKeyConfigured: !!mp.apiKey,
+        apiSecretConfigured: !!mp.apiSecret,
+      },
+    });
   } catch (error) {
     console.error('Error creating marketplace:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create marketplace' } });
@@ -78,29 +136,58 @@ router.put('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, res
   try {
     const id = String(req.params.id ?? '');
     // Validate UUID format
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    if (!UUID_RE.test(id)) {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz marketplace ID formatı' } });
     }
+
+    const existing = await prisma.marketplace.findUnique({ where: { id }, select: { id: true, settings: true } });
+    if (!existing) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+    }
+
     const data: Record<string, unknown> = {};
     if (req.body?.name !== undefined) data.name = req.body.name;
     if (req.body?.apiUrl !== undefined) data.apiUrl = req.body.apiUrl;
-    if (req.body?.apiKey !== undefined) data.apiKey = req.body.apiKey;
-    if (req.body?.apiSecret !== undefined) data.apiSecret = req.body.apiSecret;
+    if (req.body?.apiKey !== undefined) data.apiKey = req.body.apiKey && String(req.body.apiKey).trim() ? encryptCredential(String(req.body.apiKey).trim()) : null;
+    if (req.body?.apiSecret !== undefined) data.apiSecret = req.body.apiSecret && String(req.body.apiSecret).trim() ? encryptCredential(String(req.body.apiSecret).trim()) : null;
     if (req.body?.merchantId !== undefined) data.merchantId = req.body.merchantId;
     if (req.body?.storeId !== undefined) data.storeId = req.body.storeId;
     if (req.body?.active !== undefined) data.active = req.body.active;
     if (req.body?.apiStatus !== undefined) data.apiStatus = req.body.apiStatus;
-    if (req.body?.settings !== undefined) data.settings = req.body.settings;
-    if (req.body?.sellerId !== undefined) {
-      const existing = await prisma.marketplace.findUnique({ where: { id }, select: { settings: true } });
-      let settings: Record<string, unknown> = {};
-      try { settings = JSON.parse(String(existing?.settings || '{}')); } catch(e) {}
-      settings.sellerId = req.body.sellerId;
-      data.settings = JSON.stringify(settings);
+
+    // settings merge: mevcut encrypted refreshToken, yeni değer girilmedikçe korunur (RT-P0-09)
+    if (req.body?.settings !== undefined || req.body?.sellerId !== undefined || req.body?.refreshToken !== undefined) {
+      const merged: Record<string, unknown> = safeParseSettings(existing.settings);
+      const incoming: Record<string, unknown> = safeParseSettings(req.body.settings);
+      for (const [k, v] of Object.entries(incoming)) merged[k] = v;
+
+      if (req.body.sellerId !== undefined) merged.sellerId = req.body.sellerId;
+
+      if (req.body.refreshToken !== undefined && String(req.body.refreshToken).trim()) {
+        merged.refreshTokenEnc = encryptCredential(String(req.body.refreshToken).trim());
+      }
+      if (typeof merged.refreshToken === 'string' && merged.refreshToken.trim()) {
+        merged.refreshTokenEnc = encryptCredential(merged.refreshToken.trim());
+      }
+      for (const k of CREDENTIAL_PLAINTEXT_KEYS) delete merged[k];
+
+      data.settings = JSON.stringify(merged);
     }
 
     const mp = await prisma.marketplace.update({ where: { id }, data });
-    res.json({ ok: true, item: mp });
+    const { settings: respSettings, refreshTokenConfigured } = sanitizeSettings(safeParseSettings(mp.settings));
+    res.json({
+      ok: true,
+      item: {
+        ...mp,
+        apiKey: undefined,
+        apiSecret: undefined,
+        settings: respSettings,
+        refreshTokenConfigured,
+        apiKeyConfigured: !!mp.apiKey,
+        apiSecretConfigured: !!mp.apiSecret,
+      },
+    });
   } catch (error: any) {
     if (error.code === 'P2025') {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });

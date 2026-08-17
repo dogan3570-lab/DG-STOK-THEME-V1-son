@@ -28,11 +28,6 @@ const COLOR_LABEL: Record<string, string> = {
   krem: 'Krem', gri: 'Gri', altin: 'Altin', gumus: 'Gumus', metalik: 'Gri', fume: 'Gri',
 };
 
-const SIZES = new Set([
-  'xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl', 'xxxl', '2xl', '3xl', '4xl', '5xl',
-  'small', 'medium', 'large', 'xlarge',
-]);
-
 function tokenize(text: string): string[] {
   return (text || '').toLowerCase().split(/[^a-z0-9çğıöşü]+/).filter(Boolean);
 }
@@ -42,38 +37,19 @@ export interface DetectedVariant {
   value: string;
 }
 
-/** XML başlık/key/açıklama metninden GERÇEK varyant işaretlerini (renk/beden/numara/kapasite) tespit eder. */
-export function detectVariantAttributes(text: string): DetectedVariant[] {
-  const tokens = tokenize(text);
-  const found: DetectedVariant[] = [];
-
-  for (const token of tokens) {
-    if (COLORS.has(token)) {
-      found.push({ name: 'Renk', value: COLOR_LABEL[token] || token });
-      break;
-    }
-  }
-  for (const token of tokens) {
-    if (SIZES.has(token)) {
-      found.push({ name: 'Beden', value: token.toUpperCase() });
-      break;
-    }
-  }
-  for (const token of tokens) {
-    if (/^(3[2-9]|4[0-9]|50)$/.test(token)) {
-      found.push({ name: 'Numara', value: token });
-      break;
-    }
-  }
-  for (const token of tokens) {
-    const cap = token.match(/^(\d+)(gb|tb|mb)$/);
-    if (cap) {
-      found.push({ name: 'Kapasite', value: cap[1].toUpperCase() + cap[2].toUpperCase() });
-      break;
-    }
-  }
-
-  return found;
+/** Başlık/key/açıklama metninden varyant işaretlerini tespit eder.
+ *
+ *  KESİN KURAL (V2): Başlıktaki renk/beden/numara/kapasite/ölçü bilgisi ASLA
+ *  varyant DEĞİLDİR. "Siyah", "Siyah-Beyaz", "Beden: S", "Numara: 45",
+ *  "45 Cm", "65W", "128 GB" gibi değerler tek ürünün ÖZELLİĞİDİR; ürünü
+ *  varyantlı yapmaz. Gerçek varyant ancak XML yapısında aynı ana ürün altında
+ *  birden fazla satılabilir seçenek (parent/variant/option kaydı) varsa vardır.
+ *  AKILLIBAYI1 XML'inde parent/variant/option/color/beden alanı YOKTUR; bu
+ *  nedenle başlık tabanlı tespit devre dışıdır ve her zaman boş döner.
+ *  (XML yapısı tabanlı tespit xmlImport.parseXmlImportPayload içinde yapılır.)
+ */
+export function detectVariantAttributes(_text: string): DetectedVariant[] {
+  return [];
 }
 
 export function hasVariantAttributes(text: string): boolean {

@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
-import { matchVariantsWithAI, extractXmlVariantTree, isMarketplaceAttribute, type VariantMapping } from '../services/variantAi.ts';
+import { runVariantMatchFlow } from '../services/variantMatch.ts';
+import { detectVariantAttributes } from '../services/readiness.ts';
+import { fetchTrendyolCategoryAttributes, fetchTrendyolAttributeValues } from '../services/trendyolCatalog.ts';
+
+/** Gerçek varyant alanları — AKYI ve HBT/DGLIVE önekli çöp alanlar hariç. */
+const REAL_VARIANT_NAMES = new Set(['Renk', 'Beden', 'Numara', 'Kapasite', 'Hacim', 'Cinsiyet', 'Materyal', 'Model']);
 
 const router = Router();
 
@@ -36,48 +41,169 @@ const SIZE_PATTERNS = ['xs', 's', 'm', 'l', 'xl', 'xxl', 'xxxl', '2xl', '3xl', '
 const COLOR_PATTERNS = Object.keys(COLOR_MAP);
 
 function detectVariantsFromText(text: string): Array<{ name: string; value: string; confidence: number }> {
-  const detected: Array<{ name: string; value: string; confidence: number }> = [];
-  const t = (text || '').toLowerCase();
-
-  for (const c of COLOR_PATTERNS) {
-    if (t.includes(c)) { detected.push({ name: 'Renk', value: COLOR_MAP[c], confidence: 92 }); break; }
-  }
-  for (const s of SIZE_PATTERNS) {
-    if (t.includes(s)) { detected.push({ name: 'Beden', value: s.toUpperCase(), confidence: 88 }); break; }
-  }
-  const numMatch = t.match(/\b(\d{2,3})\b/g);
-  if (numMatch) {
-    for (const num of numMatch) {
-      const n = parseInt(num);
-      if ((n >= 32 && n <= 50) || (n >= 36 && n <= 46)) { detected.push({ name: 'Numara', value: num, confidence: 85 }); break; }
-    }
-  }
-  const capMatch = t.match(/\b(\d+)\s*(gb|tb|mb)\b/i);
-  if (capMatch) detected.push({ name: 'Kapasite', value: capMatch[1].toUpperCase() + capMatch[2].toUpperCase(), confidence: 90 });
-  return detected;
+  // TEK AUTHORITATIVE kural: readiness.ts detectVariantAttributes (başlıktan sahte varyant üretmez).
+  return detectVariantAttributes(text).map((v) => ({ name: v.name, value: v.value, confidence: 90 }));
 }
 
 // ==================== ROUTES ====================
 
 // ==================== 1. STATS ====================
-router.get('/stats', requireAuth, async (_req, res) => {
+router.get('/stats', requireAuth, async (req, res) => {
   try {
-    const [totalVariants, variantTypes, matchedProducts, unmatchedProducts] = await Promise.all([
-      prisma.variant.count(),
-      prisma.variant.groupBy({ by: ['name'], _count: { name: true }, orderBy: { _count: { name: 'desc' } } }),
-      prisma.product.count({ where: { variantMatch: true } }),
-      prisma.product.count({ where: { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } } }),
+    const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
+    const productWhere: Record<string, unknown> = xmlSourceId ? { xmlSourceId } : {};
+    const variantWhere: Record<string, unknown> = xmlSourceId ? { product: { xmlSourceId } } : {};
+    const [variantTypes, matchedProducts, unmatchedProducts, notRequiredProducts] = await Promise.all([
+      prisma.variant.groupBy({ by: ['name'], where: variantWhere, _count: { name: true }, orderBy: { _count: { name: 'desc' } } }),
+      prisma.product.count({ where: { variantMatch: true, ...productWhere } }),
+      prisma.product.count({ where: { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' }, ...productWhere } }),
+      prisma.product.count({ where: { variantStatus: 'NOT_REQUIRED', ...productWhere } }),
     ]);
+    // Çöp varyant alanları (AKYI/HBT-*/DGLIVE-*) istatistikten dışlanır.
+    const realTypes = variantTypes.filter((v) => REAL_VARIANT_NAMES.has(v.name));
+    const totalVariants = realTypes.reduce((s, v) => s + v._count.name, 0);
     res.json({
       totalVariants,
-      variantTypes: variantTypes.map(v => ({ name: v.name, count: v._count.name })),
+      variantTypes: realTypes.map(v => ({ name: v.name, count: v._count.name })),
       matchedProducts,
       unmatchedProducts,
+      notRequiredProducts,
       productsWithVariants: matchedProducts,
     });
   } catch (error) {
     console.error('[variants] GET stats error:', error);
     res.status(500).json({ error: { code: 'DB_ERROR', message: 'Veritabani hatasi' } });
+  }
+});
+
+// ==================== 1B. DASHBOARD (XML + PAZARYERİ kapsamlı GERÇEK sayaçlar) ====================
+router.get('/dashboard', requireAuth, async (req, res) => {
+  try {
+    const xmlSourceId = String(req.query?.xmlSourceId ?? '');
+    if (!xmlSourceId) return res.status(400).json({ ok: false, error: 'xmlSourceId zorunludur' });
+    const marketplaceId = String(req.query?.marketplaceId ?? '');
+    const where: Record<string, unknown> = { xmlSourceId };
+
+    const [totalProducts, notRequired, autoMatched, waitingAi, manualReview, completed, hasVariant, analysisFailed] = await Promise.all([
+      prisma.product.count({ where }),
+      prisma.product.count({ where: { ...where, variantStatus: 'NOT_REQUIRED' } }),
+      prisma.product.count({ where: { ...where, variantMatch: true } }),
+      prisma.product.count({ where: { ...where, variantStatus: 'WAITING_AI', variantMatch: false } }),
+      prisma.product.count({ where: { ...where, variantStatus: 'MANUAL_REVIEW' } }),
+      prisma.product.count({ where: { ...where, variantStatus: 'COMPLETED' } }),
+      prisma.product.count({ where: { ...where, variantStatus: { not: 'NOT_REQUIRED' } } }),
+      prisma.product.count({ where: { ...where, variantStatus: { notIn: ['NOT_REQUIRED', 'WAITING_AI', 'MANUAL_REVIEW', 'COMPLETED'] } } }),
+    ]);
+
+    // AI ile eşleşenler GERÇEK kayıttan ölçülür (VariantAnalysis source='ai' + validationPassed).
+    const aiValidatedRows = await prisma.variantAnalysis.findMany({ where: { validationPassed: true, source: 'ai' }, select: { productId: true } });
+    const aiValidatedIds = aiValidatedRows.map((a) => a.productId);
+    const aiMatched = aiValidatedIds.length > 0
+      ? await prisma.product.count({ where: { id: { in: aiValidatedIds }, xmlSourceId } })
+      : 0;
+
+    // Manuel = GERÇEK MANUAL_REVIEW kaydı (kalan hesabı DEĞİL).
+    const manual = manualReview;
+    // hasVariant GERÇEK DB sayacından gelir (remainder hesabı YOK).
+
+    let marketplaceName: string | null = null;
+    if (marketplaceId) {
+      const mp = await prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { name: true } });
+      marketplaceName = mp?.name ?? null;
+    }
+
+    res.json({ totalProducts, hasVariant, notRequired, autoMatched, aiMatched, manual, manualReview, waitingAi, completed, analysisFailed, marketplaceName });
+  } catch (error) {
+    console.error('[variants] GET dashboard error:', error);
+    res.status(500).json({ error: { code: 'DB_ERROR', message: 'Dashboard alınamadı' } });
+  }
+});
+
+// ==================== 1C. PRODUCTS (ürün bazlı, gerçek varyant + durum + neden) ====================
+const REASON_TEXT: Record<string, string> = {
+  CATEGORY_MAPPING_NOT_FOUND: 'Trendyol kategori eşlemesi yok; önce Kategori Eşleştirme ekranından kategoriyi eşleyin.',
+  CATALOG_UNAVAILABLE: 'Trendyol kategori attribute ağacı alınamadı; tekrar deneyin veya manuel eşleştirin.',
+  MARKETPLACE_ATTRIBUTE_NOT_SUPPORTED: 'Bu pazaryeri için gerçek attribute ağacı desteklenmiyor.',
+};
+
+function humanReason(code: string | null | undefined): string {
+  if (!code) return 'Manuel eşleştirme gerekli';
+  if (REASON_TEXT[code]) return REASON_TEXT[code];
+  if (code.includes('INVALID_VALUE')) return 'XML varyant değeri anlamsız (AKYI/bozuk değer)';
+  if (code.includes('AMBIGUOUS')) return 'Birden fazla marketplace adayı var; manuel inceleme gerekli';
+  if (code.includes('NOT_FOUND')) return 'Marketplace değeri bulunamadı';
+  return code;
+}
+
+function extractManualReason(checkResults: string | null): string | null {
+  if (!checkResults) return null;
+  try {
+    const j = JSON.parse(checkResults);
+    if (typeof j.reason === 'string' && j.reason) return humanReason(j.reason);
+    if (Array.isArray(j.missing) && j.missing.length > 0) {
+      const m = j.missing[0];
+      if (m && m.reason) return humanReason(m.reason);
+      if (m && m.xmlVariantName) return `Marketplace değeri bulunamadı: ${m.xmlVariantName}=${m.xmlVariantValue ?? ''}`;
+    }
+    if (Array.isArray(j.requiredMissing) && j.requiredMissing.length > 0) {
+      const r = j.requiredMissing[0];
+      if (r && r.attributeName) return `Zorunlu attribute eksik: ${r.attributeName}`;
+    }
+    return 'Manuel eşleştirme gerekli';
+  } catch {
+    return null;
+  }
+}
+
+router.get('/products', requireAuth, async (req, res) => {
+  try {
+    const xmlSourceId = String(req.query?.xmlSourceId ?? '');
+    if (!xmlSourceId) return res.status(400).json({ ok: false, error: 'xmlSourceId zorunludur' });
+    const page = Math.max(1, Number(req.query?.page ?? 1));
+    const limit = Math.min(1000, Math.max(1, Number(req.query?.limit ?? 50)));
+    // Varyant ekranı YALNIZCA varyant gerektiren ürünleri listeler (NOT_REQUIRED hariç).
+    const where: Record<string, unknown> = { xmlSourceId, variantStatus: { not: 'NOT_REQUIRED' } };
+    const [items, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        select: { id: true, title: true, xmlKey: true, sku: true, categoryId: true, variantStatus: true, variantMatch: true, matchedBy: true, variants: { select: { name: true, value: true } } },
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { updatedAt: 'desc' },
+      }),
+      prisma.product.count({ where }),
+    ]);
+    const ids = items.map((p) => p.id);
+    const analyses = await prisma.variantAnalysis.findMany({ where: { productId: { in: ids } }, select: { productId: true, validationPassed: true, source: true, checkResults: true } });
+    const vaMap = new Map<string, { validationPassed: boolean; source: string; checkResults: string | null }>();
+    for (const a of analyses) vaMap.set(a.productId, { validationPassed: a.validationPassed, source: a.source, checkResults: a.checkResults });
+    const data = items.map((p) => {
+      const realVariants = (p.variants || []).filter((v) => REAL_VARIANT_NAMES.has(v.name));
+      const va = vaMap.get(p.id);
+      let status = 'NOT_REQUIRED';
+      let reason: string | null = null;
+      if (p.variantStatus === 'NOT_REQUIRED') {
+        status = 'NOT_REQUIRED';
+      } else if (p.variantMatch && p.matchedBy === 'ai') {
+        status = 'AI';
+      } else if (p.variantMatch && p.matchedBy === 'manual') {
+        status = 'MANUAL_MATCHED';
+      } else if (p.variantMatch) {
+        status = 'AUTO';
+      } else if (va?.validationPassed) {
+        status = 'AI';
+      } else if (p.variantStatus === 'MANUAL_REVIEW') {
+        status = 'MANUAL';
+        reason = extractManualReason(va?.checkResults ?? null);
+      } else {
+        status = 'WAITING_AI';
+      }
+      return { id: p.id, title: p.title, xmlKey: p.xmlKey, sku: p.sku, categoryId: p.categoryId, variantStatus: p.variantStatus, variantMatch: p.variantMatch, status, reason, variants: realVariants };
+    });
+    res.json({ items: data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+  } catch (error) {
+    console.error('[variants] GET products error:', error);
+    res.status(500).json({ error: { code: 'DB_ERROR', message: 'Ürünler alınamadı' } });
   }
 });
 
@@ -160,40 +286,43 @@ router.post('/batch', requireAuth, async (req, res) => {
   }
 });
 
-// ==================== 5. AUTO-DETECT ====================
+// ==================== 5. AUTO-DETECT (context'li: XML varyant tespiti + NOT_REQUIRED sınıflama) ====================
 router.post('/auto-detect', requireAuth, async (req, res) => {
   try {
-    const { productIds } = req.body;
-    const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
-    if (Array.isArray(productIds) && productIds.length > 0) where.id = { in: productIds };
-    const products = await prisma.product.findMany({ where, select: { id: true, title: true, xmlKey: true, description: true }, take: 500 });
-    const variantData: Array<{ productId: string; name: string; value: string }> = [];
-    const matchedProductIds: string[] = [];
+    const xmlSourceId = String(req.body?.xmlSourceId ?? req.query?.xmlSourceId ?? '');
+    if (!xmlSourceId) return res.status(400).json({ ok: false, error: 'xmlSourceId zorunludur' });
+
+    // Yalnızca SEÇİLEN XML: eşleşmemiş ve NOT_REQUIRED olmayan ürünler.
+    const where: Record<string, unknown> = { xmlSourceId, variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
+    if (Array.isArray(req.body?.productIds) && req.body.productIds.length > 0) where.id = { in: req.body.productIds };
+
+    const products = await prisma.product.findMany({
+      where,
+      take: 2000,
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, title: true, xmlKey: true, sku: true, description: true },
+    });
+
+    let withVariants = 0;
+    let withoutVariants = 0;
+    const noVariantIds: string[] = [];
+
     for (const product of products) {
-      const searchText = [product.title || '', product.xmlKey || '', product.description || ''].join(' ');
-      const detected = detectVariantsFromText(searchText);
-      if (detected.length > 0) {
-        matchedProductIds.push(product.id);
-        for (const v of detected) variantData.push({ productId: product.id, name: v.name, value: v.value });
-      }
+      const searchText = [product.title || '', product.xmlKey || '', product.sku || '', product.description || ''].join(' ');
+      const detected = detectVariantAttributes(searchText);
+      if (detected.length > 0) withVariants++;
+      else { withoutVariants++; noVariantIds.push(product.id); }
     }
-    let totalCreated = 0;
-    if (variantData.length > 0) {
-      const existingVariants = await prisma.variant.findMany({
-        where: { OR: variantData.map(v => ({ productId: v.productId, name: v.name, value: v.value })) },
-        select: { productId: true, name: true, value: true },
-      });
-      const existingKeys = new Set(existingVariants.map(e => `${e.productId}:${e.name}:${e.value}`));
-      const newVariants = variantData.filter(v => !existingKeys.has(`${v.productId}:${v.name}:${v.value}`));
-      for (let i = 0; i < newVariants.length; i += 100) {
-        const batch = newVariants.slice(i, i + 100);
-        await prisma.variant.createMany({ data: batch }).catch(() => null);
-        totalCreated += batch.length;
-      }
+
+    // XML'de gerçek varyant yoksa NOT_REQUIRED — kullanıcıya MANUAL iş ÇIKMAZ.
+    let notRequiredUpdated = 0;
+    if (noVariantIds.length > 0) {
+      const r = await prisma.product.updateMany({ where: { id: { in: noVariantIds }, variantStatus: { not: 'NOT_REQUIRED' } }, data: { variantMatch: false, variantStatus: 'NOT_REQUIRED' } });
+      notRequiredUpdated = r.count;
     }
-    if (matchedProductIds.length > 0) await prisma.product.updateMany({ where: { id: { in: matchedProductIds } }, data: { variantMatch: true } });
-    await prisma.auditLog.create({ data: { action: 'AUTO_VARIANT_DETECT', entity: 'variant', details: `Otomatik tespit: ${totalCreated} varyant, ${matchedProductIds.length} urun`, actorUserId: (req as any).actor?.userId || null } });
-    return res.json({ totalDetected: totalCreated, totalProductsWithVariants: matchedProductIds.length, totalScanned: products.length, message: `${totalCreated} varyant ${matchedProductIds.length} urunde tespit edildi` });
+
+    await prisma.auditLog.create({ data: { action: 'AUTO_VARIANT_DETECT', entity: 'variant', details: `Varyant tespiti: ${withVariants} varyantlı, ${withoutVariants} varyantsız (${notRequiredUpdated} NOT_REQUIRED)`, actorUserId: (req as any).actor?.userId || null } });
+    return res.json({ ok: true, totalScanned: products.length, totalProductsWithVariants: withVariants, totalProductsWithoutVariants: withoutVariants, notRequiredUpdated, message: `${withVariants} varyantlı, ${withoutVariants} varyantsız ürün tespit edildi` });
   } catch (error) {
     console.error('[variants] POST auto-detect error:', error);
     return res.status(500).json({ error: { code: 'DB_ERROR', message: 'Otomatik varyant tespiti basarisiz' } });
@@ -275,26 +404,15 @@ router.get('/types', requireAuth, async (_req, res) => {
 });
 
 // ==================== 9. AI SUGGEST (SINGLE) ====================
+// FALSE-POSITIVE FIX: başlıktan çıplak s/m/l, 32-50 arası sayı ve fiziksel ölçü ASLA varyant üretilmez.
+// Tek authoritative kural: readiness.detectVariantAttributes.
 router.post('/ai-suggest', requireAuth, async (req, res) => {
   try {
-    const { productId, title, description } = req.body;
-    const searchText = (title || description || '').toLowerCase();
-    const suggestions: Array<{ name: string; value: string; confidence: number }> = [];
-
-    for (const color of COLOR_PATTERNS) {
-      if (searchText.includes(color)) { suggestions.push({ name: 'Renk', value: COLOR_MAP[color].charAt(0).toUpperCase() + COLOR_MAP[color].slice(1), confidence: 85 }); break; }
-    }
-    for (const size of SIZE_PATTERNS) {
-      if (searchText.includes(size)) { suggestions.push({ name: 'Beden', value: size.toUpperCase(), confidence: 80 }); break; }
-    }
-    const numberMatches = searchText.match(/\b(\d{2,3})\b/g);
-    if (numberMatches) {
-      for (const num of numberMatches) {
-        const numVal = parseInt(num);
-        if (numVal >= 32 && numVal <= 50) { suggestions.push({ name: 'Numara', value: num, confidence: 75 }); break; }
-      }
-    }
-    return res.json({ suggestions, source: 'pattern' });
+    const { title, description } = req.body;
+    const searchText = String(title || '') + ' ' + String(description || '');
+    const detected = detectVariantAttributes(searchText);
+    const suggestions = detected.map((v) => ({ name: v.name, value: v.value, confidence: 90 }));
+    return res.json({ suggestions, source: 'readiness_rule' });
   } catch (error) {
     console.error('[variants] POST ai-suggest error:', error);
     return res.status(500).json({ error: { code: 'DB_ERROR', message: 'AI oneri basarisiz' } });
@@ -302,21 +420,21 @@ router.post('/ai-suggest', requireAuth, async (req, res) => {
 });
 
 // ==================== 10. BULK AI SUGGEST ====================
+// FALSE-POSITIVE FIX: yalnızca gerçek varyant sinyali (readiness) kabul edilir.
 router.post('/bulk-ai-suggest', requireAuth, async (req, res) => {
   try {
     const { productIds } = req.body;
     const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
     if (Array.isArray(productIds) && productIds.length > 0) where.id = { in: productIds };
-    const products = await prisma.product.findMany({ where, select: { id: true, title: true }, take: 200 });
+    const products = await prisma.product.findMany({ where, select: { id: true, title: true, description: true }, take: 200 });
     const results: Array<{ productId: string; productTitle: string; suggestions: Array<{ name: string; value: string; confidence: number }> }> = [];
 
     for (const product of products) {
-      const searchText = (product.title || '').toLowerCase();
-      const suggestions: Array<{ name: string; value: string; confidence: number }> = [];
-      for (const color of COLOR_PATTERNS) {
-        if (searchText.includes(color)) { suggestions.push({ name: 'Renk', value: COLOR_MAP[color].charAt(0).toUpperCase() + COLOR_MAP[color].slice(1), confidence: 85 }); break; }
-      }
-      if (suggestions.length > 0) results.push({ productId: product.id, productTitle: product.title || '', suggestions });
+      const searchText = String(product.title || '') + ' ' + String(product.description || '');
+      const detected = detectVariantAttributes(searchText);
+      if (detected.length === 0) continue;
+      const suggestions = detected.map((v) => ({ name: v.name, value: v.value, confidence: 90 }));
+      results.push({ productId: product.id, productTitle: product.title || '', suggestions });
     }
     return res.json({ totalScanned: products.length, totalSuggestions: results.length, results });
   } catch (error) {
@@ -787,7 +905,7 @@ router.post('/', requireAuth, async (req, res) => {
   }
 });
 
-// ==================== 28. AI VARYANT EŞLEŞTİRME (GERÇEK GATEWAY) ====================
+// ==================== 28. AI / WHITELIST VARYANT EŞLEŞTİRME (GERÇEK CATALOG + AI) ====================
 router.post('/ai-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
   try {
     const xmlSourceId = String(req.query?.xmlSourceId ?? req.body?.xmlSourceId ?? '');
@@ -800,103 +918,171 @@ router.post('/ai-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async 
     if (!marketplace) return res.status(404).json({ ok: false, error: { code: 'MARKETPLACE_NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
 
     const limit = Math.min(50, Math.max(1, Number(req.query?.limit ?? req.body?.limit ?? 20)));
+    const useAI = String(req.query?.useAI ?? req.body?.useAI ?? '1') !== '0';
+    const productIds = Array.isArray(req.body?.productIds) ? req.body.productIds.map(String) : undefined;
 
-    const products = await prisma.product.findMany({
-      where: { xmlSourceId, variantStatus: 'WAITING_AI' },
-      take: limit,
-      orderBy: { updatedAt: 'desc' },
-      select: { id: true, title: true, xmlKey: true, description: true },
+    const flow = await runVariantMatchFlow({ xmlSourceId, marketplaceId: marketplace.id, limit, useAI, productIds });
+
+    return res.json({
+      ok: flow.ok,
+      matchedCount: flow.autoMatched + flow.aiMatched,
+      autoMatched: flow.autoMatched,
+      aiMatched: flow.aiMatched,
+      notRequired: flow.notRequired,
+      manualCount: flow.manualReview,
+      failedCount: flow.failed,
+      remaining: flow.remaining,
+      catalogUnavailable: flow.catalogUnavailable,
+      message: `${flow.autoMatched} otomatik, ${flow.aiMatched} AI, ${flow.notRequired} varyantsız, ${flow.manualReview} manuel`,
+      results: flow.results,
     });
-
-    if (products.length === 0) {
-      return res.json({ ok: true, matchedCount: 0, manualCount: 0, failedCount: 0, remaining: 0, message: 'Bu context için WAITING_AI varyant ürünü bulunamadı', results: [] });
-    }
-
-    // XML varyant ağacı çıkar (gerçek renk/beden/numara/kapasite)
-    const prepared: Array<{ product: (typeof products)[number]; attributes: Array<{ name: string; value: string }> }> = [];
-    const noAttrIds: string[] = [];
-    for (const product of products) {
-      const attributes = extractXmlVariantTree(product);
-      if (attributes.length === 0) noAttrIds.push(product.id);
-      else prepared.push({ product, attributes });
-    }
-    if (noAttrIds.length) {
-      await prisma.product.updateMany({ where: { id: { in: noAttrIds }, variantStatus: 'WAITING_AI' }, data: { variantStatus: 'NOT_REQUIRED' } });
-    }
-
-    if (prepared.length === 0) {
-      const remaining = await prisma.product.count({ where: { xmlSourceId, variantStatus: 'WAITING_AI' } });
-      return res.json({ ok: true, matchedCount: 0, manualCount: 0, failedCount: noAttrIds.length, remaining, message: 'Tespit edilen gerçek varyant yok; ürünler NOT_REQUIRED yapıldı', results: [] });
-    }
-
-    // TEST-08: zaten pazaryeri canonical isminde olan attribute'lar otomatik eşleşir (AI gerekmez)
-    const autoMappings: VariantMapping[] = [];
-    const aiBatch: typeof prepared = [];
-    for (const e of prepared) {
-      const autoAttrs = e.attributes.filter((a) => isMarketplaceAttribute(a.name));
-      const aiAttrs = e.attributes.filter((a) => !isMarketplaceAttribute(a.name));
-      for (const a of autoAttrs) autoMappings.push({ productId: e.product.id, xmlAttribute: a.name, xmlValue: a.value, marketplaceAttribute: a.name, marketplaceValue: a.value, confidence: 1.0 });
-      if (aiAttrs.length > 0) aiBatch.push({ product: e.product, attributes: aiAttrs });
-    }
-
-    let aiResult: { ok: boolean; mappings: VariantMapping[]; provider: string; model: string; error?: string; errorCode?: string } =
-      { ok: true, mappings: [], provider: 'auto', model: 'auto' };
-    if (aiBatch.length > 0) {
-      aiResult = await matchVariantsWithAI(aiBatch, marketplace.name);
-    }
-    const aiFailed = aiBatch.length > 0 && !aiResult.ok;
-
-    const allMappings = [...autoMappings, ...aiResult.mappings];
-    const byProduct = new Map<string, VariantMapping[]>();
-    for (const m of allMappings) {
-      if (!byProduct.has(m.productId)) byProduct.set(m.productId, []);
-      byProduct.get(m.productId)!.push(m);
-    }
-
-    const results: Array<{ productId: string; status: string; confidence: number; mappings: VariantMapping[] }> = [];
-    let matchedCount = 0;
-    let manualCount = 0;
-    let failedCount = 0;
-
-    for (const e of prepared) {
-      const maps = byProduct.get(e.product.id) || [];
-      const allCovered = e.attributes.every((a) => maps.some((m) => m.xmlAttribute.toLowerCase() === a.name.toLowerCase() && m.xmlValue === a.value));
-      const allHighConf = maps.length > 0 && maps.every((m) => m.confidence >= 0.9);
-      const complete = allCovered && allHighConf;
-      const confidence = maps.length ? Math.round((maps.reduce((s, m) => s + m.confidence, 0) / maps.length) * 100) : 0;
-
-      const existing = await prisma.variantAnalysis.findFirst({ where: { productId: e.product.id } });
-      const base = {
-        source: aiBatch.length > 0 ? aiResult.provider : 'auto',
-        status: complete ? 'MATCHED' : aiFailed ? 'ERROR' : 'MANUAL_REVIEW',
-        confidence,
-        checkResults: JSON.stringify({ marketplaceName: marketplace.name, marketplaceKey: marketplace.key, xmlAttributes: e.attributes, mappings: maps }),
-        autoFixAttempted: true,
-        autoFixResult: complete ? 'matched' : aiFailed ? 'ai_error' : 'manual_review',
-        validationPassed: complete,
-      };
-      if (existing) await prisma.variantAnalysis.update({ where: { id: existing.id }, data: base });
-      else await prisma.variantAnalysis.create({ data: { productId: e.product.id, ...base } });
-
-      if (complete) {
-        await prisma.product.update({ where: { id: e.product.id }, data: { variantMatch: true, variantStatus: 'COMPLETED' } });
-        matchedCount++;
-      } else if (aiFailed) {
-        // AI hatası: variantMatch ASLA true olmaz; WAITING_AI korunur (retry edilebilir)
-        failedCount++;
-      } else {
-        await prisma.product.update({ where: { id: e.product.id }, data: { variantStatus: 'MANUAL_REVIEW' } });
-        manualCount++;
-      }
-
-      results.push({ productId: e.product.id, status: complete ? 'MATCHED' : aiFailed ? 'FAILED' : 'MANUAL_REVIEW', confidence, mappings: maps });
-    }
-
-    const remaining = await prisma.product.count({ where: { xmlSourceId, variantStatus: 'WAITING_AI' } });
-    res.json({ ok: true, matchedCount, manualCount, failedCount, remaining, provider: aiBatch.length > 0 ? aiResult.provider : 'auto', model: aiBatch.length > 0 ? aiResult.model : 'auto', results });
   } catch (error) {
     console.error('[variants] POST ai-match error:', error);
     res.status(500).json({ ok: false, error: { code: 'DB_ERROR', message: 'Varyant AI eşleştirme başarısız' } });
+  }
+});
+
+// ==================== 24B. MANUEL EŞLEŞTİRME (GERÇEK TRENDYOL ATTRIBUTE/VALUE) ====================
+async function resolveTrendyolCategoryExternalId(categoryId: string | null, marketplaceId: string): Promise<number | null> {
+  if (!categoryId) return null;
+  const mapping = await prisma.categoryMapping.findFirst({
+    where: { categoryId, marketplaceId, active: true },
+    select: { externalId: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  const parsed = parseInt(String(mapping?.externalId ?? ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+// Ürüne ait gerçek Trendyol varyant attribute listesi (sahte ID yok; gerçek catalog'dan).
+router.get('/manual-options', requireAuth, async (req, res) => {
+  try {
+    const productId = String(req.query?.productId ?? '');
+    const marketplaceId = String(req.query?.marketplaceId ?? '');
+    if (!productId || !marketplaceId) return res.status(400).json({ ok: false, error: 'productId ve marketplaceId zorunludur' });
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      select: {
+        id: true, title: true, xmlKey: true, sku: true, barcode: true, categoryId: true,
+        brand: { select: { name: true } }, customBrandName: true, xmlBrandName: true,
+        xmlSource: { select: { id: true, name: true } },
+        variants: { select: { name: true, value: true } },
+      },
+    });
+    if (!product) return res.status(404).json({ ok: false, error: 'Ürün bulunamadı' });
+    // AKYI/HBT/DGLIVE gibi çöp alanları manuel modalda varyant olarak GÖSTERME.
+    const realXmlVariants = (product.variants || []).filter((v) => REAL_VARIANT_NAMES.has(v.name));
+
+    // Mevcut manuel eşleşme (varsa) — aynı ürün tekrar açıldığında "yapılmış" hali gösterilir.
+    let existingMatch: { attributeId: number | null; attributeName: string | null; attributeValueId: number | null; attributeValue: string | null } | null = null;
+    const analysis = await prisma.variantAnalysis.findFirst({ where: { productId } });
+    if (analysis) {
+      try {
+        const j = JSON.parse(analysis.checkResults || '{}');
+        if (j && (j.attributeName || j.attributeValue)) {
+          existingMatch = { attributeId: j.attributeId ?? null, attributeName: j.attributeName ?? null, attributeValueId: j.attributeValueId ?? null, attributeValue: j.attributeValue ?? null };
+        }
+      } catch { /* mevcut eşleşme okunamazsa yok say */ }
+    }
+
+    const productInfo = {
+      title: product.title,
+      xmlKey: product.xmlKey,
+      sku: product.sku,
+      barcode: product.barcode,
+      brandName: product.brand?.name || product.customBrandName || product.xmlBrandName || null,
+      xmlSourceName: product.xmlSource?.name || null,
+    };
+
+    const mp = await prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { key: true } });
+    if (!mp || mp.key !== 'tt') return res.json({ ok: true, categoryMapped: false, reason: 'MARKETPLACE_NOT_SUPPORTED', ...productInfo, attributes: [], xmlVariants: realXmlVariants, existingMatch });
+    const categoryExternalId = await resolveTrendyolCategoryExternalId(product.categoryId, marketplaceId);
+    if (categoryExternalId === null) return res.json({ ok: true, categoryMapped: false, reason: 'CATEGORY_MAPPING_NOT_FOUND', ...productInfo, attributes: [], xmlVariants: realXmlVariants, existingMatch });
+    const defs = await fetchTrendyolCategoryAttributes(categoryExternalId);
+    const attributes = (defs || []).filter((a) => a.varianter || a.slicer).map((a) => ({ attributeId: a.attribute.id, attributeName: a.attribute.name, varianter: a.varianter, slicer: a.slicer, required: a.required }));
+    return res.json({ ok: true, categoryMapped: true, categoryExternalId, ...productInfo, attributes, xmlVariants: realXmlVariants, existingMatch });
+  } catch (error) {
+    console.error('[variants] GET manual-options error:', error);
+    return res.status(500).json({ ok: false, error: 'Manuel eşleştirme seçenekleri alınamadı' });
+  }
+});
+
+// Seçilen gerçek attribute'un gerçek değerleri (sahte valueId üretilmez).
+router.get('/manual-values', requireAuth, async (req, res) => {
+  try {
+    const productId = String(req.query?.productId ?? '');
+    const marketplaceId = String(req.query?.marketplaceId ?? '');
+    const attributeId = Number(req.query?.attributeId ?? 0);
+    if (!productId || !marketplaceId || !Number.isFinite(attributeId) || attributeId <= 0) return res.status(400).json({ ok: false, error: 'productId, marketplaceId ve attributeId zorunludur' });
+    const product = await prisma.product.findUnique({ where: { id: productId }, select: { categoryId: true } });
+    if (!product) return res.status(404).json({ ok: false, error: 'Ürün bulunamadı' });
+    const mp = await prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { key: true } });
+    if (!mp || mp.key !== 'tt') return res.json({ ok: true, values: [] });
+    const categoryExternalId = await resolveTrendyolCategoryExternalId(product.categoryId, marketplaceId);
+    if (categoryExternalId === null) return res.json({ ok: true, values: [] });
+    const values = await fetchTrendyolAttributeValues(categoryExternalId, attributeId);
+    return res.json({ ok: true, values: (values || []).map((v) => ({ attributeValueId: v.attributeValueId, attributeValue: v.attributeValue })) });
+  } catch (error) {
+    console.error('[variants] GET manual-values error:', error);
+    return res.status(500).json({ ok: false, error: 'Attribute değerleri alınamadı' });
+  }
+});
+
+// Manuel eşleştirmeyi GERÇEK Trendyol ID'leriyle kaydeder (fail-closed doğrulama).
+router.post('/manual-match-v2', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
+  try {
+    const productId = String(req.body?.productId ?? '');
+    const marketplaceId = String(req.body?.marketplaceId ?? '');
+    const attributeId = Number(req.body?.attributeId ?? 0);
+    const attributeValueId = Number(req.body?.attributeValueId ?? 0);
+    if (!productId || !marketplaceId || !Number.isFinite(attributeId) || attributeId <= 0 || !Number.isFinite(attributeValueId) || attributeValueId <= 0) {
+      return res.status(400).json({ ok: false, error: 'productId, marketplaceId, attributeId ve attributeValueId zorunludur' });
+    }
+    const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true, categoryId: true } });
+    if (!product) return res.status(404).json({ ok: false, error: 'Ürün bulunamadı' });
+    const mp = await prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { key: true } });
+    if (!mp || mp.key !== 'tt') return res.status(400).json({ ok: false, error: { code: 'MARKETPLACE_NOT_SUPPORTED', message: 'Yalnızca Trendyol manuel eşleştirme desteklenir' } });
+    const categoryExternalId = await resolveTrendyolCategoryExternalId(product.categoryId, marketplaceId);
+    if (categoryExternalId === null) return res.status(400).json({ ok: false, error: { code: 'CATEGORY_MAPPING_NOT_FOUND', message: 'Trendyol kategori eşlemesi yok' } });
+
+    // FAIL-CLOSED: attributeId gerçek kategori attribute listesinde olmalı.
+    const defs = await fetchTrendyolCategoryAttributes(categoryExternalId);
+    const attrDef = defs.find((a) => a.attribute.id === attributeId && (a.varianter || a.slicer));
+    if (!attrDef) return res.status(400).json({ ok: false, error: { code: 'INVALID_ATTRIBUTE', message: 'Attribute gerçek kategori ağacında bulunamadı' } });
+
+    // FAIL-CLOSED: attributeValueId gerçek value listesinde olmalı (sahte ID reddedilir).
+    const values = await fetchTrendyolAttributeValues(categoryExternalId, attributeId);
+    const valueHit = values.find((v) => v.attributeValueId === attributeValueId);
+    if (!valueHit) return res.status(400).json({ ok: false, error: { code: 'INVALID_VALUE', message: 'Değer gerçek kategori ağacında bulunamadı' } });
+
+    const variantName = attrDef.attribute.name;
+    const variantValue = valueHit.attributeValue;
+    await prisma.variant.upsert({
+      where: { productId_name_value: { productId, name: variantName, value: variantValue } },
+      create: { productId, name: variantName, value: variantValue },
+      update: {},
+    });
+    await prisma.product.update({ where: { id: productId }, data: { variantMatch: true, variantStatus: 'COMPLETED', matchedBy: 'manual', lastMatchDate: new Date() } });
+
+    const existing = await prisma.variantAnalysis.findFirst({ where: { productId } });
+    const analysisData = {
+      source: 'manual',
+      status: 'MATCHED',
+      confidence: 100,
+      validationPassed: true,
+      autoFixAttempted: false,
+      autoFixResult: 'matched',
+      checkResults: JSON.stringify({ marketplaceName: 'Trendyol', categoryId: categoryExternalId, attributeId, attributeValueId, attributeName: variantName, attributeValue: variantValue }),
+    };
+    if (existing) await prisma.variantAnalysis.update({ where: { id: existing.id }, data: analysisData });
+    else await prisma.variantAnalysis.create({ data: { productId, ...analysisData } });
+
+    await prisma.auditLog.create({ data: { action: 'V5_MANUAL_MATCH_V2', entity: 'variant', details: `Manuel eşleştirme: ${variantName}=${variantValue} (attr ${attributeId}, val ${attributeValueId})`, actorUserId: (req as any).actor?.userId || null } });
+
+    return res.json({ ok: true, productId, attributeId, attributeName: variantName, attributeValueId, attributeValue: variantValue });
+  } catch (error) {
+    console.error('[variants] POST manual-match-v2 error:', error);
+    return res.status(500).json({ ok: false, error: 'Manuel eşleştirme kaydedilemedi' });
   }
 });
 

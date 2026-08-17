@@ -530,10 +530,12 @@ model VariantThreshold {
 model MarketplacePricingRule {
   id             String   @id @default(uuid())
   marketplaceId  String
+  xmlSourceId    String?
   productId      String?
   categoryId     String?
   minPrice       Float    @default(0)
   maxPrice       Float    @default(0)
+  fixedAmount    Float    @default(0)
   applyVat       Boolean  @default(true)
   profitMargin   Float    @default(0)
   rounding       String   @default("NORMAL")
@@ -545,6 +547,7 @@ model MarketplacePricingRule {
   marketplace Marketplace @relation(fields: [marketplaceId], references: [id])
 
   @@index([marketplaceId])
+  @@index([xmlSourceId])
   @@index([productId])
   @@index([categoryId])
 }

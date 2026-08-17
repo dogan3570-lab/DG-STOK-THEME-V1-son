@@ -481,11 +481,14 @@ export function validateProduct(
   }
 
   if (config.checkCategoryMatch) {
-    checks.push({ field: 'category', label: 'Kategori eşleşmiş', passed: product.categoryMatch || product.categoryId !== null, message: product.categoryMatch ? 'Eşleşmiş' : 'Eşleşmemiş', severity: 'error' });
+    // TEK AUTHORITATIVE KURAL (readiness.ts ile birebir): kategori tamam = categoryMatch === true.
+    // categoryId set ama categoryMatch=false (map edilmemiş lokal kategori) EŞLEŞMEMİŞ sayılır.
+    checks.push({ field: 'category', label: 'Kategori eşleşmiş', passed: product.categoryMatch === true, message: product.categoryMatch ? 'Eşleşmiş' : 'Eşleşmemiş', severity: 'error' });
   }
 
   if (config.checkBrandMatch) {
-    checks.push({ field: 'brand', label: 'Marka eşleşmiş', passed: product.brandMatch || product.brandId !== null, message: product.brandMatch ? 'Eşleşmiş' : 'Eşleşmemiş', severity: 'error' });
+    // TEK AUTHORITATIVE KURAL (readiness.ts ile birebir): marka tamam = brandMatch === true.
+    checks.push({ field: 'brand', label: 'Marka eşleşmiş', passed: product.brandMatch === true, message: product.brandMatch ? 'Eşleşmiş' : 'Eşleşmemiş', severity: 'error' });
   }
 
   if (config.checkVariantMatch) {
