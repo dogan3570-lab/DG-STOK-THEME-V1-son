@@ -3,6 +3,21 @@ import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth } from '../auth/authMiddleware.ts';
 import { matchCategoriesWithAI, type ProductForMatch, type CategoryCandidate } from '../services/aiGateway.ts';
+import { normalizeName } from '../services/categoryBrandMapper.ts';
+import { loadTrendyolTree, classifyByRule, buildAiCandidates, verifyHighConfidence } from '../services/categoryMatchEngine.ts';
+import { resolveCategoryCandidates, resolveCategoryCandidatesBatch, normalizeProductCore } from '../services/categoryCanonical.ts';
+import {reconcileReadiness, reconcileProductGates, queueReconcileProductGates} from '../services/readinessService.ts';
+import { deriveState, isAiEligible, computeEligibility, type ProductState } from '../services/categoryStateMachine.ts';
+import {
+  classifyProviderError,
+  classifyAiDecision,
+  classifyVerification,
+  classifyMappingError,
+  classifyCandidateResult,
+  type ErrorStatus,
+  type ErrorSemantics,
+  type StructuredErrorResult,
+} from '../services/errorTaxonomy.ts';
 
 const router = Router();
 
@@ -211,13 +226,21 @@ router.get('/tree', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-// ==================== AI AUTO-MATCH (KURAL TABANLI EŞLEŞTİRME) ====================
+// ==================== CANONICAL CATEGORY MATCH (KURAL TABANLI EŞLEŞTİRME) ====================
 
 router.post('/ai-match', requireAuth, async (req: Request, res: Response) => {
   try {
     const { productIds, xmlSourceId } = req.body;
-    // TEK AUTHORITATIVE KURAL: bekleyen = categoryId IS NULL (Product Pool ile birebir).
-    const where: any = { categoryId: null };
+
+    // RULE 6 + RULE 10: AI eligibility gate
+    // Backend enforces: categoryMatch=false AND matchedBy=null AND supplierCategory valid AND categoryId=null
+    const where: any = {
+      categoryMatch: false,
+      matchedBy: null,
+      // FIX(build): JS objesinde mukerrer 'not' anahtari olamazdi; runtime zaten son degeri ('') kullanir, ayni semantik korunur.
+      supplierCategory: { not: '' },
+      categoryId: null,
+    };
     if (Array.isArray(productIds) && productIds.length > 0) where.id = { in: productIds };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
 
@@ -226,94 +249,104 @@ router.post('/ai-match', requireAuth, async (req: Request, res: Response) => {
       return res.json({ matchedCount: 0, suggestedCount: 0, manualCount: 0, totalProducts: 0, message: 'Eşleştirilecek ürün bulunamadı', results: [] });
     }
 
-    // Sistem kategorileri (tam eşleşme + normalize edilmiş eşleşme için)
-    const systemCategories = await prisma.category.findMany();
-    const normalize = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9ıİğĞüÜşŞöÖçÇ]/g, '').trim();
-
-    // Hızlı tam eşleşme için normalized index
-    const exactIndex: Record<string, { id: string; name: string }> = {};
-    for (const cat of systemCategories) {
-      const n = normalize(cat.name);
-      if (n && !exactIndex[n]) exactIndex[n] = { id: cat.id, name: cat.name };
+    // Trendyol leaf-only tree yükle (CANONICAL SOURCE)
+    const tree = await loadTrendyolTree();
+    if (tree.leaves.length === 0) {
+      return res.json({ matchedCount: 0, suggestedCount: 0, manualCount: 0, totalProducts: 0, message: 'Trendyol kategori ağacı boş', results: [] });
     }
 
-    const findBest = (path: string, leaf: string): { id: string; name: string; score: number } | null => {
-      const normPath = normalize(path);
-      const normLeaf = normalize(leaf);
-      if (exactIndex[normPath]) return { id: exactIndex[normPath].id, name: exactIndex[normPath].name, score: 100 };
-      if (normLeaf && exactIndex[normLeaf]) return { id: exactIndex[normLeaf].id, name: exactIndex[normLeaf].name, score: 100 };
+    // Trendyol marketplace ID (CategoryMapping doğrulaması için)
+    const ttMp = await prisma.marketplace.findUnique({ where: { key: 'tt' }, select: { id: true } });
+    const marketplaceId = ttMp?.id ?? null;
 
-      let best: { id: string; name: string; score: number } | null = null;
-      for (const cat of systemCategories) {
-        const normCat = normalize(cat.name);
-        if (!normCat) continue;
-        if (normPath.includes(normCat) && (!best || best.score < 90)) { best = { id: cat.id, name: cat.name, score: 90 }; }
-        else if (normLeaf.includes(normCat) && normCat.length > 2 && (!best || best.score < 75)) { best = { id: cat.id, name: cat.name, score: 75 }; }
-        else if (normCat.includes(normLeaf) && normLeaf.length > 2 && (!best || best.score < 65)) { best = { id: cat.id, name: cat.name, score: 65 }; }
-      }
-      return best;
-    };
-
-    // Benzersiz XML kategori başına TEK kez eşleştirme yap, ürün sayısını grupla
+    // Benzersiz supplierCategory başına tek eşleştirme
     const distinctCats = await prisma.product.groupBy({
       by: ['supplierCategory'],
       where,
       _count: { id: true },
-      _min: { xmlKey: true },
+      _min: { xmlKey: true, title: true, xmlBrandName: true },
     });
 
+    // Her supplierCategory için canonical candidate resolution
+    const supplierCatResults = new Map<string, { categoryId: string; categoryName: string; confidence: number; method: string }>();
     let matchedCount = 0;
     let suggestedCount = 0;
     let manualCount = 0;
     const matchResults: Array<{ productId: string; productName: string; suggestedCategory: string | null; confidence: number; reason: string }> = [];
-    const toUpdate: Array<{ categoryId: string; score: number }> = [];
 
     for (const row of distinctCats) {
       const path = (row.supplierCategory || '').trim();
       if (!path) { manualCount += row._count.id; continue; }
-      const leaf = path.split('>').map((s) => s.trim()).filter(Boolean).pop() || '';
-      const best = findBest(path, leaf);
 
-      if (best && best.score >= 75) {
+      // Bir önceki eşleşme sonucunu kullan (aynı supplierCategory = aynı sonuç)
+      const cached = supplierCatResults.get(path);
+      if (cached) {
+        if (cached.confidence >= 0.7 && cached.categoryId) {
+          matchedCount += row._count.id;
+          matchResults.push({ productId: row._min.xmlKey || '', productName: path, suggestedCategory: cached.categoryName, confidence: cached.confidence, reason: cached.method });
+        } else {
+          manualCount += row._count.id;
+        }
+        continue;
+      }
+
+      // Canonical candidate resolution
+      const result = resolveCategoryCandidates(
+        { id: row._min.xmlKey || '', xmlKey: row._min.xmlKey || '', title: row._min.title || null, supplierCategory: path, xmlBrandName: row._min.xmlBrandName || null },
+        tree,
+        marketplaceId,
+      );
+
+      // Mapping doğrulaması (yalnızca top candidate için)
+      let mappingVerified = false;
+      if (result.topCandidate && marketplaceId) {
+        const mapping = await prisma.categoryMapping.findFirst({
+          where: { categoryId: result.topCandidate.id, marketplaceId, active: true, externalId: { not: null } },
+          select: { id: true },
+        }).catch(() => null);
+        mappingVerified = !!mapping;
+      }
+
+      const finalConfidence = mappingVerified ? result.confidence : Math.min(result.confidence, 0.6);
+      const categoryId = result.topCandidate?.id || '';
+      const categoryName = result.topCandidate?.name || '';
+
+      supplierCatResults.set(path, { categoryId, categoryName, confidence: finalConfidence, method: result.method });
+
+      if (finalConfidence >= 0.7 && categoryId && mappingVerified) {
         matchedCount += row._count.id;
-        toUpdate.push({ categoryId: best.id, score: best.score });
-        matchResults.push({ productId: row._min.xmlKey || '', productName: path, suggestedCategory: best.name, confidence: best.score, reason: 'kural_tabanli_eslesme' });
-      } else if (best && best.score >= 50) {
-        suggestedCount += row._count.id;
-        matchResults.push({ productId: row._min.xmlKey || '', productName: path, suggestedCategory: best.name, confidence: best.score, reason: 'oneri' });
+        matchResults.push({ productId: row._min.xmlKey || '', productName: path, suggestedCategory: categoryName, confidence: finalConfidence, reason: result.method });
       } else {
         manualCount += row._count.id;
       }
     }
 
-    // Uygula: her XML kategori için eşleşen ürünleri toplu güncelle
-    const applyBatch = async (supplierCategory: string, categoryId: string, score: number) => {
-      const productWhere: any = { supplierCategory, categoryId: null };
-      if (Array.isArray(productIds) && productIds.length > 0) productWhere.id = { in: productIds };
-      await prisma.product.updateMany({
-        where: productWhere,
-        data: { categoryId, categoryMatch: true, matchedBy: 'rule', lastMatchDate: new Date(), aiSuggestedCategoryId: categoryId, aiScore: score / 100 },
-      });
-    };
-
+    // Uygula: eşleşen supplierCategory'leri toplu güncelle
     let applied = 0;
-    for (let i = 0; i < distinctCats.length; i++) {
-      const row = distinctCats[i];
+    for (const row of distinctCats) {
       const path = (row.supplierCategory || '').trim();
-      const leaf = path.split('>').map((s) => s.trim()).filter(Boolean).pop() || '';
-      const best = findBest(path, leaf);
-      if (best && best.score >= 75) {
-        await applyBatch(row.supplierCategory!, best.id, best.score);
+      const cached = supplierCatResults.get(path);
+      if (cached && cached.confidence >= 0.7 && cached.categoryId) {
+        const productWhere: any = { supplierCategory: path, categoryMatch: false };
+        if (Array.isArray(productIds) && productIds.length > 0) productWhere.id = { in: productIds };
+        const affected = await prisma.product.findMany({ where: productWhere, select: { id: true } });
+        await prisma.product.updateMany({
+          where: productWhere,
+          data: { categoryId: cached.categoryId, categoryMatch: true, matchedBy: 'rule', lastMatchDate: new Date(), aiSuggestedCategoryId: cached.categoryId, aiScore: cached.confidence },
+        });
+        for (const p of affected) {
+          queueReconcileProductGates(p.id);
+        }
         applied++;
       }
     }
 
     await prisma.auditLog.create({
       data: {
-        action: 'RULE_CATEGORY_MATCH',
+        action: 'CANONICAL_CATEGORY_MATCH',
         entity: 'category',
-        meta: JSON.stringify({ matchedCount, suggestedCount, manualCount, totalCount }),
-        details: `Kural tabanlı ${matchedCount} ürün eşleştirildi, ${suggestedCount} öneri, ${manualCount} manuel inceleme`,
+        meta: JSON.stringify({ matchedCount, suggestedCount, manualCount, totalCount, treeLeafCount: tree.leaves.length }),
+        details: `Canonical: ${matchedCount} ürün eşleştirildi, ${suggestedCount} öneri, ${manualCount} manuel — ${tree.leaves.length} leaf`,
         actorUserId: (req as any).actor?.userId || null,
       },
     });
@@ -323,12 +356,12 @@ router.post('/ai-match', requireAuth, async (req: Request, res: Response) => {
       suggestedCount,
       manualCount,
       totalProducts: totalCount,
-      message: `${matchedCount} ürün kural tabanlı eşleştirildi, ${suggestedCount} öneri, ${manualCount} manuel inceleme`,
+      message: `${matchedCount} ürün eşleştirildi, ${manualCount} manuel inceleme`,
       results: matchResults,
     });
   } catch (error) {
-    console.error('Error rule matching categories:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to rule match categories' } });
+    console.error('Error canonical category matching:', error);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to match categories' } });
   }
 });
 
@@ -340,14 +373,21 @@ const autoMatchState: { running: boolean; status: string; processedProducts: num
 async function runAutoMatch(xmlSourceId: string | null = null) {
   try {
     autoMatchState.status = 'running';
-    const systemCategories = await prisma.category.findMany();
-    const normalize = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9ıİğĞüÜşŞöÖçÇ]/g, '').trim();
-    const exactIndex: Record<string, { id: string; name: string }> = {};
-    for (const cat of systemCategories) { const n = normalize(cat.name); if (n && !exactIndex[n]) exactIndex[n] = { id: cat.id, name: cat.name }; }
 
-    const where: any = { categoryId: null };
+    // CANONICAL: Trendyol leaf-only tree
+    const tree = await loadTrendyolTree();
+    if (tree.leaves.length === 0) {
+      autoMatchState.status = 'error';
+      autoMatchState.lastError = 'Trendyol kategori ağacı boş';
+      return;
+    }
+
+    const ttMp = await prisma.marketplace.findUnique({ where: { key: 'tt' }, select: { id: true } });
+    const marketplaceId = ttMp?.id ?? null;
+
+    const where: any = { categoryMatch: false };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
-    const distinctCats = await prisma.product.groupBy({ by: ['supplierCategory'], where, _count: { id: true } });
+    const distinctCats = await prisma.product.groupBy({ by: ['supplierCategory'], where, _count: { id: true }, _min: { xmlKey: true, title: true, xmlBrandName: true } });
     autoMatchState.totalProducts = distinctCats.reduce((s, r) => s + r._count.id, 0);
     autoMatchState.processedProducts = 0;
     autoMatchState.matchedCount = 0;
@@ -355,17 +395,36 @@ async function runAutoMatch(xmlSourceId: string | null = null) {
     for (const row of distinctCats) {
       const path = (row.supplierCategory || '').trim();
       if (!path) { autoMatchState.processedProducts += row._count.id; continue; }
-      const leaf = path.split('>').map((s) => s.trim()).filter(Boolean).pop() || '';
-      const normPath = normalize(path);
-      const normLeaf = normalize(leaf);
-      let bestId: string | null = null;
-      if (exactIndex[normPath]) bestId = exactIndex[normPath].id;
-      else if (normLeaf && exactIndex[normLeaf]) bestId = exactIndex[normLeaf].id;
-      if (bestId) {
+
+      // CANONICAL candidate resolution
+      const result = resolveCategoryCandidates(
+        { id: row._min.xmlKey || '', xmlKey: row._min.xmlKey || '', title: row._min.title || null, supplierCategory: path, xmlBrandName: row._min.xmlBrandName || null },
+        tree,
+        marketplaceId,
+      );
+
+      // Mapping doğrulaması
+      let mappingVerified = false;
+      if (result.topCandidate && marketplaceId) {
+        const mapping = await prisma.categoryMapping.findFirst({
+          where: { categoryId: result.topCandidate.id, marketplaceId, active: true, externalId: { not: null } },
+          select: { id: true },
+        }).catch(() => null);
+        mappingVerified = !!mapping;
+      }
+
+      const finalConfidence = mappingVerified ? result.confidence : Math.min(result.confidence, 0.6);
+
+      if (finalConfidence >= 0.7 && result.topCandidate && mappingVerified) {
+        const affectedWhere: any = { supplierCategory: row.supplierCategory, categoryMatch: false, ...(xmlSourceId ? { xmlSourceId } : {}) };
+        const affected = await prisma.product.findMany({ where: affectedWhere, select: { id: true } });
         await prisma.product.updateMany({
-          where: { supplierCategory: row.supplierCategory, categoryId: null, ...(xmlSourceId ? { xmlSourceId } : {}) },
-          data: { categoryId: bestId, categoryMatch: true, matchedBy: 'auto', lastMatchDate: new Date(), aiSuggestedCategoryId: bestId, aiScore: 1.0 },
+          where: affectedWhere,
+          data: { categoryId: result.topCandidate.id, categoryMatch: true, matchedBy: 'auto', lastMatchDate: new Date(), aiSuggestedCategoryId: result.topCandidate.id, aiScore: finalConfidence },
         });
+        for (const p of affected) {
+          queueReconcileProductGates(p.id);
+        }
         autoMatchState.matchedCount += row._count.id;
       }
       autoMatchState.processedProducts += row._count.id;
@@ -404,42 +463,44 @@ const aiMatchState: {
   matchedCount: number; suggestedCount: number; manualCount: number;
   currentBatch: number; totalBatches: number; provider: string; model: string;
   lastError: string | null; startedAt: Date | null;
+  errorBreakdown: Record<ErrorStatus, number>;
+  semanticBreakdown: Record<ErrorSemantics, number>;
+  productErrors: StructuredErrorResult[];
 } = {
   running: false, status: 'idle', processedProducts: 0, totalProducts: 0,
   matchedCount: 0, suggestedCount: 0, manualCount: 0,
   currentBatch: 0, totalBatches: 0, provider: '', model: '',
   lastError: null, startedAt: null,
+  errorBreakdown: {} as Record<ErrorStatus, number>,
+  semanticBreakdown: {} as Record<ErrorSemantics, number>,
+  productErrors: [],
 };
 
-const BATCH_SIZE = 50;
+const BATCH_SIZE = 10;
 
 async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | null) {
   try {
     aiMatchState.status = 'running';
     aiMatchState.startedAt = new Date();
 
-    // Fetch system categories — AI'ya YALNIZCA gerçek Trendyol LEAF kategorileri aday verilir.
-    // (Lokal XML ">>>" kategorileri aday listesine alınmaz; sahte categoryMatch engellenir.)
-    const systemCategories = await prisma.category.findMany({
-      where: { externalId: { not: null } },
-      select: { id: true, name: true, _count: { select: { children: true } } },
-    });
-    const categories: CategoryCandidate[] = systemCategories
-      .filter((c) => c._count.children === 0)
-      .map((c) => ({
-        id: c.id,
-        name: c.name,
-        fullPath: c.name,
-      }));
-
-    if (categories.length === 0) {
+    // Load Trendyol tree — per-product candidates için
+    const tree = await loadTrendyolTree();
+    if (tree.leaves.length === 0) {
       aiMatchState.status = 'error';
-      aiMatchState.lastError = 'Sistem kategorisi bulunamadı';
+      aiMatchState.lastError = 'Trendyol kategori ağacı boş';
       return;
     }
 
-    // Fetch unmatched products
-    const where: any = { categoryId: null };
+    // RULE 6 + RULE 7: AI eligibility gate
+    // Backend enforces: categoryMatch=false AND matchedBy=null AND supplierCategory valid AND categoryId=null
+    // RULE 7: categoryId!=null + categoryMatch=false anomalies excluded until forensic classification
+    const where: any = {
+      categoryMatch: false,
+      matchedBy: null,
+      // FIX(build): JS objesinde mukerrer 'not' anahtari olamazdi; runtime zaten son degeri ('') kullanir, ayni semantik korunur.
+      supplierCategory: { not: '' },
+      categoryId: null,
+    };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
 
     const unmatchedProducts = await prisma.product.findMany({
@@ -456,6 +517,9 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
     aiMatchState.matchedCount = 0;
     aiMatchState.suggestedCount = 0;
     aiMatchState.manualCount = 0;
+    aiMatchState.errorBreakdown = {} as Record<ErrorStatus, number>;
+    aiMatchState.semanticBreakdown = {} as Record<ErrorSemantics, number>;
+    aiMatchState.productErrors = [];
 
     if (unmatchedProducts.length === 0) {
       aiMatchState.status = 'completed';
@@ -482,30 +546,114 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
       const batch = batches[bIdx];
       aiMatchState.currentBatch = bIdx + 1;
 
-      // Call AI Gateway
-      const aiResult = await matchCategoriesWithAI(batch, categories, marketplaceName);
+      // Call AI Gateway — per-product candidates (P0 fix: candidate collision)
+      const candidatesByProduct = new Map<string, CategoryCandidate[]>();
+      for (const p of batch) {
+        const rule = classifyByRule(p, tree);
+        const cands = buildAiCandidates(p, tree, rule.candidates, 10);
+        candidatesByProduct.set(p.id, cands);
+      }
+      const aiResult = await matchCategoriesWithAI(batch, candidatesByProduct, marketplaceName);
 
       if (aiResult.ok && aiResult.matches.length > 0) {
         aiMatchState.provider = aiResult.provider;
         aiMatchState.model = aiResult.model;
 
-        // Apply matches
+        // Apply matches — VERIFICATION GATE (AŞAMA 2)
         for (const match of aiResult.matches) {
-          if (match.confidence >= 0.95) {
-            // Auto-match
-            await prisma.product.update({
-              where: { id: match.productId },
-              data: {
-                categoryId: match.categoryId,
-                categoryMatch: true,
-                matchedBy: 'ai',
-                lastMatchDate: new Date(),
-                aiSuggestedCategoryId: match.categoryId,
-                aiScore: match.confidence,
-              },
-            });
-            aiMatchState.matchedCount++;
-          } else if (match.confidence >= 0.85) {
+          // Candidate count for error classification
+          const candData = candidatesByProduct.get(match.productId) || [];
+          const candResult = classifyCandidateResult(candData.length, match.productId);
+          if (candResult.status !== 'SUCCESS') {
+            aiMatchState.errorBreakdown[candResult.status] = (aiMatchState.errorBreakdown[candResult.status] || 0) + 1;
+            aiMatchState.semanticBreakdown[candResult.semantics] = (aiMatchState.semanticBreakdown[candResult.semantics] || 0) + 1;
+          }
+
+          if (match.confidence >= 0.95 && match.categoryId) {
+            // 1) CategoryMapping doğrulaması
+            const mapping = await prisma.categoryMapping.findFirst({
+              where: { categoryId: match.categoryId, active: true, externalId: { not: null } },
+              select: { id: true, active: true, externalId: true },
+            }).catch(() => null);
+
+            const mappingCheck = classifyMappingError(
+              match.categoryId,
+              !!mapping,
+              mapping?.active ?? false,
+              mapping?.externalId ?? null
+            );
+
+            if (!mapping) {
+              // Mapping yok → suggestion olarak bırak
+              aiMatchState.suggestedCount++;
+              aiMatchState.processedProducts++;
+              aiMatchState.errorBreakdown[mappingCheck.status] = (aiMatchState.errorBreakdown[mappingCheck.status] || 0) + 1;
+              aiMatchState.semanticBreakdown[mappingCheck.semantics] = (aiMatchState.semanticBreakdown[mappingCheck.semantics] || 0) + 1;
+              aiMatchState.productErrors.push({
+                status: mappingCheck.status,
+                stage: mappingCheck.stage,
+                semantics: mappingCheck.semantics,
+                productId: match.productId,
+                model: aiResult.model,
+                provider: aiResult.provider,
+                timestamp: new Date().toISOString(),
+                details: `Mapping bulunamadı für kategori ${match.categoryId}`,
+              });
+              continue;
+            }
+
+            // 2) verifyHighConfidence — ikinci AI doğrulaması
+            const batchProduct = batch.find(p => p.id === match.productId);
+            const leafInfo = tree.leafById.get(match.categoryId);
+            const verifyRes = await verifyHighConfidence([{
+              productId: match.productId,
+              title: batchProduct?.title || null,
+              supplierCategory: batchProduct?.supplierCategory || null,
+              categoryName: leafInfo?.name || '',
+              fullPath: leafInfo?.fullPath || '',
+            }]);
+
+            const v = verifyRes.get(match.productId);
+            const pass = v?.verdict === true && v.confidence >= 0.9;
+
+            const verifyCheck = classifyVerification(
+              v?.verdict ?? false,
+              v?.confidence ?? 0,
+              match.productId
+            );
+
+            if (pass) {
+              // Verification PASS → categoryMatch=true yaz + readiness reconciliation
+              await prisma.product.update({
+                where: { id: match.productId },
+                data: {
+                  categoryId: match.categoryId,
+                  categoryMatch: true,
+                  matchedBy: 'ai',
+                  lastMatchDate: new Date(),
+                  aiSuggestedCategoryId: match.categoryId,
+                  aiScore: match.confidence,
+                },
+              });
+              queueReconcileProductGates(match.productId);
+              aiMatchState.matchedCount++;
+            } else {
+              // Verification FAIL → suggestion olarak bırak
+              aiMatchState.suggestedCount++;
+              aiMatchState.errorBreakdown[verifyCheck.status] = (aiMatchState.errorBreakdown[verifyCheck.status] || 0) + 1;
+              aiMatchState.semanticBreakdown[verifyCheck.semantics] = (aiMatchState.semanticBreakdown[verifyCheck.semantics] || 0) + 1;
+              aiMatchState.productErrors.push({
+                status: verifyCheck.status,
+                stage: verifyCheck.stage,
+                semantics: verifyCheck.semantics,
+                productId: match.productId,
+                model: aiResult.model,
+                provider: aiResult.provider,
+                timestamp: new Date().toISOString(),
+                details: `Verification başarısız: ${v?.reason || 'doğrulanamadı'}`,
+              });
+            }
+          } else if (match.confidence >= 0.85 && match.categoryId) {
             // Suggestion — mark as suggested but not matched
             await prisma.product.update({
               where: { id: match.productId },
@@ -516,8 +664,52 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
               },
             });
             aiMatchState.suggestedCount++;
+
+            // Error classification for low confidence
+            const decisionCheck = classifyAiDecision(
+              match.decision,
+              match.confidence,
+              match.categoryId,
+              new Set(candData.map(c => c.id)),
+              match.productId
+            );
+            if (decisionCheck.status !== 'SUCCESS') {
+              aiMatchState.errorBreakdown[decisionCheck.status] = (aiMatchState.errorBreakdown[decisionCheck.status] || 0) + 1;
+              aiMatchState.semanticBreakdown[decisionCheck.semantics] = (aiMatchState.semanticBreakdown[decisionCheck.semantics] || 0) + 1;
+              aiMatchState.productErrors.push({
+                status: decisionCheck.status,
+                stage: decisionCheck.stage,
+                semantics: decisionCheck.semantics,
+                productId: match.productId,
+                model: aiResult.model,
+                provider: aiResult.provider,
+                timestamp: new Date().toISOString(),
+                details: `AI düşük güven: ${match.confidence}`,
+              });
+            }
           } else {
             aiMatchState.manualCount++;
+
+            // Error classification for very low confidence
+            const decisionCheck = classifyAiDecision(
+              match.decision,
+              match.confidence,
+              match.categoryId,
+              new Set(candData.map(c => c.id)),
+              match.productId
+            );
+            aiMatchState.errorBreakdown[decisionCheck.status] = (aiMatchState.errorBreakdown[decisionCheck.status] || 0) + 1;
+            aiMatchState.semanticBreakdown[decisionCheck.semantics] = (aiMatchState.semanticBreakdown[decisionCheck.semantics] || 0) + 1;
+            aiMatchState.productErrors.push({
+              status: decisionCheck.status,
+              stage: decisionCheck.stage,
+              semantics: decisionCheck.semantics,
+              productId: match.productId,
+              model: aiResult.model,
+              provider: aiResult.provider,
+              timestamp: new Date().toISOString(),
+              details: `AI çok düşük güven: ${match.confidence} → manuel`,
+            });
           }
 
           // Log decision
@@ -537,7 +729,25 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
           aiMatchState.processedProducts++;
         }
       } else if (!aiResult.ok) {
-        // AI failed — count remaining as manual
+        // AI failed — classify provider error
+        const providerCheck = classifyProviderError(aiResult.errorCode, aiResult.error);
+
+        // Count each product in batch with the same error
+        for (const p of batch) {
+          aiMatchState.productErrors.push({
+            status: providerCheck.status,
+            stage: providerCheck.stage,
+            semantics: providerCheck.semantics,
+            productId: p.id,
+            model: aiResult.model,
+            provider: aiResult.provider,
+            timestamp: new Date().toISOString(),
+            details: `Provider hatası: ${aiResult.error || 'bilinmeyen'}`,
+          });
+          aiMatchState.errorBreakdown[providerCheck.status] = (aiMatchState.errorBreakdown[providerCheck.status] || 0) + 1;
+          aiMatchState.semanticBreakdown[providerCheck.semantics] = (aiMatchState.semanticBreakdown[providerCheck.semantics] || 0) + 1;
+        }
+
         aiMatchState.manualCount += batch.length;
         aiMatchState.processedProducts += batch.length;
         aiMatchState.lastError = aiResult.error || 'AI başarısız';
@@ -548,7 +758,23 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
           return;
         }
       } else {
-        // AI returned no matches
+        // AI returned no matches — classify as AI decision failure
+        for (const p of batch) {
+          const candData = candidatesByProduct.get(p.id) || [];
+          aiMatchState.productErrors.push({
+            status: 'AI_DECISION_FAILURE',
+            stage: 'AI_MATCH',
+            semantics: 'AI_DECISION_FAILURE',
+            productId: p.id,
+            model: aiResult.model,
+            provider: aiResult.provider,
+            timestamp: new Date().toISOString(),
+            details: `AI yanıt döndürmedi (boş match listesi)`,
+          });
+          aiMatchState.errorBreakdown['AI_DECISION_FAILURE'] = (aiMatchState.errorBreakdown['AI_DECISION_FAILURE'] || 0) + 1;
+          aiMatchState.semanticBreakdown['AI_DECISION_FAILURE'] = (aiMatchState.semanticBreakdown['AI_DECISION_FAILURE'] || 0) + 1;
+        }
+
         aiMatchState.manualCount += batch.length;
         aiMatchState.processedProducts += batch.length;
       }
@@ -568,6 +794,9 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
           provider: aiMatchState.provider,
           model: aiMatchState.model,
           batches: aiMatchState.totalBatches,
+          errorBreakdown: aiMatchState.errorBreakdown,
+          semanticBreakdown: aiMatchState.semanticBreakdown,
+          productErrorCount: aiMatchState.productErrors.length,
         }),
         details: `AI v2: ${aiMatchState.matchedCount} eşleşti, ${aiMatchState.suggestedCount} öneri, ${aiMatchState.manualCount} manuel — ${aiMatchState.provider}/${aiMatchState.model}`,
         actorUserId: null,
@@ -586,6 +815,20 @@ router.post('/ai-match-ai/start', requireAuth, async (req: Request, res: Respons
     if (aiMatchState.running) return res.status(409).json({ ok: false, message: 'AI eşleştirme zaten çalışıyor', progress: aiMatchState });
 
     const { xmlSourceId, marketplaceId } = req.body || {};
+
+    // RULE 19: Pre-check eligible count — reject if zero
+    const eligibleWhere: any = {
+      categoryMatch: false,
+      matchedBy: null,
+      // FIX(build): JS objesinde mukerrer 'not' anahtari olamazdi; runtime zaten son degeri ('') kullanir, ayni semantik korunur.
+      supplierCategory: { not: '' },
+      categoryId: null,
+    };
+    if (xmlSourceId) eligibleWhere.xmlSourceId = xmlSourceId;
+    const eligibleCount = await prisma.product.count({ where: eligibleWhere });
+    if (eligibleCount === 0) {
+      return res.json({ ok: true, message: 'AI eşleştirmeye uygun ürün bulunamadı (MANUAL_REVIEW + supplierCategory gerekli)', progress: { status: 'completed', totalProducts: 0, processedProducts: 0, matchedCount: 0, manualCount: 0 } });
+    }
 
     aiMatchState.running = true;
     aiMatchState.status = 'starting';
@@ -621,6 +864,26 @@ router.get('/ai-match-ai/progress', requireAuth, async (_req: Request, res: Resp
     model: aiMatchState.model,
     lastError: aiMatchState.lastError,
     percent: aiMatchState.totalProducts > 0 ? Math.round((aiMatchState.processedProducts / aiMatchState.totalProducts) * 100) : 0,
+    errorBreakdown: aiMatchState.errorBreakdown,
+    semanticBreakdown: aiMatchState.semanticBreakdown,
+    productErrorCount: aiMatchState.productErrors.length,
+  });
+});
+
+router.get('/ai-match-ai/errors', requireAuth, async (req: Request, res: Response) => {
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 100)));
+  const statusFilter = req.query.status ? String(req.query.status) : null;
+  const semanticsFilter = req.query.semantics ? String(req.query.semantics) : null;
+
+  let errors = aiMatchState.productErrors;
+  if (statusFilter) errors = errors.filter(e => e.status === statusFilter);
+  if (semanticsFilter) errors = errors.filter(e => e.semantics === semanticsFilter);
+
+  return res.json({
+    total: errors.length,
+    errors: errors.slice(0, limit),
+    errorBreakdown: aiMatchState.errorBreakdown,
+    semanticBreakdown: aiMatchState.semanticBreakdown,
   });
 });
 
@@ -638,6 +901,9 @@ router.post('/bulk-match', requireAuth, async (req: Request, res: Response) => {
       if (products.length > 0 && systemCategoryId) {
         const productIds = products.map(p => p.id);
         await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { categoryId: systemCategoryId, categoryMatch: true, matchedBy: 'manual', lastMatchDate: new Date() } });
+        for (const pid of productIds) {
+          queueReconcileProductGates(pid);
+        }
         const systemCat = await prisma.category.findUnique({ where: { id: systemCategoryId } });
         totalMatched += products.length;
         results.push({ xmlCategory: xmlCategoryPath, systemCategory: systemCat?.name || 'Bilinmeyen', count: products.length });
@@ -657,10 +923,12 @@ router.get('/all', requireAuth, async (req: Request, res: Response) => {
   try {
     const search = String(req.query?.search ?? '').trim();
     const parentId = req.query?.parentId ? String(req.query.parentId) : null;
+    // FIX(F-05): sınırsız full-table okumasına güvenlik üst sınırı. Kategori tablosu
+    // pratikte küçüktür; cap yalnızca patolojik büyümede devreye girer (fail-safe).
     const where: Record<string, unknown> = {};
     if (search) where.name = { contains: search };
     if (parentId !== undefined) where.parentId = parentId || null;
-    const categories = await prisma.category.findMany({ where, orderBy: { name: 'asc' }, include: { _count: { select: { products: true, children: true } } } });
+    const categories = await prisma.category.findMany({ where, orderBy: { name: 'asc' }, take: 50000, include: { _count: { select: { products: true, children: true } } } });
     res.json({ items: categories.map((cat: any) => ({ id: cat.id, name: cat.name, externalId: cat.externalId, parentId: cat.parentId, productCount: cat._count.products, childCount: cat._count.children, createdAt: cat.createdAt, updatedAt: cat.updatedAt })) });
   } catch (error) {
     console.error('Error fetching categories:', error);
@@ -711,7 +979,9 @@ router.get('/products', requireAuth, async (req: Request, res: Response) => {
       }),
       prisma.product.count({ where }),
     ]);
-    res.json({ items, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+    // FIX(F-05): tam sayfalama sözleşmesi (hasNext/hasPrevious eklendi; mevcut alanlar korundu).
+    const totalPages = Math.ceil(total / limit);
+    res.json({ items, pagination: { page, limit, total, totalPages, hasNext: page < totalPages, hasPrevious: page > 1 } });
   } catch (error) {
     console.error('Error fetching category products:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch category products' } });
@@ -726,6 +996,9 @@ router.post('/match', requireAuth, async (req: Request, res: Response) => {
     const category = await prisma.category.findUnique({ where: { id: categoryId } });
     if (!category) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Kategori bulunamadı' } });
     const result = await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { categoryId, categoryMatch: true, matchedBy: 'manual', lastMatchDate: new Date() } });
+    for (const pid of productIds) {
+      queueReconcileProductGates(pid);
+    }
 
     await prisma.auditLog.create({ data: { action: 'CATEGORY_MATCH', entity: 'category', entityId: categoryId, details: `${result.count} ürün "${category.name}" kategorisine eşleştirildi`, actorUserId: (req as any).actor?.userId || null } });
     res.json({ matchedCount: result.count, message: `${result.count} ürün eşleştirildi` });
@@ -739,9 +1012,12 @@ router.post('/unmatch', requireAuth, async (req: Request, res: Response) => {
   try {
     const { productIds } = req.body;
     if (!Array.isArray(productIds) || productIds.length === 0) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'productIds array is required' } });
-    const result = await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { categoryId: null, categoryMatch: false } });
 
-    await prisma.auditLog.create({ data: { action: 'CATEGORY_UNMATCH', entity: 'category', details: `${result.count} ürünün kategori eşleştirmesi kaldırıldı`, actorUserId: (req as any).actor?.userId || null } });
+    // RULE 14: unmatch MUST clear state consistently
+    // Clear matchedBy to avoid stale provenance creating false MANUAL_REVIEW eligibility
+    const result = await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { categoryId: null, categoryMatch: false, matchedBy: null, aiSuggestedCategoryId: null, aiScore: null } });
+
+    await prisma.auditLog.create({ data: { action: 'CATEGORY_UNMATCH', entity: 'category', details: `${result.count} ürünün kategori eşleştirmesi kaldırıldı`, meta: JSON.stringify({ productIds: productIds.slice(0, 20), clearedFields: ['categoryId', 'categoryMatch', 'matchedBy', 'aiSuggestedCategoryId', 'aiScore'] }), actorUserId: (req as any).actor?.userId || null } });
     res.json({ unmatchedCount: result.count, message: `${result.count} ürünün eşleştirmesi kaldırıldı` });
   } catch (error) {
     console.error('Error unmatching products:', error);
@@ -847,6 +1123,165 @@ router.put('/:id/move', requireAuth, async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error moving category:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to move category' } });
+  }
+});
+
+// ==================== BATCH RESOLVE — CANONICAL ENGINE ====================
+
+router.post('/batch-resolve', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { xmlSourceId, limit: reqLimit } = (req.body || {}) as { xmlSourceId?: string; limit?: number };
+    const limit = Math.min(500, Math.max(1, reqLimit ?? 500));
+
+    // Trendyol tree + marketplace ID
+    const tree = await loadTrendyolTree();
+    if (tree.leaves.length === 0) {
+      return res.json({ ok: false, error: 'Trendyol kategori ağacı boş', results: [] });
+    }
+    const ttMp = await prisma.marketplace.findUnique({ where: { key: 'tt' }, select: { id: true } });
+    const marketplaceId = ttMp?.id ?? null;
+
+    // Fetch ALL unmatched products (categoryMatch=false)
+    const where: any = { categoryMatch: false };
+    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
+
+    const totalCount = await prisma.product.count({ where });
+    const products = await prisma.product.findMany({
+      where,
+      select: { id: true, xmlKey: true, title: true, supplierCategory: true, xmlBrandName: true, categoryId: true },
+      take: limit,
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (products.length === 0) {
+      return res.json({ ok: true, total: 0, matched: 0, manual: 0, alreadyValid: 0, skipped: 0 });
+    }
+
+    // Classify existing categoryId
+    const leafIds = new Set(tree.leaves.map(l => l.id));
+    const leafById = tree.leafById;
+
+    // Batch-check CategoryMapping for all leaf candidates
+    const allCandidateIds = new Set<string>();
+    for (const p of products) {
+      const r = resolveCategoryCandidates(p, tree, marketplaceId);
+      if (r.topCandidate) allCandidateIds.add(r.topCandidate.id);
+      if (p.categoryId) allCandidateIds.add(p.categoryId);
+    }
+
+    const mappedCategoryIds = new Set<string>();
+    if (marketplaceId && allCandidateIds.size > 0) {
+      const mappings = await prisma.categoryMapping.findMany({
+        where: { categoryId: { in: Array.from(allCandidateIds) }, marketplaceId, active: true, externalId: { not: null } },
+        select: { categoryId: true },
+      });
+      for (const m of mappings) mappedCategoryIds.add(m.categoryId);
+    }
+
+    // Process each product
+    let alreadyValid = 0;
+    let matched = 0;
+    let manual = 0;
+    let skipped = 0;
+    const appliedProducts: Array<{ xmlKey: string; oldCategoryId: string | null; newCategoryId: string; categoryName: string; confidence: number; reason: string }> = [];
+    const manualProducts: Array<{ xmlKey: string; reason: string; topCandidate: string | null; topCandidateId?: string; confidence: number; mapped?: boolean; method?: string }> = [];
+    console.log(`[batch-resolve] mappedCategoryIds size=${mappedCategoryIds.size} allCandidateIds size=${allCandidateIds.size}`);
+
+    for (const p of products) {
+      const existingCatValid = p.categoryId ? leafIds.has(p.categoryId) : false;
+      const existingCatMapped = p.categoryId ? mappedCategoryIds.has(p.categoryId) : false;
+
+      // Group 1: Already has valid Trendyol leaf + mapping → just set categoryMatch=true
+      if (existingCatValid && existingCatMapped) {
+        await prisma.product.update({
+          where: { id: p.id },
+          data: { categoryMatch: true, matchedBy: 'verified', lastMatchDate: new Date(), aiScore: 1.0 },
+        });
+        queueReconcileProductGates(p.id);
+        alreadyValid++;
+        continue;
+      }
+
+      // Group 2 & 3: Invalid/missing categoryId → resolve via canonical engine
+      const result = resolveCategoryCandidates(p, tree, marketplaceId);
+      const topCandidateMapped = result.topCandidate ? mappedCategoryIds.has(result.topCandidate.id) : false;
+      console.log(`[batch-resolve] ${p.xmlKey} conf=${result.confidence.toFixed(2)} mapped=${topCandidateMapped} method=${result.method} candidate=${result.topCandidate?.name} candidateId=${result.topCandidate?.id.slice(0,8)}`);
+
+      if (result.topCandidate && topCandidateMapped && result.confidence >= 0.6) {
+        // Has verified candidate + sufficient confidence → auto-apply
+        await prisma.product.update({
+          where: { id: p.id },
+          data: {
+            categoryId: result.topCandidate.id,
+            categoryMatch: true,
+            matchedBy: 'canonical',
+            lastMatchDate: new Date(),
+            aiSuggestedCategoryId: result.topCandidate.id,
+            aiScore: result.confidence,
+          },
+        });
+        queueReconcileProductGates(p.id);
+        matched++;
+        appliedProducts.push({
+          xmlKey: p.xmlKey,
+          oldCategoryId: p.categoryId,
+          newCategoryId: result.topCandidate.id,
+          categoryName: result.topCandidate.name,
+          confidence: result.confidence,
+          reason: existingCatValid ? 'replaced_invalid_leaf' : 'new_canonical_match',
+        });
+      } else if (result.topCandidate) {
+        // Has candidate but low confidence → manual review
+        manual++;
+        manualProducts.push({
+          xmlKey: p.xmlKey,
+          reason: !topCandidateMapped ? 'no_verified_mapping' : `low_confidence_${result.confidence.toFixed(2)}`,
+          topCandidate: result.topCandidate.name,
+          topCandidateId: result.topCandidate.id.slice(0, 8),
+          confidence: result.confidence,
+          mapped: topCandidateMapped,
+          method: result.method,
+        });
+      } else {
+        // No candidate at all
+        manual++;
+        manualProducts.push({
+          xmlKey: p.xmlKey,
+          reason: result.method === 'no_source' ? 'no_supplier_category' : 'no_candidate_found',
+          topCandidate: null,
+          confidence: 0,
+        });
+      }
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        action: 'CANONICAL_BATCH_RESOLVE',
+        entity: 'category',
+        meta: JSON.stringify({
+          total: products.length, totalCount, alreadyValid, matched, manual, skipped,
+          xmlSourceId, treeLeafCount: tree.leaves.length,
+        }),
+        details: `Canonical batch: ${alreadyValid} already valid, ${matched} canonical matched, ${manual} manual — total ${totalCount}`,
+        actorUserId: (req as any).actor?.userId || null,
+      },
+    });
+
+    res.json({
+      ok: true,
+      total: products.length,
+      totalCount,
+      alreadyValid,
+      matched,
+      manual,
+      skipped,
+      treeLeafCount: tree.leaves.length,
+      applied: appliedProducts,
+      manualReview: manualProducts.slice(0, 50),
+    });
+  } catch (error) {
+    console.error('Error batch resolving categories:', error);
+    res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to batch resolve categories' } });
   }
 });
 

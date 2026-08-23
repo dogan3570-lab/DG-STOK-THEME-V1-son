@@ -1,6 +1,9 @@
 import { prisma } from '../db/prisma.ts';
 import { invalidateDashboardStatsCache } from '../routes/dashboard.ts';
 import { ensureDefaultListingTemplates } from '../bootstrap.ts';
+import {reconcileProductGates, queueReconcileProductGates} from './readinessService.ts';
+import { reconcileProductMarketplaceState } from './marketplaceReconcile.ts';
+import { isMarketplaceOperational } from './marketplaceTruth.ts';
 
 export type XmlImportResult = {
   ok: boolean;
@@ -469,6 +472,18 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
   syncLocks.set(lockKey, true);
 
   try {
+    // CHECKPOINT/RESUME: önceki yarıda kalmış (stale 'running') çalışmayı işaretle.
+    // Silme yok; yalnızca durum güncellemesi (idempotent). Veriler ürün bazında
+    // zaten unique upsert olduğu için yeni çalışma kaldığı yerden güvenle sürer.
+    try {
+      await prisma.xmlImportRun.updateMany({
+        where: { sourceId, status: 'running' },
+        data: { status: 'interrupted', errorDetail: 'Interrupted by new import run (resume)' },
+      });
+    } catch (staleErr) {
+      console.error('[Import] Stale-run marking failed:', staleErr);
+    }
+
     const run = await prisma.xmlImportRun.create({
       data: {
         sourceId,
@@ -485,8 +500,12 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
     const categoryMap = new Map(allCategories.map(c => [c.name.toLowerCase(), c.id]));
     const allBrands = await prisma.brand.findMany({ select: { id: true, name: true } });
     const brandMap = new Map(allBrands.map(b => [b.name.toLowerCase(), b.id]));
-    const activeMarketplaces = await prisma.marketplace.findMany({ where: { active: true }, select: { id: true } });
+    const allActiveMarketplaces = await prisma.marketplace.findMany({ where: { active: true }, select: { id: true, apiKey: true, apiSecret: true, apiUrl: true } });
+    const activeMarketplaces = allActiveMarketplaces.filter(mp => isMarketplaceOperational(mp));
     const activeMarketplaceIds = activeMarketplaces.map(m => m.id);
+    if (activeMarketplaceIds.length === 0) {
+      console.warn('[Import] ⚠ UYARI: Operasyonel pazaryeri bulunmuyor! PMS creation atlanacak. Ürünler import sonrası reconcile edilmeli.');
+    }
 
     // DEFAULT FALLBACK: kategorisiz/markasız ürün kalmasın
     const defaultCategory = await prisma.category.upsert({ where: { name: 'Genel' }, update: {}, create: { name: 'Genel' } });
@@ -518,6 +537,22 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
     }
 
     for (let i = 0; i < uniqueItems.length; i += BATCH_SIZE) {
+      if (options?.signal?.aborted) {
+        // CHECKPOINT: yarıda kesildi — mevcut işlenmiş ürünler kayıtlıdır;
+        // yeni çalışma kaldığı yerden devam eder (unique upsert + PMS unique pair).
+        await prisma.xmlImportRun.update({
+          where: { id: run.id },
+          data: { status: 'interrupted', errorDetail: 'Aborted via signal (resumable)', finishedAt: new Date() },
+        });
+        return {
+          ok: false,
+          error: { code: 'CANCELLED', message: 'Senkronizasyon iptal edildi (resumable)' },
+          importedCount: results.filter(r => r.outcome === 'created').length,
+          updatedCount: results.filter(r => r.outcome === 'updated').length,
+          items: results,
+          runId: run.id,
+        } satisfies XmlImportResult;
+      }
       const batch = uniqueItems.slice(i, i + BATCH_SIZE);
       const batchResults: typeof results = [];
 
@@ -563,6 +598,14 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
           const groupKey = item.parentId || item.groupId;
           const hasVariants = !!groupKey && (groupCounts.get(groupKey) || 0) > 1;
 
+          // V3 USER MAPPING PROTECTION: check if product has protected match before overwriting
+          const protectedMatchedBys = ['manual', 'ai', 'auto', 'verified', 'canonical'];
+          const existingProduct = await prisma.product.findUnique({
+            where: { xmlKey: item.xmlKey },
+            select: { id: true, matchedBy: true, categoryMatch: true },
+          }).catch(() => null);
+          const hasProtectedMatch = existingProduct?.categoryMatch && existingProduct.matchedBy && protectedMatchedBys.includes(existingProduct.matchedBy);
+
           const created = await prisma.product.upsert({
             where: { xmlKey: item.xmlKey },
             update: {
@@ -579,13 +622,18 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
               unit: item.unit,
               currency: item.currency,
               detail: item.detail,
-              categoryId: categoryId || defaultCategory.id,
+              // V3: only overwrite categoryId if no protected match exists
+              ...(hasProtectedMatch ? {} : {
+                categoryId: categoryId || defaultCategory.id,
+                categoryMatch: false,
+                matchedBy: null,
+                aiScore: null,
+                aiSuggestedCategoryId: null,
+                lastMatchDate: null,
+              }),
               brandId: brandId || defaultBrand.id,
               xmlBrandName: item.brand || null,
               supplierCategory,
-              // KATEGORİ AUTHORITATIVE KURALI: gerçek marketplace mapping olmadan categoryMatch=true VERİLMEZ.
-              // İçe aktarma yalnızca lokal kategori atar; kategori mapping ayrı akışta doğrulanır.
-              categoryMatch: false,
               brandMatch: true,
               variantMatch: false,
               variantStatus: hasVariants ? 'WAITING_AI' : 'NOT_REQUIRED',
@@ -623,19 +671,11 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
           });
 
           // VERİ KÖPRÜSÜ: ürünü tüm aktif pazaryerlerine PENDING state ile bağla
-          if (activeMarketplaceIds.length > 0) {
-            const existingStates = await prisma.productMarketplaceState.findMany({
-              where: { productId: created.id },
-              select: { marketplaceId: true },
-            });
-            const existingMpIds = new Set(existingStates.map(s => s.marketplaceId));
-            const missingMpIds = activeMarketplaceIds.filter(id => !existingMpIds.has(id));
-            if (missingMpIds.length > 0) {
-              await prisma.productMarketplaceState.createMany({
-                data: missingMpIds.map(mpId => ({ productId: created.id, marketplaceId: mpId, status: 'PENDING' })),
-              });
-            }
+          for (const mpId of activeMarketplaceIds) {
+            reconcileProductMarketplaceState(created.id, mpId).catch(() => null);
           }
+
+          queueReconcileProductGates(created.id);
 
           const isNew = created.createdAt.getTime() === created.updatedAt.getTime();
           batchResults.push({

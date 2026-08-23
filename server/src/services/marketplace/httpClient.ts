@@ -12,11 +12,14 @@ export const MAX_RETRIES = 2;
 const DEFAULT_TIMEOUT_MS = 30000;
 
 export class ProviderHttpError extends Error {
-  constructor(
-    public readonly code: string,
-    public readonly status: number | null
-  ) {
+  public readonly code: string;
+  public readonly status: number | null;
+
+  constructor(code: string, status: number | null) {
     super(code);
+    this.code = code;
+    this.status = status;
+    Object.setPrototypeOf(this, ProviderHttpError.prototype);
   }
 }
 

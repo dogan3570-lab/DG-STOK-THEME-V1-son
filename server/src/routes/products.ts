@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth } from '../auth/authMiddleware.ts';
 import { READY_FILTER } from '../services/readiness.ts';
@@ -57,70 +58,56 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    const [
-      totalProducts,
-      activeProducts,
-      passiveProducts,
-      draftProducts,
-      readyProducts,
-      errorProducts,
-      newToday,
-      updatedToday,
-      pendingCategory,    // categoryId IS NULL → Kategori Hazırlama ile tutarlı
-      pendingBrand,       // brandMatch IS FALSE → Marka Hazırlama ile tutarlı
-      pendingVariant,     // variantMatch IS FALSE → Varyant V1 ile tutarlı
-      missingImages,
-      missingBarcode,
-      missingDescription,
-      missingPrice,
-      missingStock,
-      missingSeo,
-      templatePending,
-      variantAnalysisPending, // V2 sistemi: manuel inceleme + hatalı
-    ] = await Promise.all([
-      prisma.product.count({ where: contextWhere }),
-      prisma.product.count({ where: { ...contextWhere, status: 'READY' } }),
-      prisma.product.count({ where: { ...contextWhere, status: 'PASSIVE' } }),
-      prisma.product.count({ where: { ...contextWhere, status: 'DRAFT' } }),
-      prisma.product.count({ where: { ...contextWhere, ...READY_FILTER } }),
-      prisma.product.count({ where: { ...contextWhere, status: 'ERROR' } }),
-      prisma.product.count({ where: { ...contextWhere, createdAt: { gte: todayStart } } }),
-      prisma.product.count({ where: { ...contextWhere, updatedAt: { gte: todayStart } } }),
-      prisma.product.count({ where: { ...contextWhere, categoryId: null } }),
-      prisma.product.count({ where: { ...contextWhere, brandMatch: false } }),
-      prisma.product.count({ where: { ...contextWhere, variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } } }),
-      prisma.product.count({ where: { ...contextWhere, images: null } }),
-      prisma.product.count({ where: { ...contextWhere, barcode: null } }),
-      prisma.product.count({ where: { ...contextWhere, description: null } }),
-      prisma.product.count({ where: { ...contextWhere, salePrice: null } }),
-      prisma.product.count({ where: { ...contextWhere, stock: { lte: 0 } } }),
-      prisma.product.count({ where: { ...contextWhere, seoTitle: null, seoDescription: null } }),
-      prisma.product.count({ where: { ...contextWhere, templateMatch: false } }),
-      prisma.variantAnalysis.count({ where: { status: { in: ['NEEDS_REVIEW', 'MANUAL_REQUIRED', 'ERROR'] } } }),
-    ]);
+    // PHASE1/F-01 FIX: xmlSourceId artık Prisma parametre binding ile gömülür (SQL injection kapalı).
+    const xmlFilter: Prisma.Sql = xmlSourceId ? Prisma.sql`AND xmlSourceId = ${xmlSourceId}` : Prisma.empty;
+    const stats = await prisma.$queryRaw<Record<string, bigint>[]>`
+      SELECT
+        COUNT(*) as "totalProducts",
+        SUM(CASE WHEN status = 'READY' THEN 1 ELSE 0 END) as "activeProducts",
+        SUM(CASE WHEN status = 'PASSIVE' THEN 1 ELSE 0 END) as "passiveProducts",
+        SUM(CASE WHEN status = 'DRAFT' THEN 1 ELSE 0 END) as "draftProducts",
+        SUM(CASE WHEN status = 'READY' AND categoryMatch = 1 AND brandMatch = 1 AND templateMatch = 1 AND (variantMatch = 1 OR variantStatus = 'NOT_REQUIRED') THEN 1 ELSE 0 END) as "readyProducts",
+        SUM(CASE WHEN status = 'ERROR' THEN 1 ELSE 0 END) as "errorProducts",
+        SUM(CASE WHEN createdAt >= ${todayStart} THEN 1 ELSE 0 END) as "newToday",
+        SUM(CASE WHEN updatedAt >= ${todayStart} THEN 1 ELSE 0 END) as "updatedToday",
+        SUM(CASE WHEN categoryId IS NULL THEN 1 ELSE 0 END) as "pendingCategory",
+        SUM(CASE WHEN brandMatch = 0 THEN 1 ELSE 0 END) as "pendingBrand",
+        SUM(CASE WHEN variantMatch = 0 AND variantStatus != 'NOT_REQUIRED' THEN 1 ELSE 0 END) as "pendingVariant",
+        SUM(CASE WHEN images IS NULL THEN 1 ELSE 0 END) as "missingImages",
+        SUM(CASE WHEN barcode IS NULL THEN 1 ELSE 0 END) as "missingBarcode",
+        SUM(CASE WHEN description IS NULL THEN 1 ELSE 0 END) as "missingDescription",
+        SUM(CASE WHEN salePrice IS NULL THEN 1 ELSE 0 END) as "missingPrice",
+        SUM(CASE WHEN stock <= 0 THEN 1 ELSE 0 END) as "missingStock",
+        SUM(CASE WHEN seoTitle IS NULL AND seoDescription IS NULL THEN 1 ELSE 0 END) as "missingSeo",
+        SUM(CASE WHEN templateMatch = 0 THEN 1 ELSE 0 END) as "templatePending"
+      FROM Product
+       WHERE 1=1 ${xmlFilter}
+     `;
+    const row = stats[0] || {};
+    const variantAnalysisPending = await prisma.variantAnalysis.count({ where: { status: { in: ['NEEDS_REVIEW', 'MANUAL_REQUIRED', 'ERROR'] } } });
 
     const responseData = {
-      totalProducts,
-      activeProducts,
-      passiveProducts,
-      draftProducts,
-      newProducts: newToday,
-      updatedCount: updatedToday,
+      totalProducts: Number(row.totalProducts ?? 0),
+      activeProducts: Number(row.activeProducts ?? 0),
+      passiveProducts: Number(row.passiveProducts ?? 0),
+      draftProducts: Number(row.draftProducts ?? 0),
+      newProducts: Number(row.newToday ?? 0),
+      updatedCount: Number(row.updatedToday ?? 0),
       deletedCount: 0,
-      readyForListing: readyProducts,
-      missingInfo: totalProducts - readyProducts,
-      pendingCategory,
-      pendingBrand,
-      pendingVariant,
-      pendingTemplate: templatePending,
+      readyForListing: Number(row.readyProducts ?? 0),
+      missingInfo: Number(row.totalProducts ?? 0) - Number(row.readyProducts ?? 0),
+      pendingCategory: Number(row.pendingCategory ?? 0),
+      pendingBrand: Number(row.pendingBrand ?? 0),
+      pendingVariant: Number(row.pendingVariant ?? 0),
+      pendingTemplate: Number(row.templatePending ?? 0),
       variantAnalysisPending,
-      missingImages,
-      missingBarcode,
-      missingDescription,
-      missingPrice,
-      missingStock,
-      missingSeo,
-      errorProducts,
+      missingImages: Number(row.missingImages ?? 0),
+      missingBarcode: Number(row.missingBarcode ?? 0),
+      missingDescription: Number(row.missingDescription ?? 0),
+      missingPrice: Number(row.missingPrice ?? 0),
+      missingStock: Number(row.missingStock ?? 0),
+      missingSeo: Number(row.missingSeo ?? 0),
+      errorProducts: Number(row.errorProducts ?? 0),
     };
 
     _productsStatsCache.set(cacheKey, { data: responseData, timestamp: Date.now() });
@@ -166,12 +153,13 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     let page = Number(req.query?.page ?? 1);
     let limit = Number(req.query?.limit ?? 50);
 
-    // Validate pagination parameters - reject NaN/invalid
+    // FIX(F-08): validasyon ARTIK gerçek sınırlarla yapılır; sessiz clamp kaldırıldı.
+    // Eski kod limit=1000'i validate edip sonra sessizce 100'e düşürüyordu.
+    const MIN_LIMIT = 10;
+    const MAX_LIMIT = 100;
     if (!Number.isFinite(page) || page < 1) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz sayfa numarası' } });
-    if (!Number.isFinite(limit) || limit < 1 || limit > 1000) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz limit değeri, 1-1000 arası olmalı' } });
+    if (!Number.isFinite(limit) || limit < MIN_LIMIT || limit > MAX_LIMIT) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `Geçersiz limit değeri, ${MIN_LIMIT}-${MAX_LIMIT} arası olmalı` } });
 
-    page = Math.max(1, page);
-    limit = Math.min(1000, Math.max(10, limit));
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {};
@@ -243,8 +231,8 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
         select: {
           id: true, title: true, sku: true, barcode: true, xmlKey: true,
           salePrice: true, purchasePrice: true, stock: true, minStock: true, status: true,
-          images: true, description: true, seoTitle: true, seoDescription: true,
-          technicalSpecs: true, vatRate: true, profitMargin: true, aiScore: true,
+          images: true, seoTitle: true,
+          vatRate: true, profitMargin: true, aiScore: true,
           computedTitle: true, prefixEnabled: true, supplierCategory: true,
           customBrandName: true, unit: true, currency: true, errorMessage: true,
           categoryId: true, brandId: true, xmlSourceId: true,

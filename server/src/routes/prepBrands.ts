@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/authMiddleware.ts';
+import {reconcileProductGates, queueReconcileProductGates} from '../services/readinessService.ts';
 
 const router = Router();
 
@@ -255,12 +256,12 @@ router.post('/match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (re
     const dgBrand = await prisma.brand.findUnique({ where: { id: dgBrandId } });
     if (!dgBrand) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Marka bulunamadı' } });
     await prisma.brandMapping.upsert({ where: { xmlBrandName }, update: { dgBrandId, isAuto: false, marketplaceKey: marketplaceKey || null }, create: { xmlBrandName, dgBrandId, isAuto: false, marketplaceKey: marketplaceKey || null } });
-    const where: any = { xmlBrandName };
+    const where: any = { xmlBrandName, brandMatch: false };
     if (xmlSourceId) where.xmlSourceId = xmlSourceId;
     const format = dgBrand.prefixFormat || 'MARKA\u00ae {title}';
     const prefixLabel = dgBrand.name + ' \u00ae ';
     const now = new Date().toISOString();
-    await prisma.product.updateMany({ where, data: { brandId: dgBrandId, brandMatch: true, matchedBy: 'manual', lastMatchDate: new Date(), brandUsageType: 'DG_BRAND', prefixEnabled: true } });
+    await prisma.product.updateMany({ where, data: { brandId: dgBrandId, brandMatch: true, lastMatchDate: new Date(), brandUsageType: 'DG_BRAND', prefixEnabled: true } });
     const products = await prisma.product.findMany({ where, select: { id: true, title: true, originalTitle: true } });
     const updates: { id: string; newTitle: string; origTitle: string }[] = [];
     for (const p of products) {
@@ -276,6 +277,8 @@ router.post('/match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (re
       const stmts = batch.map(u => prisma.$executeRawUnsafe('UPDATE Product SET title = ?, computedTitle = ?, originalTitle = ? WHERE id = ?', u.newTitle, u.newTitle, u.origTitle, u.id));
       await prisma.$transaction(stmts);
     }
+    // Lifecycle reconcile: brand gate just completed for these products
+    for (const u of updates) { queueReconcileProductGates(u.id); }
     const productCount = await prisma.product.count({ where: { xmlBrandName } });
     await prisma.brandMapping.update({ where: { xmlBrandName }, data: { productCount } }).catch(() => null);
     await createBrandLog({ action: 'BRAND_MATCH', xmlBrandName, dgBrandId, dgBrandName: dgBrand.name, productCount: updates.length, actorUserId: (req as AuthedRequest).actor?.userId, details: JSON.stringify({ xmlSourceId: xmlSourceId || null, marketplaceKey: marketplaceKey || null }) });
@@ -307,7 +310,12 @@ router.post('/bulk-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), asyn
       const dgBrand = await prisma.brand.findUnique({ where: { id: dgBrandId } });
       if (!dgBrand) continue;
       await prisma.brandMapping.upsert({ where: { xmlBrandName }, update: { dgBrandId, isAuto: false }, create: { xmlBrandName, dgBrandId, isAuto: false } });
-      const result = await prisma.product.updateMany({ where: { xmlBrandName }, data: { brandId: dgBrandId, brandMatch: true, matchedBy: 'bulk', lastMatchDate: new Date(), brandUsageType: 'DG_BRAND' } });
+      // Find affected product IDs before updateMany
+      const affected = await prisma.product.findMany({ where: { xmlBrandName, brandMatch: false }, select: { id: true } });
+      const affectedIds = affected.map(p => p.id);
+      const result = await prisma.product.updateMany({ where: { xmlBrandName, brandMatch: false }, data: { brandId: dgBrandId, brandMatch: true, lastMatchDate: new Date(), brandUsageType: 'DG_BRAND' } });
+      // Lifecycle reconcile: brand gate just completed
+      for (const pid of affectedIds) { queueReconcileProductGates(pid); }
       const productCount = await prisma.product.count({ where: { brandId: dgBrandId } });
       await prisma.brandMapping.update({ where: { xmlBrandName }, data: { productCount } }).catch(() => null);
       totalMatched += result.count; results.push({ xmlBrandName, dgBrandName: dgBrand.name, count: result.count });
@@ -376,9 +384,13 @@ router.post('/ai-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async 
     // Toplu uygula: her XML marka için updateMany (bir kez)
     for (const m of toUpdate) {
       await prisma.brandMapping.upsert({ where: { xmlBrandName: m.xmlBrandName }, update: { dgBrandId: m.brandId, confidence: m.score || null, isAuto: true }, create: { xmlBrandName: m.xmlBrandName, dgBrandId: m.brandId, confidence: m.score || null, isAuto: true } }).catch(() => null);
-      const productWhere: any = { xmlBrandName: m.xmlBrandName };
+      const productWhere: any = { xmlBrandName: m.xmlBrandName, brandMatch: false };
       if (Array.isArray(productIds) && productIds.length > 0) productWhere.id = { in: productIds };
-      await prisma.product.updateMany({ where: productWhere, data: { brandId: m.brandId, brandMatch: true, matchedBy: 'ai', lastMatchDate: new Date(), brandUsageType: 'DG_BRAND' } });
+      const affected = await prisma.product.findMany({ where: productWhere, select: { id: true } });
+      const affectedIds = affected.map(p => p.id);
+      await prisma.product.updateMany({ where: productWhere, data: { brandId: m.brandId, brandMatch: true, lastMatchDate: new Date(), brandUsageType: 'DG_BRAND' } });
+      // Lifecycle reconcile: brand gate just completed
+      for (const pid of affectedIds) { queueReconcileProductGates(pid); }
       await prisma.brandMapping.update({ where: { xmlBrandName: m.xmlBrandName }, data: { productCount: m.count } }).catch(() => null);
     }
 
@@ -459,7 +471,12 @@ router.post('/use-dg-brand', requireAuth, requireRole(['ADMIN', 'OPERATOR']), as
     const { productIds, allProducts } = req.body;
     const where: any = {};
     if (!allProducts && Array.isArray(productIds) && productIds.length > 0) where.id = { in: productIds };
+    // Find affected product IDs before update
+    const affected = await prisma.product.findMany({ where: { ...where, brandMatch: false }, select: { id: true } });
+    const affectedIds = affected.map(p => p.id);
     const result = await prisma.product.updateMany({ where, data: { brandUsageType: 'DG_BRAND', brandMatch: true } });
+    // Lifecycle reconcile: brand gate just completed
+    for (const pid of affectedIds) { queueReconcileProductGates(pid); }
     await createBrandLog({ action: 'BULK_CHANGE', productCount: result.count, details: JSON.stringify({ usageType: 'DG_BRAND', allProducts: !!allProducts }), actorUserId: (req as AuthedRequest).actor?.userId });
     res.json({ updatedCount: result.count, message: `${result.count} \u00fcr\u00fcn DG STOK markas\u0131 kullanacak \u015fekilde ayarland\u0131` });
   } catch (error) { res.status(500).json({ error: { code: 'DB_ERROR', message: '\u0130\u015flem ba\u015far\u0131s\u0131z' } }); }

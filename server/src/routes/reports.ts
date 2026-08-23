@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth } from '../auth/authMiddleware.ts';
 import { READY_FILTER } from '../services/readiness.ts';
+import { getOperationalMarketplaces, countOperationalMarketplaces } from '../services/marketplaceTruth.ts';
 
 const router = Router();
 
@@ -24,7 +25,7 @@ router.get('/dashboard', requireAuth, async (_req: Request, res: Response) => {
       totalBrands,
       lowStockProducts,
       marketplaceCount,
-      marketplaceStats,
+      operationalMarketplaces,
       categoryStats,
       brandStats,
       statusCounts,
@@ -39,8 +40,8 @@ router.get('/dashboard', requireAuth, async (_req: Request, res: Response) => {
       prisma.category.count(),
       prisma.brand.count(),
       prisma.product.count({ where: { stock: { lte: 0 } } }),
-      prisma.marketplace.count(),
-      prisma.marketplace.findMany({ select: { id: true, name: true, key: true, apiStatus: true, active: true } }),
+      countOperationalMarketplaces(),
+      getOperationalMarketplaces(),
       prisma.category.findMany({ select: { id: true, name: true }, take: 10 }),
       prisma.brand.findMany({ select: { id: true, name: true }, take: 10 }),
       prisma.product.groupBy({ by: ['status'], _count: { _all: true } }),
@@ -63,7 +64,7 @@ router.get('/dashboard', requireAuth, async (_req: Request, res: Response) => {
       totalBrands,
       lowStockProducts,
       marketplaceCount,
-      marketplaceStats,
+      marketplaceStats: operationalMarketplaces.map(m => ({ id: m.id, name: m.name, key: m.key, apiStatus: m.apiStatus, active: true })),
       topCategories: categoryStats,
       topBrands: brandStats,
       statusCounts: statusMap,

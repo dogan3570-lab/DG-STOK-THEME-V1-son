@@ -50,17 +50,22 @@ export function buildServer() {
 
   app.use(compression());
 
+  // FIX(F-06): CORS — localhost wildcard yerine açık liste. Production'da yalnızca
+  // CORS_ORIGIN env'i; development'ta bilinen yerel portlar otomatik izinli.
   const corsWhitelist = process.env.CORS_ORIGIN
     ?.split(',')
     ?.map((s) => s.trim())
     .filter(Boolean) ?? [];
 
+  const DEV_ALLOWED_ORIGINS = ['http://localhost:5175', 'http://127.0.0.1:5175', 'http://localhost:4000', 'http://127.0.0.1:4000'];
+  const isProduction = process.env.NODE_ENV === 'production';
+  const allowedOrigins = [...corsWhitelist, ...(isProduction ? [] : DEV_ALLOWED_ORIGINS)];
+
   app.use(
     cors({
       origin: (origin, callback) => {
         if (!origin) return callback(null, true);
-        if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) return callback(null, true);
-        if (corsWhitelist.includes(origin)) return callback(null, true);
+        if (allowedOrigins.includes(origin)) return callback(null, true);
         console.warn(`[CORS] Blocked origin: ${origin}`);
         return callback(null, false);
       },
@@ -72,6 +77,31 @@ export function buildServer() {
 
   app.use(express.json({ limit: '10mb' }));
   app.use(cookieParser());
+  // FIX(F-06): CSRF — cookie ile kimliklenen tarayıcı istekleri için Origin/Host doğrulaması.
+  // En az invaziv çözüm: Bearer/x-token kullanan API istemcileri ve Origin göndermeyen
+  // non-browser çağrılar etkilenmez; çapraz-origin state-changing istek reddedilir.
+  const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  app.use((req, res, next) => {
+    if (!STATE_CHANGING_METHODS.has(req.method)) return next();
+    const usesCookieAuth = Boolean(req.cookies?.token)
+      && !req.headers.authorization
+      && !req.headers['x-auth-token']
+      && !req.headers['x-token'];
+    if (!usesCookieAuth) return next();
+
+    const origin = req.headers.origin;
+    if (!origin) return next(); // same-origin tool / non-browser
+
+    try {
+      const originHost = new URL(origin).host;
+      if (originHost === req.headers.host) return next(); // aynı origin (prod SPA :4000'den servis edilir)
+      if (!isProduction && allowedOrigins.includes(origin)) return next(); // vite dev proxy (5175→4000)
+    } catch {
+      /* bozuk Origin → reddedilir */
+    }
+    return res.status(403).json({ ok: false, error: { code: 'CSRF_ORIGIN_REJECTED', message: 'cross-origin state change rejected' } });
+  });
+
 
   if (process.env.NODE_ENV === 'production') {
     app.use(morgan('combined', {
@@ -150,7 +180,8 @@ export function buildServer() {
     res.cookie('token', token, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false,
+      // FIX(F-06): secure yalnızca production'da true — local HTTP development bozulmaz.
+      secure: process.env.NODE_ENV === 'production',
       path: '/',
     });
 
@@ -175,7 +206,9 @@ export function buildServer() {
       if (xToken) token = String(xToken);
     }
     if (!token) {
-      return res.status(401).json({ ok: false, error: { code: 'UNAUTHORIZED', message: 'unauthorized' } });
+      // Oturum yokluğu normal bir durumdur (ilk yükleme); 401 yerine 200+authenticated:false
+      // döner ki tarayıcı console'unu kirleten sahte hata oluşmasın. Geçersiz token hâlâ 401'dir.
+      return res.json({ ok: true, authenticated: false });
     }
 
     try {
@@ -326,6 +359,14 @@ if (process.env.NODE_ENV !== 'test') {
   const app = buildServer();
   const server = http.createServer(app);
 
+  server.on('error', (err) => {
+    console.error('[server] HTTP server error:', err);
+  });
+
+  server.on('close', () => {
+    console.log('[server] HTTP server closed');
+  });
+
   server.listen(port, async () => {
     console.log(`[server] listening on :${port}`);
     console.log(`[server] Web UI: http://localhost:${port}`);
@@ -343,8 +384,26 @@ if (process.env.NODE_ENV !== 'test') {
       console.log('[server] marketplace credentials migrated');
       await migrateAiProviderKeys();
       console.log('[server] AI provider keys migrated');
+      // OpenRouter model registry + background refresh
+      const { ensureRegistrySeeded, startBackgroundRefresh } = await import('./services/openRouterManager.ts');
+      await ensureRegistrySeeded();
+      console.log('[server] OpenRouter model registry seeded');
+      startBackgroundRefresh();
+      console.log('[server] OpenRouter background refresh started');
+      console.log('[server] Bootstrap completed, server should stay alive');
     } catch (error) {
       console.error('[server] database bootstrap failed', error);
     }
   });
+
+  // Keep the process alive
+  setInterval(() => {}, 1000 * 60 * 60);
 }
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] Unhandled rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[server] Uncaught exception:', err);
+});

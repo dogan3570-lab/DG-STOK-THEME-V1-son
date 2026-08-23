@@ -6,6 +6,7 @@ import { parsePositiveInt } from './sendReadiness.ts';
 import { detectVariantAttributes } from './readiness.ts';
 import { normalizeName } from './categoryBrandMapper.ts';
 import { chatCompletion } from './aiGateway.ts';
+import {reconcileProductGates, queueReconcileProductGates} from './readinessService.ts';
 
 /**
  * VARIANT EŞLEŞTİRME FLOW — temiz XML varyant tespiti + GERÇEK marketplace whitelist.
@@ -373,7 +374,8 @@ export async function runVariantMatchFlow(input: {
 
     // 5) Birebir whitelist eşleşmesi → AUTO_MATCH
     if (resolution.status === 'OK') {
-      await prisma.product.update({ where: { id: p.id }, data: { variantMatch: true, variantStatus: 'COMPLETED', matchedBy: 'variant_whitelist', lastMatchDate: new Date() } });
+      await prisma.product.update({ where: { id: p.id }, data: { variantMatch: true, variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
+      queueReconcileProductGates(p.id);
       await writeVariantAnalysis(p.id, 'trendyol_catalog', 'MATCHED', 100, true, { marketplaceName: marketplace.name, categoryId, xmlAttributes: attrs, resolution: { status: resolution.status, attributes: resolution.attributes } });
       summary.autoMatched++;
       summary.results.push({ productId: p.id, title: p.title, status: 'AUTO_MATCH', reason: null, mappings: mappingsFromResolution(attrs, resolution) });
@@ -384,7 +386,8 @@ export async function runVariantMatchFlow(input: {
     if (input.useAI) {
       const ai = await tryAiNormalize(attrs, relevant, valuesByAttribute, resolution);
       if (ai && ai.status === 'OK') {
-        await prisma.product.update({ where: { id: p.id }, data: { variantMatch: true, variantStatus: 'COMPLETED', matchedBy: 'ai', lastMatchDate: new Date() } });
+        await prisma.product.update({ where: { id: p.id }, data: { variantMatch: true, variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
+        queueReconcileProductGates(p.id);
         await writeVariantAnalysis(p.id, 'ai', 'MATCHED', ai.confidence, true, { marketplaceName: marketplace.name, categoryId, xmlAttributes: attrs, resolution: { status: 'OK', attributes: ai.attributes, aiProvider: true } });
         summary.aiMatched++;
         const aiResolution: TrendyolAttributeResolution = { status: 'OK', attributes: ai.attributes, resolved: ai.resolved, missing: [], requiredMissing: [] };

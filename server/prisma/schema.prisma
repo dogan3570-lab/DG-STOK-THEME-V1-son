@@ -129,6 +129,13 @@ model Product {
   @@index([barcode])
   @@index([variantMatch])
   @@index([categoryMatch, brandMatch, variantMatch, templateMatch])
+  // FIX(F-02): runtime'da elle oluşturulmuş index'lerin schema'ya taşınması (drift giderimi).
+  // İsimler mevcut DB index adlarıyla birebir korunur (map:) → migration farkı boş çıkar.
+  @@index([categoryMatch], map: "idx_product_categoryMatch")
+  @@index([brandMatch], map: "idx_product_brandMatch")
+  @@index([templateMatch], map: "idx_product_templateMatch")
+  @@index([variantStatus], map: "idx_product_variantStatus")
+  @@index([createdAt], map: "idx_product_createdAt")
 }
 
 model VariantAnalysis {
@@ -174,6 +181,7 @@ model ProductMarketplaceState {
   @@unique([productId, marketplaceId])
   @@index([marketplaceId])
   @@index([status])
+  @@index([productId], map: "idx_pms_productId")
 }
 
 model XmlImportRun {
@@ -315,6 +323,7 @@ model CategoryMapping {
   category      Category     @relation(fields: [categoryId], references: [id])
 
   @@unique([categoryId, marketplaceId, source])
+  @@index([marketplaceId], map: "idx_cm_marketplaceId")
 }
 
 model BrandMapping {
@@ -413,6 +422,10 @@ model WorkflowState {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   product      Product  @relation(fields: [productId], references: [id])
+
+  // FIX(F-02): runtime drift → schema
+  @@index([status], map: "idx_ws_status")
+  @@index([readiness], map: "idx_ws_readiness")
 }
 
 model WorkflowTimeline {
@@ -498,6 +511,10 @@ model AIDecisionLog {
   accepted    Boolean?
   actorUserId String?
   createdAt   DateTime @default(now())
+
+  // FIX(F-02): runtime drift → schema
+  @@index([module], map: "idx_aidl_module")
+  @@index([productId], map: "idx_aidl_productId")
 }
 
 model AIProviderConfig {
@@ -570,4 +587,5 @@ model ListingLog {
   @@index([productId])
   @@index([marketplaceId])
   @@index([createdAt])
+  @@index([productId, marketplaceId], map: "idx_ll_composite")
 }

@@ -1,6 +1,8 @@
 const { chromium } = require('playwright');
 const jwt = require('./server/node_modules/jsonwebtoken');
-const JWT_SECRET = 'a-very-secure-secret-key-that-is-at-least-32-characters-long!';
+// SECRET FIX: gerçek secret source'tan kaldırıldı — env yoksa test güvenli şekilde FAIL olur.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) { console.error('FAIL | JWT_SECRET env is required (secrets must not be hardcoded)'); process.exit(1); }
 const ADMIN_USER_ID = 'b5b56b5c-0dcd-4020-a70f-eb3f6108470d';
 
 (async () => {

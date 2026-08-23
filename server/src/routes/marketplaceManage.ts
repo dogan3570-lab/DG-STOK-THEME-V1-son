@@ -3,6 +3,8 @@ import type { Request, Response } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
 import { encryptCredential } from '../services/crypto.ts';
+import { reconcileMarketplace } from '../services/marketplaceReconcile.ts';
+import { invalidateOperationalMarketplaceCache, countOperationalMarketplaces } from '../services/marketplaceTruth.ts';
 
 const router = Router();
 
@@ -65,13 +67,14 @@ router.get('/', requireAuth, requireRole(['ADMIN']), async (_req: Request, res: 
 // GET /stats - Marketplace stats
 router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
   try {
-    const [total, active, errorCount, productCount] = await Promise.all([
+    const [total, active, errorCount, productCount, operational] = await Promise.all([
       prisma.marketplace.count(),
       prisma.marketplace.count({ where: { active: true } }),
       prisma.marketplace.count({ where: { apiStatus: 'error' } }),
       prisma.productMarketplaceState.count(),
+      countOperationalMarketplaces(),
     ]);
-    res.json({ total, active, errorCount, productCount });
+    res.json({ total, active, errorCount, productCount, operational });
   } catch (error) {
     console.error('Error fetching marketplace stats:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch marketplace stats' } });
@@ -112,6 +115,19 @@ router.post('/', requireAuth, requireRole(['ADMIN']), async (req: Request, res: 
         active: active !== undefined ? active : true,
       },
     });
+
+    // LIFECYCLE: Yeni marketplace aktif olarak oluşturulduysa, mevcut ürünlerin PMS durumunu kapat.
+    // Bu, XML import'unun marketplace yokluğunda PMS oluşturmayı atlamasının önüne geçer.
+    invalidateOperationalMarketplaceCache();
+    if (mp.active) {
+      const actorUserId = (req as any).actor?.userId ?? null;
+      void reconcileMarketplace(mp.id, { actorUserId }).then((result) => {
+        console.log(`[Marketplace] Auto-reconcile ${mp.name} (creation): ${result.message}`);
+      }).catch((err) => {
+        console.error(`[Marketplace] Auto-reconcile failed for ${mp.name}:`, err);
+      });
+    }
+
     const { settings: respSettings, refreshTokenConfigured } = sanitizeSettings(safeParseSettings(mp.settings));
     res.json({
       ok: true,
@@ -140,7 +156,7 @@ router.put('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, res
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz marketplace ID formatı' } });
     }
 
-    const existing = await prisma.marketplace.findUnique({ where: { id }, select: { id: true, settings: true } });
+    const existing = await prisma.marketplace.findUnique({ where: { id }, select: { id: true, settings: true, active: true } });
     if (!existing) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
     }
@@ -154,6 +170,9 @@ router.put('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, res
     if (req.body?.storeId !== undefined) data.storeId = req.body.storeId;
     if (req.body?.active !== undefined) data.active = req.body.active;
     if (req.body?.apiStatus !== undefined) data.apiStatus = req.body.apiStatus;
+
+    const wasActive = existing.active;
+    const becomingActive = req.body?.active === true;
 
     // settings merge: mevcut encrypted refreshToken, yeni değer girilmedikçe korunur (RT-P0-09)
     if (req.body?.settings !== undefined || req.body?.sellerId !== undefined || req.body?.refreshToken !== undefined) {
@@ -175,6 +194,20 @@ router.put('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, res
     }
 
     const mp = await prisma.marketplace.update({ where: { id }, data });
+    invalidateOperationalMarketplaceCache();
+
+    // VERİ KÖPRÜSÜ backfill: pazaryeri pasif->aktif geçişinde mevcut ürünlerin
+    // PMS durumunu kapat (yalnızca eksik PENDING oluşturur; idempotent, resumable).
+    // Yanıtı bloklamaz — asenkron çalışır; sonuç AuditLog'a yazılır.
+    if (becomingActive && !wasActive) {
+      const actorUserId = (req as any).actor?.userId ?? null;
+      void reconcileMarketplace(mp.id, { actorUserId }).then((res) => {
+        console.log(`[Marketplace] Activation reconcile ${mp.name}: ${res.message}`);
+      }).catch((err) => {
+        console.error(`[Marketplace] Activation reconcile failed for ${mp.name}:`, err);
+      });
+    }
+
     const { settings: respSettings, refreshTokenConfigured } = sanitizeSettings(safeParseSettings(mp.settings));
     res.json({
       ok: true,
@@ -215,6 +248,7 @@ router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, 
       await tx.order.deleteMany({ where: { marketplaceId: id } });
       await tx.marketplace.delete({ where: { id } });
     });
+    invalidateOperationalMarketplaceCache();
 
     res.json({ ok: true, message: 'Pazaryeri silindi' });
   } catch (error: any) {
@@ -248,6 +282,30 @@ router.post('/:id/test', requireAuth, requireRole(['ADMIN']), async (req: Reques
   } catch (error) {
     console.error('Error testing marketplace:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Connection test failed' } });
+  }
+});
+
+// POST /:id/reconcile - VERİ KÖPRÜSÜ backfill (idempotent, resumable, chunked)
+router.post('/:id/reconcile', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id ?? '');
+    const mp = await prisma.marketplace.findUnique({ where: { id }, select: { id: true, active: true, name: true } });
+    if (!mp) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+    }
+
+    const actorUserId = (req as any).actor?.userId ?? null;
+    const result = await reconcileMarketplace(id, { actorUserId, logEvery: 500 });
+    res.json({ ok: result.ok, message: result.message, stats: {
+      totalCandidates: result.totalCandidates,
+      existingCount: result.existingCount,
+      createdCount: result.createdCount,
+      chunks: result.chunks,
+      marketplaceActive: result.marketplaceActive,
+    } });
+  } catch (error) {
+    console.error('Error reconciling marketplace:', error);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Reconcile failed' } });
   }
 });
 

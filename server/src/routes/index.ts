@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Response, Request } from 'express';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/authMiddleware.ts';
+import { isMarketplaceOperational } from '../services/marketplaceTruth.ts';
 import xmlSourcesRoutes from './xmlSources.ts';
 import dashboardRoutes from './dashboard.ts';
 import productsRoutes from './products.ts';
@@ -72,11 +73,18 @@ router.get('/marketplaces', requireAuth, requireRole(['ADMIN']), async (_req, re
         apiUrl: true,
         apiStatus: true,
         active: true,
+        apiKey: true,
+        apiSecret: true,
         createdAt: true,
         updatedAt: true,
       },
     });
-    return res.json({ items });
+    // Include operational flag (computed server-side, credentials stripped from response)
+    const result = items.map(({ apiKey, apiSecret, ...rest }) => ({
+      ...rest,
+      operational: isMarketplaceOperational({ active: rest.active, apiKey, apiSecret, apiUrl: rest.apiUrl }),
+    }));
+    return res.json({ items: result });
   } catch (error) {
     return handleDbError(res, error);
   }

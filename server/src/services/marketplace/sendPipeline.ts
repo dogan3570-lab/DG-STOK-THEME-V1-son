@@ -12,9 +12,11 @@ export interface SendPipelineResult {
   productId: string;
   marketplaceId: string;
   ok: boolean;
-  status: 'ACTIVE' | 'ERROR' | 'SENDING' | 'DUPLICATE';
+  status: 'ACTIVE' | 'ERROR' | 'SENDING' | 'DUPLICATE' | 'NOT_CONFIGURED' | 'NOT_READY' | 'TEMPLATE_NOT_FOUND';
   duplicate: boolean;
   externalListingId: string | null;
+  listingUrl: string | null;
+  externalRef: string | null;
   errorCode: string | null;
   errorMessage: string | null;
 }
@@ -23,6 +25,7 @@ export interface SendPipelineInput {
   productId: string;
   marketplaceId: string;
   xmlSourceId: string;
+  payload?: any;
 }
 
 function safeHashRef(value: string | null): string {
@@ -38,6 +41,8 @@ function errorResult(input: SendPipelineInput, code: string, message: string): S
     status: 'ERROR',
     duplicate: false,
     externalListingId: null,
+    listingUrl: null,
+    externalRef: null,
     errorCode: code,
     errorMessage: message,
   };
@@ -51,6 +56,8 @@ function duplicateResult(input: SendPipelineInput, status: 'ACTIVE' | 'SENDING')
     status: 'DUPLICATE',
     duplicate: true,
     externalListingId: null,
+    listingUrl: null,
+    externalRef: null,
     errorCode: 'DUPLICATE',
     errorMessage: status === 'ACTIVE' ? 'Ürün zaten bu pazaryerinde aktif' : 'Ürün şu anda gönderiliyor',
   };
@@ -265,6 +272,8 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
       status: 'SENDING',
       duplicate: false,
       externalListingId: null,
+      listingUrl: null,
+      externalRef: null,
       errorCode: 'APPROVAL_PENDING',
       errorMessage: 'Ürün Trendyol kuyruğuna alındı; gerçek external ID doğrulanmadan ACTIVE üretilmez',
     };
@@ -298,6 +307,8 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
       status: 'ACTIVE',
       duplicate: false,
       externalListingId: result.externalListingId,
+      listingUrl: result.listingUrl,
+      externalRef: result.externalRef,
       errorCode: null,
       errorMessage: null,
     };
@@ -315,14 +326,16 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
     `code=${err.code} durationMs=${durationMs}`
   );
 
-  return {
-    productId: input.productId,
-    marketplaceId: input.marketplaceId,
-    ok: false,
-    status: 'ERROR',
-    duplicate: false,
-    externalListingId: null,
-    errorCode: err.code,
-    errorMessage: err.message,
-  };
+return {
+      productId: input.productId,
+      marketplaceId: input.marketplaceId,
+      ok: false,
+      status: 'ERROR',
+      duplicate: false,
+      externalListingId: null,
+      listingUrl: null,
+      externalRef: null,
+      errorCode: err.code,
+      errorMessage: err.message,
+    };
 }

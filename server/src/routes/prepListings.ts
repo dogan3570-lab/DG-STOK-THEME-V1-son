@@ -5,6 +5,7 @@ import {
   calculatePrice as calcPrice, renderTitle, renderDescription, validateProduct,
   simulatePrices, generatePreview, generateBarcode, calculateStock, getForbiddenWords,
 } from '../services/listingEngine.ts';
+import {reconcileProductGates, queueReconcileProductGates} from '../services/readinessService.ts';
 
 const router = Router();
 
@@ -461,6 +462,9 @@ router.post('/:id/apply-all', requireAuth, requireRole(['ADMIN', 'OPERATOR']), a
         return prisma.product.update({ where: { id: p.id }, data: { salePrice: Math.round(salePrice * 100) / 100 } });
       });
       await Promise.all(updates);
+      for (const p of batch) {
+        queueReconcileProductGates(p.id);
+      }
       updatedCount += batch.length;
     }
     return res.json({ ok: true, updatedCount, message: `${updatedCount} ürüne şablon fiyatları uygulandı` });

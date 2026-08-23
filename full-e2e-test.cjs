@@ -7,12 +7,14 @@ const { chromium } = require('playwright');
   const P = (n) => { N++; R.push('[PASS] #'+N+' '+n); console.log(R[R.length-1]); };
   const F = (n,e) => { N++; R.push('[FAIL] #'+N+' '+n+': '+e); console.error(R[R.length-1]); };
   const S = (n,d) => { N++; R.push('[STUB] #'+N+' '+n+': '+d); console.log(R[R.length-1]); };
+  // SECRET FIX: gerçek credential source code'dan kaldırıldı — env yoksa test güvenli şekilde FAIL olur.
+  const requiredEnv = (k) => { const v = process.env[k]; if (!v) throw new Error(k + ' is required (secrets must not be hardcoded)'); return v; };
   const api = async (u,o={}) => { const h={'Content-Type':'application/json',...o.headers}; if(TK)h['Authorization']='Bearer '+TK; const r=await fetch('http://localhost:4000'+u,{...o,headers:h,credentials:'include'}); try{return await r.json();}catch(e){return {_error:true,status:r.status};}};
 
   try {
     // === A: AUTH ===
     console.log('\n===== A: AUTH =====');
-    const lr = await api('/auth/login',{method:'POST',body:JSON.stringify({email:'admin@dgstok.com',password:'admin123'})});
+    const lr = await api('/auth/login',{method:'POST',body:JSON.stringify({email: process.env.TEST_ADMIN_EMAIL || 'admin@dgstok.com', password: requiredEnv('TEST_ADMIN_PASSWORD')})});
     if(lr.ok&&lr.token){P('A1: Login OK');TK=lr.token;}else{F('A1: Login',JSON.stringify(lr));throw new Error('no auth');}
     const me = await api('/auth/me');
     if(me.id&&me.email==='admin@dgstok.com'&&me.role==='ADMIN')P('A2: /auth/me OK (ADMIN)');else F('A2: /auth/me',JSON.stringify(me));
@@ -62,15 +64,15 @@ const { chromium } = require('playwright');
     if(nmp.ok&&nmp.item?.id){P('E2: MP create OK (key=rt-mp-'+TS+')');IDS.mp=nmp.item.id;}else F('E2: MP create',JSON.stringify(nmp));
     if(IDS.mp){
       const fc=await api('/marketplace-manage');const f=fc.items.find(m=>m.id===IDS.mp);
-      if(f?.apiKey==='RT_KEY_001'&&f?.apiSecret==='RT_SECRET_001')P('E3: MP DB persist OK');else F('E3: MP DB',JSON.stringify(f));
+      if(f?.apiKeyConfigured===true&&f?.apiSecretConfigured===true)P('E3: MP DB persist OK');else F('E3: MP DB',JSON.stringify(f));
       await api('/marketplace-manage/'+IDS.mp,{method:'PUT',body:JSON.stringify({name:'RT_TEST_MP',apiKey:'RT_KEY_001',apiSecret:'RT_SECRET_001',sellerId:'SELLER_999',active:true})});
       const fc2=await api('/marketplace-manage');const f2=fc2.items.find(m=>m.id===IDS.mp);
       let s={};try{s=JSON.parse(f2?.settings||'{}');}catch(e){}
-      if(f2?.apiKey==='RT_KEY_001'&&f2?.apiSecret==='RT_SECRET_001'&&s.sellerId==='SELLER_999')P('E4: MP partial update NO data loss');else F('E4: MP data loss',JSON.stringify({k:f2?.apiKey,s:f2?.apiSecret,sid:s.sellerId}));
+      if(f2?.apiKeyConfigured===true&&f2?.apiSecretConfigured===true&&s.sellerId==='SELLER_999')P('E4: MP partial update NO data loss');else F('E4: MP data loss',JSON.stringify({k:f2?.apiKeyConfigured,s:f2?.apiSecretConfigured,sid:s.sellerId}));
       await api('/marketplace-manage/'+IDS.mp,{method:'PUT',body:JSON.stringify({name:'RT_TEST_MP',apiKey:'RT_KEY_001',apiSecret:'RT_SECRET_001',sellerId:'S_UPD',active:true})});
       const fc3=await api('/marketplace-manage');const f3=fc3.items.find(m=>m.id===IDS.mp);
       let s2={};try{s2=JSON.parse(f3?.settings||'{}');}catch(e){}
-      if(f3?.apiKey==='RT_KEY_001'&&f3?.apiSecret==='RT_SECRET_001'&&s2.sellerId==='S_UPD')P('E5: MP sellerId update preserved creds');else F('E5: MP update','lost data');
+      if(f3?.apiKeyConfigured===true&&f3?.apiSecretConfigured===true&&s2.sellerId==='S_UPD')P('E5: MP sellerId update preserved creds');else F('E5: MP update','lost data');
       const tc=await api('/marketplace-manage/'+IDS.mp+'/test',{method:'POST'});
       S('E6: MP connection test','Simulated — only checks apiUrl');
       const ms=await api('/marketplace-manage/stats');
@@ -113,7 +115,7 @@ const { chromium } = require('playwright');
 
     // === J: READY TO SHIP ===
     console.log('\n===== J: READY TO SHIP =====');
-    const rs=await api('/ready-to-ship/stats');if(rs.totalProducts!==undefined)P('J1: RTS stats OK (total='+rs.totalProducts+', ready='+rs.readyCount+')');else F('J1: RTS stats','');
+    const rs=await api('/ready-to-ship/stats');if(rs.productUniverseCount!==undefined)P('J1: RTS stats OK (total='+rs.productUniverseCount+', ready='+rs.readyCount+')');else F('J1: RTS stats',JSON.stringify(rs));
     const rl=await api('/ready-to-ship?page=1&limit=5');if(rl.items)P('J2: RTS list OK ('+rl.items.length+' items)');else F('J2: RTS list','');
 
     // === K: ORDERS ===

@@ -7,6 +7,7 @@ import {
   loadTrendyolMarketplaceId,
   previewProducts,
   applyVerifiedMatch,
+  applyVerifiedMatchesBatch,
   classifyByRule,
   classifyByAi,
   type MatchDecision,
@@ -85,15 +86,11 @@ router.post('/run', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req:
       for (const [k, v] of ai.decisions) decisions.set(k, v);
     }
 
-    const results = [];
-    let applied = 0;
-    for (const d of decisions.values()) {
-      const r = await applyVerifiedMatch(d, marketplaceId);
-      if (r.applied) applied++;
-      results.push(r);
-    }
+    // FIX(F-03): ürün başına sıralı ~6 DB roundtrip yerine tek preload + chunk'lı
+    // transaction. Gate mantığı ve sonuç şeması (results/applied) birebir korunur.
+    const batch = await applyVerifiedMatchesBatch(Array.from(decisions.values()), marketplaceId);
 
-    return res.json({ ok: true, scanned: results.length, applied, results });
+    return res.json({ ok: true, scanned: batch.results.length, applied: batch.applied, results: batch.results });
   } catch (error) {
     console.error('[category-engine] run error:', error);
     return res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Eşleştirme uygulanamadı' } });

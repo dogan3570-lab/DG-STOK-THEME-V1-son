@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
 import { runVariantMatchFlow } from '../services/variantMatch.ts';
 import { detectVariantAttributes } from '../services/readiness.ts';
 import { fetchTrendyolCategoryAttributes, fetchTrendyolAttributeValues } from '../services/trendyolCatalog.ts';
+import {reconcileProductGates, queueReconcileProductGates} from '../services/readinessService.ts';
 
 /** Gerçek varyant alanları — AKYI ve HBT/DGLIVE önekli çöp alanlar hariç. */
 const REAL_VARIANT_NAMES = new Set(['Renk', 'Beden', 'Numara', 'Kapasite', 'Hacim', 'Cinsiyet', 'Materyal', 'Model']);
@@ -277,7 +278,7 @@ router.post('/batch', requireAuth, async (req, res) => {
         created += batch.length;
       }
     }
-    if (created > 0) await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { variantMatch: true } });
+    if (created > 0) { await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { variantMatch: true } }); for (const pid of productIds) { queueReconcileProductGates(pid); } }
     await prisma.auditLog.create({ data: { action: 'BATCH_VARIANT_CREATE', entity: 'variant', details: `Toplu varyant: ${created} adet ${name}:${value}`, actorUserId: (req as any).actor?.userId || null } });
     return res.json({ created, skipped: productIds.length - created, message: `${created} varyant olusturuldu, ${productIds.length - created} zaten vardi` });
   } catch (error) {
@@ -360,7 +361,7 @@ router.post('/bulk-match', requireAuth, async (req, res) => {
       }
     }
     const uniqueProductIds = [...new Set(allProductIds)];
-    if (uniqueProductIds.length > 0) await prisma.product.updateMany({ where: { id: { in: uniqueProductIds } }, data: { variantMatch: true } });
+    if (uniqueProductIds.length > 0) { await prisma.product.updateMany({ where: { id: { in: uniqueProductIds } }, data: { variantMatch: true } }); for (const pid of uniqueProductIds) { queueReconcileProductGates(pid); } }
     await prisma.auditLog.create({ data: { action: 'BULK_VARIANT_MATCH', entity: 'variant', details: `Toplu eslestirme: ${totalCreated} varyant, ${uniqueProductIds.length} urun`, actorUserId: (req as any).actor?.userId || null } });
     return res.json({ totalCreated, totalProducts: uniqueProductIds.length, message: `${totalCreated} varyant ${uniqueProductIds.length} urune eklendi` });
   } catch (error) {
@@ -646,6 +647,7 @@ router.post('/confirm-match', requireAuth, async (req, res) => {
       const { productId } = match;
       if (!productId) continue;
       await prisma.product.update({ where: { id: productId }, data: { variantMatch: true } });
+      queueReconcileProductGates(productId);
       updatedIds.push(productId);
     }
 
@@ -672,7 +674,9 @@ router.post('/manual-match', requireAuth, async (req, res) => {
     for (const match of matches) {
       const { productIds } = match;
       if (!Array.isArray(productIds)) continue;
-      await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { variantMatch: true } });
+    await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { variantMatch: true } });
+    for (const pid of productIds) { queueReconcileProductGates(pid); }
+      for (const pid of productIds) { queueReconcileProductGates(pid); }
       allUpdatedIds.push(...productIds);
     }
 
@@ -696,6 +700,7 @@ router.post('/approve', requireAuth, async (req, res) => {
     }
 
     await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { variantMatch: true } });
+    for (const pid of productIds) { queueReconcileProductGates(pid); }
 
     await prisma.auditLog.create({
       data: { action: 'V5_APPROVE', entity: 'variant', details: `V5 onay: ${productIds.length} urun`, actorUserId: (req as any).actor?.userId || null },
@@ -736,6 +741,7 @@ router.post('/reanalyze', requireAuth, async (req, res) => {
             });
           }
           await prisma.product.update({ where: { id: productId }, data: { variantMatch: true } });
+          queueReconcileProductGates(productId);
         }
         analyzed++;
       } catch {
@@ -787,6 +793,7 @@ router.post('/scan', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req
 
     if (matchedProductIds.length > 0) {
       await prisma.product.updateMany({ where: { id: { in: matchedProductIds } }, data: { variantMatch: true } });
+      for (const pid of matchedProductIds) { queueReconcileProductGates(pid); }
       totalProductsWithVariants = matchedProductIds.length;
     }
 
@@ -895,6 +902,7 @@ router.post('/', requireAuth, async (req, res) => {
     const item = await prisma.variant.create({ data: { name, value, productId: productId || undefined } });
     if (productId) {
       await prisma.product.update({ where: { id: productId }, data: { variantMatch: true } });
+      queueReconcileProductGates(productId);
     }
     await prisma.auditLog.create({ data: { action: 'VARIANT_CREATE', entity: 'variant', details: `Varyant olusturuldu: ${name}:${value} ${productId ? `(urun: ${productId})` : ''}`, actorUserId: (req as any).actor?.userId || null } });
     return res.status(201).json({ item });
@@ -1062,7 +1070,8 @@ router.post('/manual-match-v2', requireAuth, requireRole(['ADMIN', 'OPERATOR']),
       create: { productId, name: variantName, value: variantValue },
       update: {},
     });
-    await prisma.product.update({ where: { id: productId }, data: { variantMatch: true, variantStatus: 'COMPLETED', matchedBy: 'manual', lastMatchDate: new Date() } });
+    await prisma.product.update({ where: { id: productId }, data: { variantMatch: true, variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
+    queueReconcileProductGates(productId);
 
     const existing = await prisma.variantAnalysis.findFirst({ where: { productId } });
     const analysisData = {

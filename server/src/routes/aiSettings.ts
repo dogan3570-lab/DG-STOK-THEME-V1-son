@@ -4,6 +4,7 @@ import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
 import { encryptApiKey } from '../services/crypto.ts';
 import { getAllProviders, testProvider, getOpenRouterFreeModels } from '../services/aiGateway.ts';
+import { getOpenRouterStatus, discoverAndPersist, getRegistry } from '../services/openRouterManager.ts';
 
 const router = Router();
 
@@ -58,6 +59,39 @@ router.get('/openrouter/models', requireAuth, requireRole(['ADMIN']), async (_re
     const msg = error instanceof Error ? error.message : 'Katalog alınamadı';
     const status = msg.includes('yapılandırılmamış') ? 400 : 502;
     res.status(status).json({ ok: false, error: { code: 'OPENROUTER_CATALOG_FAILED', message: msg } });
+  }
+});
+
+// GET /ai-settings/openrouter/status — AI Control Center durum paneli
+router.get('/openrouter/status', requireAuth, async (_req: Request, res: Response) => {
+  try {
+    const status = await getOpenRouterStatus();
+    res.json({ ok: true, status });
+  } catch (error) {
+    console.error('[ai-settings] openrouter/status error:', error);
+    res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'OpenRouter durumu alınamadı' } });
+  }
+});
+
+// POST /ai-settings/openrouter/discover — Model discovery tetikle (manuel, backoff'a uyar)
+router.post('/openrouter/discover', requireAuth, requireRole(['ADMIN']), async (_req: Request, res: Response) => {
+  try {
+    const result = await discoverAndPersist();
+    res.json({ ok: result.ok, freeCount: result.freeCount, totalCount: result.totalCount, error: result.error });
+  } catch (error) {
+    console.error('[ai-settings] openrouter/discover error:', error);
+    res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Model keşfi başarısız' } });
+  }
+});
+
+// GET /ai-settings/openrouter/registry — DB'deki model registry içeriği (admin)
+router.get('/openrouter/registry', requireAuth, requireRole(['ADMIN']), async (_req: Request, res: Response) => {
+  try {
+    const registry = await getRegistry();
+    res.json({ ok: true, registry });
+  } catch (error) {
+    console.error('[ai-settings] openrouter/registry error:', error);
+    res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Registry alınamadı' } });
   }
 });
 

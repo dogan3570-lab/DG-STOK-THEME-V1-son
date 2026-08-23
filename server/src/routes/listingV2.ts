@@ -332,14 +332,27 @@ router.post('/bulk-list', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async
 
 router.get('/logs', requireAuth, async (req: AuthedRequest, res: any) => {
   try {
+    // FIX(F-05): sınırsız take kaldırıldı → sayfalı sözleşme (page/limit/total/totalPages/hasNext/hasPrevious).
+    // Geriye uyumluluk: `items` alanı ve varsayılan limit=100 korunur; üst sınır 500.
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const parsedLimit = parseInt(String(req.query.limit ?? '100'), 10);
+    const limit = Math.min(Number.isFinite(parsedLimit) && parsedLimit >= 1 ? parsedLimit : 100, 500);
     const where: any = {};
     if (req.query.marketplaceId) where.marketplaceId = req.query.marketplaceId;
-    const logs = await prisma.listingLog.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      take: Number(req.query.limit) || 100,
+    const [logs, total] = await Promise.all([
+      prisma.listingLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.listingLog.count({ where }),
+    ]);
+    const totalPages = Math.ceil(total / limit);
+    res.json({
+      items: logs,
+      pagination: { page, limit, total, totalPages, hasNext: page < totalPages, hasPrevious: page > 1 },
     });
-    res.json({ items: logs });
   } catch (e) { handleRouteError(res, e); }
 });
 

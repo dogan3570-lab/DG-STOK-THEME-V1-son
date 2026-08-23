@@ -8,7 +8,7 @@
  */
 import { prisma } from '../db/prisma.ts';
 import { resolveListingTemplate, hasListingTemplate, type ResolvedListingTemplate } from './listingTemplateResolver.ts';
-import { resolveListingPrice, parsePriceRangeRules } from './listingPriceResolver.ts';
+import { resolveListingPrice } from './listingPriceResolver.ts';
 import { fetchTrendyolCategoryAttributes, fetchTrendyolAttributeValues } from './trendyolCatalog.ts';
 import { resolveTrendyolAttributes, type TrendyolPayloadAttribute } from './trendyolVariantResolver.ts';
 
@@ -198,12 +198,30 @@ export async function evaluateTrendyolSendGate(input: EvaluateSendGateInput): Pr
     });
   }
 
-  // 5) PRICE — KDV dahil XML alış fiyatı + şablon fiyat kuralı (fail-closed)
-  const templateRow = await prisma.listingTemplate.findUnique({
-    where: { id: template.id as string },
-    select: { priceRangeRules: true },
+  // 5) PRICE — AUTHORITATIVE BASE = Product.salePrice.
+  // Kurallar canonical olarak MarketplacePricingRule'dan okunur (aktif bantlar);
+  // ListingTemplate.priceRangeRules fiyat hesabinda ARTIK KULLANILMAZ, boylece
+  // sablon eksikligi fiyati gereksiz yere bloklamaz. purchasePrice satis
+  // hesabina GIRMEZ (yalnizca UI bilgilendirmede). Fail-closed korunur:
+  // salePrice gecersizse veya uygun bant yoksa gate FAIL olur, sahte fiyat uretilmez.
+  const pricingRules = await prisma.marketplacePricingRule.findMany({
+    where: {
+      marketplaceId: input.marketplaceId,
+      active: true,
+      OR: [{ xmlSourceId: input.xmlSourceId }, { xmlSourceId: null }],
+    },
+    orderBy: { minPrice: 'asc' },
   });
-  const priceResult = resolveListingPrice(product.purchasePrice, parsePriceRangeRules(templateRow?.priceRangeRules ?? null));
+  const priceResult = resolveListingPrice(
+    product.salePrice,
+    pricingRules.map((r) => ({
+      minPrice: r.minPrice,
+      maxPrice: r.maxPrice,
+      profitMargin: r.profitMargin,
+      fixedAmount: r.fixedAmount,
+      rounding: r.rounding ?? undefined,
+    })),
+  );
   if (priceResult.status !== 'OK') {
     return failedResult(priceResult.status, priceResult.reason ?? 'Listing fiyatı hesaplanamadı', {
       category: PASS,

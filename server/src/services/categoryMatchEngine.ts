@@ -15,6 +15,10 @@ import { prisma } from '../db/prisma.ts';
 import { normalizeName } from './categoryBrandMapper.ts';
 import { matchCategoriesWithAI, chatCompletion, sanitizeJsonControlChars, type ProductForMatch, type CategoryCandidate } from './aiGateway.ts';
 
+// FIX(build): V3 servisleri bu tipi categoryMatchEngine üzerinden import ediyor.
+import type { StageCandidate } from './aiGateway.ts';
+export type { StageCandidate };
+
 export interface LeafInfo {
   id: string;            // Category.uuid
   externalId: number;    // gerçek Trendyol numeric ID
@@ -113,7 +117,16 @@ export async function loadTrendyolMarketplaceId(): Promise<string | null> {
 
 // ==================== RULE-BASED ADAY ÜRETİMİ (AUTO DEĞİL) ====================
 
-function tokensOf(text: string): string[] {
+// FIX(build): productUnderstanding/categoryCanonical/scripts tarafından import edilir.
+// FIX(build): productUnderstanding.extractCoreFromCleanedTitle bu kumeyi import eder.
+// Urun tipi cikariminda anlam tasimayan genel ticaret kelimeleri.
+export const GENERIC_CATEGORY_TOKENS = new Set<string>([
+  'urun', 'urunler', 'adet', 'takim', 'set', 'cesit', 'model', 'marka',
+  'renk', 'beden', 'numara', 'boyut', 'ozel', 'yeni', 'kaliteli',
+  'product', 'products', 'piece', 'pieces', 'kit', 'pack',
+  'assorted', 'various', 'generic', 'item', 'items',
+]);
+export function tokensOf(text: string): string[] {
   return Array.from(new Set(
     (text || '').toLowerCase().split(/[^a-z0-9çğıöşü]+/).map((t) => t.trim()).filter((t) => t.length >= 3)
   ));
@@ -250,7 +263,7 @@ export function classifyByRule(product: { id: string; xmlKey: string; title: str
 
 // ==================== AI ADAY ÜRETİMİ ====================
 
-function buildAiCandidates(product: { title: string | null; supplierCategory: string | null }, tree: TreeIndex, ruleCandidates: Candidate[], topK: number): CategoryCandidate[] {
+export function buildAiCandidates(product: { title: string | null; supplierCategory: string | null }, tree: TreeIndex, ruleCandidates: Candidate[], topK: number): CategoryCandidate[] {
   const leafTok = leafToken(product.supplierCategory || '');
   const xmlTokens = new Set(pathTokens(product.supplierCategory || '').filter((t) => t.length >= 3));
   const titleTokens = tokensOf(product.title || '');
@@ -280,6 +293,32 @@ function buildAiCandidates(product: { title: string | null; supplierCategory: st
   }
 
   return out.slice(0, topK);
+}
+
+// ==================== V3 SEMANTIC STAGE (FIX/build) ====================
+
+/**
+ * FIX(build): categoryCore.runFullPipeline bu fonksiyonu import ediyordu ama engine'de
+ * tanımlı değildi → modül yüklenemiyordu (ölü kod). Deterministik ve yalnızca mevcut
+ * buildAiCandidates skorlamasını StageCandidate sözleşmesine çeviren minimal implementasyon.
+ * Yeni eşik/skor semantiği EKLENMEDİ; canlı (klasik) pipeline bu fonksiyonu kullanmaz.
+ */
+export function buildSemanticCandidates(
+  identity: { coreObject: string },
+  tree: TreeIndex,
+  topK: number,
+): StageCandidate[] {
+  const pseudo = { title: identity?.coreObject ?? '', supplierCategory: null as string | null };
+  const ranked = buildAiCandidates(pseudo, tree, [], topK);
+  return ranked.map((c, i) => ({
+    id: c.id,
+    name: c.name,
+    fullPath: c.fullPath,
+    matchStage: 'semantic',
+    matchScore: Math.max(1, 100 - i * 5),
+    semanticFit: i === 0 ? 'STRONG' : 'UNKNOWN',
+    externalId: tree.leafById.get(c.id)?.externalId ?? null,
+  }));
 }
 
 // ==================== AI İKİNCİ DOĞRULAMA (STRICT VERIFIER) ====================
@@ -337,8 +376,11 @@ Return ONLY the JSON.`;
     return out;
   }
 
+  // FIX(jsonstr-scope): jsonStr catch bloğunda da kullanıldığı için try dışında tanımlanmalı;
+  // aksi halde bozuk AI yanıtında ReferenceError fırlayıp fail-closed yerine endpoint 500 olurdu.
+  let jsonStr = '';
   try {
-    let jsonStr = String(res.content).trim();
+    jsonStr = String(res.content).trim();
     if (jsonStr.startsWith('```')) jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
     const match = jsonStr.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('JSON yok');
@@ -361,7 +403,25 @@ Return ONLY the JSON.`;
       if (!out.has(i.productId)) out.set(i.productId, byId.get(i.productId) || { verdict: false, confidence: 0, reason: 'Doğrulama yanıtında ürün yok' });
     }
   } catch (e) {
-    for (const i of items) out.set(i.productId, { verdict: false, confidence: 0, reason: `Doğrulama yanıtı bozuk: ${String(e instanceof Error ? e.message : e)}` });
+    const productRegex = /"productId"\s*:\s*"([^"]+)"\s*,\s*"verdict"\s*:\s*"([^"]+)"\s*,\s*"confidence"\s*:\s*([0-9]+(?:\.[0-9]+)?)/g;
+    let m: RegExpExecArray | null;
+    while ((m = productRegex.exec(jsonStr)) !== null) {
+      const productId = m[1];
+      const verdict = m[2].toUpperCase() === 'YES';
+      const confidence = parseFloat(m[3]);
+      if (!out.has(productId)) {
+        out.set(productId, {
+          verdict,
+          confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
+          reason: 'Regex recovery from malformed JSON',
+        });
+      }
+    }
+    for (const i of items) {
+      if (!out.has(i.productId)) {
+        out.set(i.productId, { verdict: false, confidence: 0, reason: `Do\u011frulama yan\u0131t\u0131 bozuk: ${String(e instanceof Error ? e.message : e)}` });
+      }
+    }
   }
 
   return out;
@@ -387,19 +447,18 @@ export async function classifyByAi(
   const decisions = new Map<string, MatchDecision>();
   if (products.length === 0) return { ok: true, provider: 'none', model: 'none', decisions };
 
-  // Her ürün için kural adayı + başlık skoru birleştirilmiş GERÇEK leaf adayları
-  const candidatesByProduct = new Map<string, CategoryCandidate[]>();
-  for (const p of products) {
-    const rule = classifyByRule(p, tree);
-    const cands = buildAiCandidates(p, tree, rule.candidates, topK);
-    candidatesByProduct.set(p.id, cands);
+  const BATCH_SIZE = 10;
+  const batches: ProductForMatch[][] = [];
+  for (let i = 0; i < products.length; i += BATCH_SIZE) {
+    batches.push(products.slice(i, i + BATCH_SIZE));
   }
 
-  const allCandidates = Array.from(new Map(
-    products.flatMap((p) => candidatesByProduct.get(p.id) || []).map((c) => [c.id, c])
-  ).values());
+  const candidatesByProduct = new Map<string, CategoryCandidate[]>();
+  let provider = 'none';
+  let model = 'none';
+  let anyFailed = false;
+  const errors: string[] = [];
 
-  const ai = await matchCategoriesWithAI(products, allCandidates, marketplaceName);
 
   const manualFor = (p: ProductForMatch, reason: string): MatchDecision => ({
     productId: p.id, xmlKey: p.xmlKey, title: p.title, supplierCategory: p.supplierCategory, xmlBrandName: p.xmlBrandName,
@@ -407,58 +466,134 @@ export async function classifyByAi(
     reason, candidates: [], mappingExists: false, isLeaf: false,
   });
 
-  if (!ai.ok) {
-    for (const p of products) decisions.set(p.id, manualFor(p, `AI başarısız: ${ai.error || 'AI yanıt yok'}`));
-    return { ok: false, provider: ai.provider, model: ai.model, decisions, error: ai.error, errorCode: ai.errorCode };
-  }
+  // FIX(F-04): batch'ler sıralı yerine SINIRLI eşzamanlılıkla çalışır.
+  // Karar mantığı, prompt, eşikler ve provider önceliği DEĞİŞMEDİ.
+  const AI_BATCH_CONCURRENCY = 3;
+  // FIX(F-04): geçici hatalar (429/5xx/timeout/tüm-sağlayıcılar-dolu) için sınırlı backoff retry.
+  // Kalıcı hatalar (INVALID_KEY, MODEL_NOT_FOUND vb.) retry EDİLMEZ.
+  const TRANSIENT_ERROR_CODES = new Set(['RATE_LIMIT', 'TIMEOUT', 'SERVER_ERROR', 'NO_AI_PROVIDER_AVAILABLE']);
+  const RETRY_BACKOFF_MS = [1000, 2000];
 
-  for (const m of ai.matches) {
-    const p = products.find((x) => x.id === m.productId);
-    const leaf = tree.leafById.get(m.categoryId);
-    if (!p) continue;
-    if (!leaf) {
-      decisions.set(m.productId, {
-        productId: m.productId, xmlKey: p.xmlKey, title: p.title, supplierCategory: p.supplierCategory, xmlBrandName: p.xmlBrandName,
-        method: 'invalid', confidence: m.confidence, categoryId: null, externalId: null, categoryName: null, fullPath: null,
-        reason: 'AI adayı leaf değil / gerçek Trendyol kategorisi değil — REDDEDİLDİ', candidates: [], mappingExists: false, isLeaf: false,
-      });
-      continue;
+  const callWithBoundedRetry = async (batch: ProductForMatch[]) => {
+    let res = await matchCategoriesWithAI(batch, candidatesByProduct, marketplaceName);
+    for (let attempt = 0; attempt < RETRY_BACKOFF_MS.length; attempt++) {
+      if (res.ok || !TRANSIENT_ERROR_CODES.has(res.errorCode || '')) break;
+      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS[attempt]));
+      res = await matchCategoriesWithAI(batch, candidatesByProduct, marketplaceName);
+    }
+    return res;
+  };
+
+  const processBatch = async (batch: ProductForMatch[]): Promise<void> => {
+    for (const p of batch) {
+      if (!candidatesByProduct.has(p.id)) {
+        const rule = classifyByRule(p, tree);
+        const cands = buildAiCandidates(p, tree, rule.candidates, topK);
+        candidatesByProduct.set(p.id, cands);
+      }
     }
 
-    if (m.confidence >= 0.95) {
-      decisions.set(m.productId, {
-        productId: m.productId, xmlKey: p.xmlKey, title: p.title, supplierCategory: p.supplierCategory, xmlBrandName: p.xmlBrandName,
-        method: 'ai',
-        confidence: m.confidence,
-        categoryId: leaf.id,
-        externalId: leaf.externalId,
-        categoryName: leaf.name,
-        fullPath: leaf.fullPath,
-        reason: m.reason || `AI HIGH eşleşmesi (${ai.provider}/${ai.model})`,
-        candidates: [{ id: leaf.id, name: leaf.name, fullPath: leaf.fullPath, score: Math.round(m.confidence * 100) }],
-        mappingExists: false,
-        isLeaf: true,
-      });
-    } else if (m.confidence >= 0.85) {
-      decisions.set(m.productId, {
-        productId: m.productId, xmlKey: p.xmlKey, title: p.title, supplierCategory: p.supplierCategory, xmlBrandName: p.xmlBrandName,
-        method: 'ai',
-        confidence: m.confidence,
-        categoryId: null,   // MEDIUM → suggestion, auto YOK
-        externalId: leaf.externalId,
-        categoryName: leaf.name,
-        fullPath: leaf.fullPath,
-        reason: m.reason || `AI MEDIUM öneri (${ai.provider}/${ai.model}) — otomatik yazılmaz`,
-        candidates: [{ id: leaf.id, name: leaf.name, fullPath: leaf.fullPath, score: Math.round(m.confidence * 100) }],
-        mappingExists: false,
-        isLeaf: true,
-      });
-    } else {
-      decisions.set(m.productId, manualFor(p, `AI düşük güven (${m.confidence}) — MANUAL`));
-    }
-  }
+    const ai = await callWithBoundedRetry(batch);
 
-  // İKİNCİ DOĞRULAMA: yalnızca AUTO yazılacak HIGH adaylar sıkı verifier'dan geçer.
+    if (!ai.ok) {
+      anyFailed = true;
+      errors.push(ai.error || 'Batch failed');
+      for (const p of batch) {
+        const cands = candidatesByProduct.get(p.id) || [];
+        decisions.set(p.id, {
+          ...manualFor(p, `AI batch failed: ${ai.error || 'AI yanıt yok'}`),
+          candidates: cands.map((c) => ({ id: c.id, name: c.name, fullPath: c.fullPath, score: 0 })),
+        });
+      }
+      return; // FIX(F-04): eski for-loop 'continue'sunun fonksiyon karşılığı
+    }
+
+    provider = ai.provider;
+    model = ai.model;
+
+    for (const m of ai.matches) {
+      const p = products.find((x) => x.id === m.productId);
+      if (!p) continue;
+
+      if (m.decision === 'NO_SAFE_MATCH') {
+        const cands = candidatesByProduct.get(m.productId) || [];
+        decisions.set(m.productId, {
+          ...manualFor(p, `AI güvenli eşleşme bulamadı (${m.reasonCode || 'NO_SAFE_MATCH'})`),
+          candidates: cands.map((c) => ({ id: c.id, name: c.name, fullPath: c.fullPath, score: 0 })),
+        });
+        continue;
+      }
+
+      const leaf = tree.leafById.get(m.categoryId);
+      if (!leaf) {
+        decisions.set(m.productId, {
+          productId: m.productId, xmlKey: p.xmlKey, title: p.title, supplierCategory: p.supplierCategory, xmlBrandName: p.xmlBrandName,
+          method: 'invalid', confidence: m.confidence, categoryId: null, externalId: null, categoryName: null, fullPath: null,
+          reason: 'AI adayı leaf değil / gerçek Trendyol kategorisi değil — REDDEDİLDİ', candidates: [], mappingExists: false, isLeaf: false,
+        });
+        continue;
+      }
+
+      if (m.confidence >= 0.95) {
+        decisions.set(m.productId, {
+          productId: m.productId, xmlKey: p.xmlKey, title: p.title, supplierCategory: p.supplierCategory, xmlBrandName: p.xmlBrandName,
+          method: 'ai',
+          confidence: m.confidence,
+          categoryId: leaf.id,
+          externalId: leaf.externalId,
+          categoryName: leaf.name,
+          fullPath: leaf.fullPath,
+          reason: m.reason || `AI HIGH eşleşmesi (${ai.provider}/${ai.model})`,
+          candidates: [{ id: leaf.id, name: leaf.name, fullPath: leaf.fullPath, score: Math.round(m.confidence * 100) }],
+          mappingExists: false,
+          isLeaf: true,
+        });
+      } else if (m.confidence >= 0.85) {
+        decisions.set(m.productId, {
+          productId: m.productId, xmlKey: p.xmlKey, title: p.title, supplierCategory: p.supplierCategory, xmlBrandName: p.xmlBrandName,
+          method: 'ai',
+          confidence: m.confidence,
+          categoryId: null,   // MEDIUM → suggestion, auto YOK
+          externalId: leaf.externalId,
+          categoryName: leaf.name,
+          fullPath: leaf.fullPath,
+          reason: m.reason || `AI MEDIUM öneri (${ai.provider}/${ai.model}) — otomatik yazılmaz`,
+          candidates: [{ id: leaf.id, name: leaf.name, fullPath: leaf.fullPath, score: Math.round(m.confidence * 100) }],
+          mappingExists: false,
+          isLeaf: true,
+        });
+      } else {
+        const cands = candidatesByProduct.get(m.productId) || [];
+        decisions.set(m.productId, {
+          ...manualFor(p, `AI düşük güven (${m.confidence}) — MANUAL`),
+          candidates: cands.map((c) => ({ id: c.id, name: c.name, fullPath: c.fullPath, score: 0 })),
+        });
+      }
+    }
+
+    for (const p of batch) {
+      if (!decisions.has(p.id)) {
+        const cands = candidatesByProduct.get(p.id) || [];
+        decisions.set(p.id, {
+          ...manualFor(p, 'AI eşleşme dönmedi (MANUAL)'),
+          candidates: cands.map((c) => ({ id: c.id, name: c.name, fullPath: c.fullPath, score: 0 })),
+        });
+      }
+    }
+  };
+
+  // FIX(F-04): sınırlı worker havuzu — asla sınırsız Promise.all() değil.
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(AI_BATCH_CONCURRENCY, batches.length) }, async () => {
+    while (cursor < batches.length) {
+      const b = batches[cursor++];
+      await processBatch(b);
+    }
+  });
+  await Promise.all(workers);
+
+  // Not: provider/model raporlaması son başarılı batch'ten gelir (öncekiyle aynı davranış).
+
   const highDecisions = Array.from(decisions.values()).filter((d) => d.method === 'ai' && d.categoryId !== null);
   if (highDecisions.length > 0) {
     const verifyItems: VerifyItem[] = highDecisions.map((d) => ({
@@ -489,11 +624,14 @@ export async function classifyByAi(
     }
   }
 
-  for (const p of products) {
-    if (!decisions.has(p.id)) decisions.set(p.id, manualFor(p, 'AI eşleşme dönmedi (MANUAL)'));
-  }
-
-  return { ok: true, provider: ai.provider, model: ai.model, decisions };
+  return {
+    ok: !anyFailed,
+    provider,
+    model,
+    decisions,
+    error: errors.length > 0 ? errors.join('; ') : undefined,
+    errorCode: anyFailed ? 'PARTIAL_FAILURE' : undefined,
+  };
 }
 
 // ==================== DRY-RUN PREVIEW (YAZMA YOK) ====================
@@ -633,4 +771,155 @@ export async function applyVerifiedMatch(decision: MatchDecision, marketplaceId:
   }).catch(() => null);
 
   return { productId: decision.productId, applied: true, method: decision.method, externalId: decision.externalId, reason: 'OK' };
+}
+
+// ==================== TOPLU UYGULAMA (FIX F-03) ====================
+//
+// applyVerifiedMatch ile BİREBİR AYNI gate sırasını ve reddedilme sebeplerini korur;
+// fark yalnızca I/O katmanındadır:
+//  - Category / CategoryMapping / Product doğrulamaları ürün başına 3 sorgu yerine
+//    toplamda 3 preload sorgusu + Map lookup ile yapılır.
+//  - product.update + auditLog yazımları chunk'lı transaction'larda toplanır.
+//  - aIDecisionLog createMany ile yazılır (orijinalde .catch(()=>null) ile tolere
+//    ediliyordu; aynı tolerans korunur).
+// Karar mantığı, eşikler (0.95), state geçişleri ve audit anlamı DEĞİŞMEDİ.
+
+export interface BatchApplySummary {
+  results: ApplyResult[];
+  applied: number;
+}
+
+const APPLY_CHUNK = 200;
+
+export async function applyVerifiedMatchesBatch(
+  decisions: MatchDecision[],
+  marketplaceId: string,
+): Promise<BatchApplySummary> {
+  const results: ApplyResult[] = new Array(decisions.length);
+  const passing: { index: number; decision: MatchDecision }[] = [];
+
+  if (decisions.length === 0) return { results, applied: 0 };
+
+  // Gate 1-2: karar-içi kontroller (DB'siz)
+  for (let i = 0; i < decisions.length; i++) {
+    const d = decisions[i];
+    if (!d.categoryId || d.externalId === null || !d.isLeaf) {
+      results[i] = { productId: d.productId, applied: false, method: d.method, externalId: d.externalId, reason: 'Hedef leaf değil veya externalId yok — yazılmadı' };
+      continue;
+    }
+    if (d.confidence < 0.95) {
+      results[i] = { productId: d.productId, applied: false, method: d.method, externalId: d.externalId, reason: `Düşük güven (${d.confidence}) — MANUAL bırakıldı` };
+      continue;
+    }
+    passing.push({ index: i, decision: d });
+  }
+
+  // Preload (toplam 3 sorgu)
+  const catIds = Array.from(new Set(passing.map((p) => p.decision.categoryId as string)));
+  const productIds = Array.from(new Set(passing.map((p) => p.decision.productId)));
+
+  const [cats, mappings, products] = await Promise.all([
+    catIds.length > 0
+      ? prisma.category.findMany({ where: { id: { in: catIds } }, select: { id: true, externalId: true } })
+      : Promise.resolve([] as { id: string; externalId: string | number | null }[]),
+    catIds.length > 0
+      ? prisma.categoryMapping.findMany({
+          where: { categoryId: { in: catIds }, marketplaceId, active: true, externalId: { not: null } },
+          select: { categoryId: true },
+        })
+      : Promise.resolve([] as { categoryId: string }[]),
+    productIds.length > 0
+      ? prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true } })
+      : Promise.resolve([] as { id: string }[]),
+  ]);
+
+  const catExtById = new Map(cats.map((c) => [c.id, c.externalId]));
+  const mappedCatIds = new Set(mappings.map((m) => m.categoryId));
+  const existingProductIds = new Set(products.map((p) => p.id));
+
+  // Gate 3-7: preload edilmiş veriyle aynı sıra ve aynı sebeplerle değerlendirme
+  type VerifiedWrite = {
+    index: number;
+    decision: MatchDecision;
+    categoryId: string;
+  };
+  const verified: VerifiedWrite[] = [];
+
+  for (const p of passing) {
+    const d = p.decision;
+    const catId = d.categoryId as string;
+
+    const catExt = catExtById.get(catId);
+    if (catExt === undefined || catExt === null || Number(catExt) !== d.externalId) {
+      results[p.index] = { productId: d.productId, applied: false, method: d.method, externalId: d.externalId, reason: 'Hedef kategori doğrulanamadı (externalId uyuşmuyor)' };
+      continue;
+    }
+
+    if (!mappedCatIds.has(catId)) {
+      results[p.index] = { productId: d.productId, applied: false, method: d.method, externalId: d.externalId, reason: 'Aktif tt CategoryMapping yok — categoryMatch yazılmadı' };
+      continue;
+    }
+
+    if (!existingProductIds.has(d.productId)) {
+      results[p.index] = { productId: d.productId, applied: false, method: d.method, externalId: d.externalId, reason: 'Ürün bulunamadı' };
+      continue;
+    }
+
+    verified.push({ index: p.index, decision: d, categoryId: catId });
+  }
+
+  // Chunk'lı transaction yazımı
+  for (let start = 0; start < verified.length; start += APPLY_CHUNK) {
+    const chunk = verified.slice(start, start + APPLY_CHUNK);
+
+    await prisma.$transaction(async (tx) => {
+      for (const v of chunk) {
+        await tx.product.update({
+          where: { id: v.decision.productId },
+          data: {
+            categoryId: v.categoryId,
+            categoryMatch: true,
+            matchedBy: v.decision.method === 'ai' ? 'ai' : 'auto',
+            lastMatchDate: new Date(),
+            aiSuggestedCategoryId: v.categoryId,
+            aiScore: v.decision.confidence,
+          },
+        });
+      }
+
+      await tx.auditLog.createMany({
+        data: chunk.map((v) => ({
+          action: v.decision.method === 'ai' ? 'CATEGORY_MATCH_AI' : 'CATEGORY_MATCH_AUTO',
+          entity: 'category',
+          entityId: v.categoryId,
+          meta: JSON.stringify({
+            productId: v.decision.productId,
+            sourceCategory: v.decision.supplierCategory,
+            targetCategory: v.decision.categoryName,
+            externalId: v.decision.externalId,
+            method: v.decision.method,
+            confidence: v.decision.confidence,
+          }),
+          details: `Ürün ${v.decision.xmlKey} → "${v.decision.categoryName}" (externalId=${v.decision.externalId}, ${v.decision.method}, conf=${v.decision.confidence})`,
+        })),
+      });
+    });
+
+    await prisma.aIDecisionLog.createMany({
+      data: chunk.map((v) => ({
+        productId: v.decision.productId,
+        module: 'category',
+        suggestion: v.categoryId,
+        confidence: v.decision.confidence,
+        reason: v.decision.reason,
+        autoApplied: true,
+      })),
+    }).catch(() => null);
+  }
+
+  for (const v of verified) {
+    results[v.index] = { productId: v.decision.productId, applied: true, method: v.decision.method, externalId: v.decision.externalId, reason: 'OK' };
+  }
+
+  return { results, applied: verified.length };
 }

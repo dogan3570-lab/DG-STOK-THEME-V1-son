@@ -20,6 +20,7 @@ import {
 import { matchTrendyolCategoryByPath, matchTrendyolBrand, classifyMatch, type ClassifiedMatch } from './categoryBrandMapper.ts';
 import { resolveTrendyolAttributes } from './trendyolVariantResolver.ts';
 import { parsePositiveInt } from './sendReadiness.ts';
+import {reconcileProductGates, queueReconcileProductGates} from './readinessService.ts';
 
 const MAPPING_SOURCE = 'trendyol_catalog';
 
@@ -91,9 +92,16 @@ export async function mapTrendyolCategories(input: { xmlSourceId: string; market
         },
       });
       await prisma.product.updateMany({
-        where: { xmlSourceId: input.xmlSourceId, supplierCategory: path },
+        where: { xmlSourceId: input.xmlSourceId, supplierCategory: path, categoryMatch: false },
         data: { categoryId: category.id, categoryMatch: true, matchedBy: MAPPING_SOURCE, lastMatchDate: new Date() },
       });
+      const affectedCategoryProducts = await prisma.product.findMany({
+        where: { xmlSourceId: input.xmlSourceId, supplierCategory: path, categoryId: category.id, categoryMatch: true },
+        select: { id: true },
+      });
+      for (const p of affectedCategoryProducts) {
+        queueReconcileProductGates(p.id);
+      }
       summary.autoMatched++;
       summary.results.push({ input: path, status: classified.status, externalId: classified.id, externalName: classified.name, reason: null });
     } else {
@@ -149,6 +157,13 @@ export async function mapTrendyolBrands(input: { xmlSourceId: string; marketplac
         where: { xmlSourceId: input.xmlSourceId, xmlBrandName: xmlBrand },
         data: { brandId: brand.id, brandMatch: true, brandUsageType: 'DG_BRAND', matchedBy: MAPPING_SOURCE, lastMatchDate: new Date() },
       });
+      const affectedBrandProducts = await prisma.product.findMany({
+        where: { xmlSourceId: input.xmlSourceId, xmlBrandName: xmlBrand, brandId: brand.id, brandMatch: true },
+        select: { id: true },
+      });
+      for (const p of affectedBrandProducts) {
+        queueReconcileProductGates(p.id);
+      }
       await prisma.brandMapping.update({ where: { xmlBrandName: xmlBrand }, data: { productCount: row._count.id } }).catch(() => null);
       summary.autoMatched++;
       summary.results.push({ input: xmlBrand, status: classified.status, externalId: classified.id, externalName: classified.name, reason: null });
@@ -248,6 +263,7 @@ export async function mapTrendyolVariants(input: { xmlSourceId: string; marketpl
 
     if (resolution.status === 'OK') {
       await prisma.product.update({ where: { id: product.id }, data: { variantMatch: true, variantStatus: 'COMPLETED' } });
+      queueReconcileProductGates(product.id);
       summary.matched++;
       summary.results.push({ productId: product.id, title: product.title, status: 'MATCHED', reason: null });
     } else {

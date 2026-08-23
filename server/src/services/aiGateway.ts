@@ -1,5 +1,6 @@
 import { prisma } from '../db/prisma.ts';
 import { decryptApiKey } from './crypto.ts';
+import { completeWithFreeModel, classifyError } from './openRouterManager.ts';
 
 export interface ProviderConfig {
   id: string;
@@ -89,7 +90,14 @@ export async function getActiveProvidersByPriority(): Promise<ProviderConfig[]> 
     where: { active: true },
     orderBy: { priority: 'asc' },
   });
-  return providers.map(serializeProvider);
+  const mapped = providers.map(serializeProvider);
+  mapped.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    const aHealthy = a.lastStatus === 'error' ? 1 : 0;
+    const bHealthy = b.lastStatus === 'error' ? 1 : 0;
+    return aHealthy - bHealthy;
+  });
+  return mapped;
 }
 
 export async function getProvider(provider: string): Promise<ProviderConfig | null> {
@@ -130,7 +138,7 @@ async function getDecryptedApiKey(provider: string): Promise<string | null> {
   }
 }
 
-async function incrementRequestCount(provider: string, success: boolean): Promise<void> {
+async function incrementRequestCount(provider: string, success: boolean, errorMsg?: string): Promise<void> {
   const now = new Date();
   await prisma.aIProviderConfig.update({
     where: { provider },
@@ -138,7 +146,7 @@ async function incrementRequestCount(provider: string, success: boolean): Promis
       totalRequests: { increment: 1 },
       ...(success
         ? { successfulRequests: { increment: 1 }, lastStatus: 'connected', lastError: null, lastUsedAt: now }
-        : { failedRequests: { increment: 1 }, lastStatus: 'error' }),
+        : { failedRequests: { increment: 1 }, lastStatus: 'error', lastError: errorMsg ?? null }),
     },
   });
 }
@@ -147,7 +155,7 @@ async function callNvidiaApi(
   apiKey: string,
   model: string,
   request: ChatCompletionRequest,
-  timeoutMs: number = 30000
+  timeoutMs: number = 120000
 ): Promise<{ content: string; usage?: any }> {
   const baseUrl = PROVIDER_DEFAULTS.nvidia.baseUrl;
   const url = `${baseUrl}/chat/completions`;
@@ -202,7 +210,7 @@ async function callDeepseekApi(
   apiKey: string,
   model: string,
   request: ChatCompletionRequest,
-  timeoutMs: number = 30000
+  timeoutMs: number = 120000
 ): Promise<{ content: string; usage?: any }> {
   const url = `${PROVIDER_DEFAULTS.deepseek.baseUrl}/chat/completions`;
 
@@ -255,7 +263,7 @@ async function callOpenRouterApi(
   apiKey: string,
   model: string,
   request: ChatCompletionRequest,
-  timeoutMs: number = 30000
+  timeoutMs: number = 120000
 ): Promise<{ content: string; usage?: any }> {
   const url = `${PROVIDER_DEFAULTS.openrouter.baseUrl}/chat/completions`;
 
@@ -368,8 +376,8 @@ export async function chatCompletion(request: ChatCompletionRequest): Promise<Ch
       model: 'none',
       content: null,
       latencyMs: 0,
-      error: 'Aktif AI sağlayıcı bulunamadı',
-      errorCode: 'NO_PROVIDER',
+      error: 'AI eşleştirme şu anda kullanılamıyor. Kullanılabilir AI sağlayıcısı bulunamadı. Lütfen daha sonra tekrar deneyin.',
+      errorCode: 'NO_AI_PROVIDER_AVAILABLE',
     };
   }
 
@@ -390,17 +398,20 @@ export async function chatCompletion(request: ChatCompletionRequest): Promise<Ch
 
     try {
       let result: { content: string; usage?: any };
+      let usedModel = model;
 
       if (provider.provider === 'nvidia') {
         result = await callNvidiaApi(apiKey, model, request);
       } else if (provider.provider === 'deepseek') {
         result = await callDeepseekApi(apiKey, model, request);
       } else if (provider.provider === 'openrouter') {
-        if (!provider.model) {
-          errors.push(`${provider.displayName}: Model seçilmemiş`);
+        const orRes = await completeWithFreeModel(request);
+        if (!orRes.ok || !orRes.content) {
+          errors.push(`${provider.displayName}: ${orRes.error || 'No content'}`);
           continue;
         }
-        result = await callOpenRouterApi(apiKey, provider.model, request);
+        result = { content: orRes.content, usage: orRes.usage ?? undefined };
+        usedModel = orRes.model;
       } else {
         errors.push(`${provider.displayName}: Desteklenmeyen sağlayıcı`);
         continue;
@@ -412,49 +423,20 @@ export async function chatCompletion(request: ChatCompletionRequest): Promise<Ch
       return {
         ok: true,
         provider: provider.provider,
-        model,
+        model: usedModel,
         content: result.content,
         latencyMs,
         usage: result.usage,
       };
     } catch (err: any) {
       const latencyMs = Date.now() - startTime;
-      await incrementRequestCount(provider.provider, false);
+      const classified = classifyError(err);
+      await incrementRequestCount(provider.provider, false, classified.errorMsg);
 
-      let errorMsg = err.message || 'Unknown error';
-      let errorCode = 'UNKNOWN';
+      errors.push(`${provider.displayName}: ${classified.errorMsg}`);
 
-      if (errorMsg === 'TIMEOUT') {
-        errorCode = 'TIMEOUT';
-        errorMsg = 'İstek zaman aşımına uğradı';
-      } else if (errorMsg.includes('INVALID_KEY') || errorMsg.includes('401')) {
-        errorCode = 'INVALID_KEY';
-        errorMsg = 'Geçersiz API key';
-        await prisma.aIProviderConfig.update({
-          where: { provider: provider.provider },
-          data: { lastStatus: 'error', lastError: 'Geçersiz API key' },
-        });
-      } else if (errorMsg.includes('RATE_LIMIT') || errorMsg.includes('429')) {
-        errorCode = 'RATE_LIMIT';
-        errorMsg = 'Rate limit aşıldı';
-      } else if (errorMsg.includes('403')) {
-        errorCode = 'FORBIDDEN';
-        errorMsg = 'Erişim engellendi';
-      } else if (errorMsg.includes('5')) {
-        errorCode = 'SERVER_ERROR';
-        errorMsg = 'Sunucu hatası';
-      }
-
-      await prisma.aIProviderConfig.update({
-        where: { provider: provider.provider },
-        data: { lastError: errorMsg },
-      });
-
-      errors.push(`${provider.displayName}: ${errorMsg}`);
-
-      if (errorCode === 'INVALID_KEY') break;
-      if (errorCode === 'TIMEOUT' || errorCode === 'RATE_LIMIT' || errorCode === 'SERVER_ERROR') continue;
-      break;
+      if (classified.type === 'auth' && classified.errorCode !== 'INSUFFICIENT_CREDITS') break;
+      continue;
     }
   }
 
@@ -464,8 +446,8 @@ export async function chatCompletion(request: ChatCompletionRequest): Promise<Ch
     model: providers[0]?.model || 'none',
     content: null,
     latencyMs: 0,
-    error: errors.join(' | ') || 'Tüm sağlayıcılar başarısız',
-    errorCode: 'ALL_FAILED',
+    error: 'AI eşleştirme şu anda kullanılamıyor. Tüm sağlayıcılar başarısız oldu. Lütfen daha sonra tekrar deneyin.',
+    errorCode: 'NO_AI_PROVIDER_AVAILABLE',
   };
 }
 
@@ -491,6 +473,8 @@ export interface CategoryMatchResult {
   categoryId: string;
   confidence: number;
   reason: string;
+  decision?: 'MATCH' | 'NO_SAFE_MATCH';
+  reasonCode?: string;
 }
 
 export interface CategoryMatchResponse {
@@ -506,51 +490,71 @@ export interface CategoryMatchResponse {
 
 function buildCategoryMatchPrompt(
   products: ProductForMatch[],
-  categories: CategoryCandidate[],
+  candidatesByProduct: Map<string, CategoryCandidate[]>,
   marketplaceName: string | null
 ): ChatMessage[] {
-  const categoryList = categories.map(c => `- ID: "${c.id}" | Name: "${c.name}" | Path: "${c.fullPath}"`).join('\n');
 
   const productList = products.map(p => {
+    const cands = candidatesByProduct.get(p.id) || [];
+    const candList = cands.map(c => `    - ID: "${c.id}" | Name: "${c.name}" | Path: "${c.fullPath}"`).join('\n');
     const parts: string[] = [];
     parts.push(`productId: "${p.id}"`);
-    if (p.title) parts.push(`title: "${p.title.substring(0, 120)}"`);
+    if (p.title) parts.push(`title: "${p.title.substring(0, 150)}"`);
     if (p.supplierCategory) parts.push(`supplierCategory: "${p.supplierCategory}"`);
     if (p.xmlBrandName) parts.push(`brand: "${p.xmlBrandName}"`);
-    if (p.description) parts.push(`description: "${p.description.substring(0, 200)}"`);
-    return `  { ${parts.join(', ')} }`;
+    if (p.description) parts.push(`description: "${p.description.substring(0, 250)}"`);
+    parts.push(`candidates:\n${candList || '    (no candidates)'}`);
+    return `  {\n    ${parts.join(',\n    ')}\n  }`;
   }).join(',\n');
 
-  const marketplaceNote = marketplaceName
-    ? `\nThe categories listed above are the system categories. Match products to the most appropriate system category.`
-    : `\nMatch products to the most appropriate system category.`;
+  const systemMessage = `You are a marketplace category judge for an e-commerce system.
 
-  const systemMessage = `You are a product category matcher for an e-commerce system. Your task is to match products to the correct system category.
+TASK:
+For each product, select the BEST MATCHING category from its candidates list.
+If no candidate is a good match, return NO_SAFE_MATCH.
 
 RULES:
-1. You MUST only choose from the provided category list. Never invent new categories.
-2. Return ONLY valid JSON, no other text.
-3. Each product must be matched to exactly one category.
-4. Confidence must be between 0 and 1.
-5. confidence >= 0.95 = automatic match, 0.85-0.949 = suggestion, < 0.85 = manual review.
-6. If you are not confident, set confidence below 0.85.
-7. Look at the product title, supplier category path, and brand to determine the best category.
-8. Keep "reason" under 15 words, on a single line, and never use double quotes or newlines inside it.
+1. Each product's candidates are independent — never mix between products.
+2. Only choose from the provided candidates for each product.
+3. Return ONLY valid JSON.
+4. Focus on the product's CORE TYPE (what it IS), not brand/color/size.
+5. Product vs accessory: "iPhone case" → Kılıflar, "iPhone" → Cihazlar.
 
-Response format (strict JSON):
+SELECTION STRATEGY:
+Step 1: Read the product title and identify what the product IS.
+Step 2: Look through the candidates for a category that matches this product type.
+Step 3: If you find a matching category → select it with appropriate confidence.
+Step 4: Only if NO candidate matches the product type at all → NO_SAFE_MATCH.
+
+IMPORTANT: "Best available match" is always better than NO_SAFE_MATCH.
+If a candidate is in the same product family or closely related, SELECT IT.
+NO_SAFE_MATCH is only for when ALL candidates are completely wrong.
+
+Confidence:
+- 0.95+: Direct match (product type = category name or clear synonym)
+- 0.85-0.94: Strong match (product type clearly fits category)
+- 0.70-0.84: Good match (best available, minor uncertainty)
+- 0.00-0.69: No safe match
+
+Return format:
 {
-  "matches": [
-    { "productId": "...", "categoryId": "...", "confidence": 0.95, "reason": "brief reason" }
-  ]
+  "results": [{
+    "productId": "...",
+    "decision": "MATCH" or "NO_SAFE_MATCH",
+    "selectedCategoryId": "CATEGORY_ID" or null,
+    "confidence": 0.92,
+    "reasonCode": "DIRECT_PRODUCT_TYPE_MATCH" or "EXACT_SEMANTIC_MATCH" or "BEST_AVAILABLE_MATCH" or "NO_VALID_CANDIDATE"
+  }]
 }`;
+
+  const marketplaceNote = marketplaceName
+    ? `\nCategories are from the ${marketplaceName} marketplace.`
+    : '';
 
   const userMessage = `Match these products to categories:
 
 PRODUCTS:
 [${productList}]
-
-AVAILABLE CATEGORIES:
-${categoryList}
 ${marketplaceNote}
 
 Return ONLY the JSON response.`;
@@ -596,10 +600,8 @@ function parseAndValidateMatches(
   validCategoryIds: Set<string>,
   productIds: Set<string>
 ): CategoryMatchResult[] {
-  // Try to extract JSON from the response
   let jsonStr = content.trim();
 
-  // Handle markdown code blocks
   if (jsonStr.startsWith('```')) {
     jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
   }
@@ -607,27 +609,56 @@ function parseAndValidateMatches(
   const results: CategoryMatchResult[] = [];
   const seenProducts = new Set<string>();
 
-  const pushValid = (m: { productId?: unknown; categoryId?: unknown; confidence?: unknown; reason?: unknown }): boolean => {
-    if (!m || typeof m.productId !== 'string' || typeof m.categoryId !== 'string') return false;
-    if (!productIds.has(m.productId) || !validCategoryIds.has(m.categoryId)) return false;
+  const pushValid = (m: { productId?: unknown; categoryId?: unknown; selectedCategoryId?: unknown; confidence?: unknown; reason?: unknown; decision?: unknown; reasonCode?: unknown }): boolean => {
+    if (!m || typeof m.productId !== 'string') return false;
+    if (!productIds.has(m.productId)) return false;
     if (seenProducts.has(m.productId)) return false;
+
+    const decision = String(m.decision ?? 'MATCH');
+    if (decision === 'NO_SAFE_MATCH') {
+      seenProducts.add(m.productId);
+      results.push({
+        productId: m.productId,
+        categoryId: '',
+        confidence: 0,
+        reason: typeof m.reasonCode === 'string' ? m.reasonCode : 'NO_SAFE_MATCH',
+        decision: 'NO_SAFE_MATCH',
+        reasonCode: typeof m.reasonCode === 'string' ? m.reasonCode : 'NO_VALID_CANDIDATE',
+      });
+      return true;
+    }
+
+    const catId = String(m.categoryId ?? m.selectedCategoryId ?? '');
+    if (!catId || !validCategoryIds.has(catId)) return false;
+
     const conf = Number(m.confidence);
     if (!Number.isFinite(conf)) return false;
+
     seenProducts.add(m.productId);
     results.push({
       productId: m.productId,
-      categoryId: m.categoryId,
+      categoryId: catId,
       confidence: Math.max(0, Math.min(1, conf)),
-      reason: typeof m.reason === 'string' ? m.reason.substring(0, 200) : 'ai_match',
+      reason: typeof m.reason === 'string' ? m.reason.substring(0, 200) : (typeof m.reasonCode === 'string' ? m.reasonCode : 'ai_match'),
+      decision: 'MATCH',
+      reasonCode: typeof m.reasonCode === 'string' ? m.reasonCode : undefined,
     });
     return true;
   };
 
-  // 1) KATI YOL: geçerli JSON.parse (string içi kontrol karakterleri temizlenerek).
+  // 1) KATI YOL: JSON.parse
   const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(sanitizeJsonControlChars(jsonMatch[0]));
+
+      // YENİ FORMAT: { results: [...] }
+      if (parsed && Array.isArray(parsed.results)) {
+        for (const match of parsed.results) pushValid(match);
+        if (results.length > 0) return results;
+      }
+
+      // ESKİ FORMAT: { matches: [...] }
       if (parsed && Array.isArray(parsed.matches)) {
         for (const match of parsed.matches) pushValid(match);
         if (results.length > 0) return results;
@@ -637,16 +668,17 @@ function parseAndValidateMatches(
     }
   }
 
-  // 2) TOLERANSLI YOL: bozuk/kesik/uzun LLM çıktısından productId+categoryId+confidence üçlüsünü çıkar.
-  //    Her sonuç yine productIds/validCategoryIds kümeleriyle doğrulanır (fail-closed korunur).
-  const fieldRegex = /"productId"\s*:\s*"([^"]+)"\s*,\s*"categoryId"\s*:\s*"([^"]+)"\s*,\s*"confidence"\s*:\s*([0-9]+(?:\.[0-9]+)?)/g;
+  // 2) TOLERANSLI YOL: regex ile productId+categoryId/selectedCategoryId+confidence çıkar
+  const fieldRegex = /"productId"\s*:\s*"([^"]+)"\s*,\s*(?:"categoryId"|"selectedCategoryId")\s*:\s*"([^"]+)"\s*,\s*"confidence"\s*:\s*([0-9]+(?:\.[0-9]+)?)/g;
   let m: RegExpExecArray | null;
   while ((m = fieldRegex.exec(jsonStr)) !== null) {
     pushValid({ productId: m[1], categoryId: m[2], confidence: Number(m[3]), reason: 'ai_match' });
   }
 
-  if (results.length === 0) {
-    throw new Error('AI yanıtında geçerli eşleşme bulunamadı');
+  // 3) NO_SAFE_MATCH regex: productId + decision=NO_SAFE_MATCH
+  const noMatchRegex = /"productId"\s*:\s*"([^"]+)"\s*,\s*"decision"\s*:\s*"NO_SAFE_MATCH"/g;
+  while ((m = noMatchRegex.exec(jsonStr)) !== null) {
+    pushValid({ productId: m[1], decision: 'NO_SAFE_MATCH', reasonCode: 'NO_VALID_CANDIDATE' });
   }
 
   return results;
@@ -654,7 +686,7 @@ function parseAndValidateMatches(
 
 export async function matchCategoriesWithAI(
   products: ProductForMatch[],
-  categories: CategoryCandidate[],
+  candidatesByProduct: Map<string, CategoryCandidate[]> | CategoryCandidate[],
   marketplaceName: string | null
 ): Promise<CategoryMatchResponse> {
   const providers = await getActiveProvidersByPriority();
@@ -666,12 +698,22 @@ export async function matchCategoriesWithAI(
       model: 'none',
       matches: [],
       latencyMs: 0,
-      error: 'Aktif AI sağlayıcı bulunamadı',
-      errorCode: 'NO_PROVIDER',
+      error: 'AI eşleştirme şu anda kullanılamıyor. Kullanılabilir AI sağlayıcısı bulunamadı. Lütfen daha sonra tekrar deneyin.',
+      errorCode: 'NO_AI_PROVIDER_AVAILABLE',
     };
   }
 
-  const validCategoryIds = new Set(categories.map(c => c.id));
+  // Geriye uyumluluk: flat array ise → tüm ürünler için aynı aday listesini kullan
+  const candidatesMap: Map<string, CategoryCandidate[]> = candidatesByProduct instanceof Map
+    ? candidatesByProduct
+    : new Map(products.map(p => [p.id, candidatesByProduct]));
+
+  // Tüm adayları topla (validasyon için)
+  const allCandidateIds = new Set<string>();
+  for (const cands of candidatesMap.values()) {
+    for (const c of cands) allCandidateIds.add(c.id);
+  }
+  const validCategoryIds = allCandidateIds;
   const productIds = new Set(products.map(p => p.id));
   const errors: string[] = [];
 
@@ -686,11 +728,12 @@ export async function matchCategoriesWithAI(
     const model = provider.provider === 'nvidia' && NVIDIA_MODEL_MAP[displayModel]
       ? NVIDIA_MODEL_MAP[displayModel]
       : displayModel;
-    const messages = buildCategoryMatchPrompt(products, categories, marketplaceName);
+    const messages = buildCategoryMatchPrompt(products, candidatesMap, marketplaceName);
     const startTime = Date.now();
 
     try {
       let result: { content: string; usage?: any };
+      let usedModel = model;
 
       if (provider.provider === 'nvidia') {
         result = await callNvidiaApi(apiKey, model, {
@@ -707,16 +750,18 @@ export async function matchCategoriesWithAI(
           response_format: { type: 'json_object' },
         });
       } else if (provider.provider === 'openrouter') {
-        if (!provider.model) {
-          errors.push(`${provider.displayName}: Model seçilmemiş`);
-          continue;
-        }
-        result = await callOpenRouterApi(apiKey, provider.model, {
+        const orRes = await completeWithFreeModel({
           messages,
           temperature: 0.05,
           max_tokens: 4096,
           response_format: { type: 'json_object' },
         });
+        if (!orRes.ok || !orRes.content) {
+          errors.push(`${provider.displayName}: ${orRes.error || 'No content'}`);
+          continue;
+        }
+        result = { content: orRes.content, usage: orRes.usage ?? undefined };
+        usedModel = orRes.model;
       } else {
         errors.push(`${provider.displayName}: Desteklenmeyen sağlayıcı`);
         continue;
@@ -731,38 +776,32 @@ export async function matchCategoriesWithAI(
       }
 
       const matches = parseAndValidateMatches(result.content, validCategoryIds, productIds);
+      // DEBUG: AI yanıtını logla (dry-run sırasında)
+      if (process.env.DRY_RUN_DEBUG === '1') {
+        console.log(`  [AI RAW] model=${usedModel} products=${products.length} matches=${matches.length}`);
+        console.log(`  [AI RAW] content snippet: ${result.content.substring(0, 500)}`);
+        for (const m of matches) {
+          console.log(`  [AI MATCH] ${m.productId} → ${m.categoryId || 'NO_MATCH'} conf=${m.confidence} decision=${m.decision} reason=${m.reasonCode || m.reason}`);
+        }
+      }
 
       return {
         ok: true,
         provider: provider.provider,
-        model,
+        model: usedModel,
         matches,
         latencyMs,
         usage: result.usage,
       };
     } catch (err: any) {
       const latencyMs = Date.now() - startTime;
-      await incrementRequestCount(provider.provider, false);
+      const classified = classifyError(err);
+      await incrementRequestCount(provider.provider, false, classified.errorMsg);
 
-      let errorMsg = err.message || 'Unknown error';
-      let errorCode = 'UNKNOWN';
+      errors.push(`${provider.displayName}: ${classified.errorMsg}`);
 
-      if (errorMsg === 'TIMEOUT') { errorCode = 'TIMEOUT'; errorMsg = 'Zaman aşımı'; }
-      else if (errorMsg.includes('401') || errorMsg.includes('INVALID_KEY')) { errorCode = 'INVALID_KEY'; errorMsg = 'Geçersiz API key'; }
-      else if (errorMsg.includes('429') || errorMsg.includes('RATE_LIMIT')) { errorCode = 'RATE_LIMIT'; errorMsg = 'Rate limit'; }
-      else if (errorMsg.includes('403')) { errorCode = 'FORBIDDEN'; errorMsg = 'Erişim engellendi'; }
-      else if (errorMsg.includes('JSON')) { errorCode = 'PARSE_ERROR'; errorMsg = 'JSON ayrıştırma hatası'; }
-
-      await prisma.aIProviderConfig.update({
-        where: { provider: provider.provider },
-        data: { lastError: errorMsg },
-      });
-
-      errors.push(`${provider.displayName}: ${errorMsg}`);
-
-      if (errorCode === 'INVALID_KEY') break;
-      if (errorCode === 'TIMEOUT' || errorCode === 'RATE_LIMIT' || errorCode === 'SERVER_ERROR') continue;
-      break;
+      if (classified.type === 'auth' && classified.errorCode !== 'INSUFFICIENT_CREDITS') break;
+      continue;
     }
   }
 
@@ -772,8 +811,8 @@ export async function matchCategoriesWithAI(
     model: providers[0]?.model || 'none',
     matches: [],
     latencyMs: 0,
-    error: errors.join(' | ') || 'Tüm sağlayıcılar başarısız',
-    errorCode: 'ALL_FAILED',
+    error: 'AI eşleştirme şu anda kullanılamıyor. Tüm sağlayıcılar başarısız oldu. Lütfen daha sonra tekrar deneyin.',
+    errorCode: 'NO_AI_PROVIDER_AVAILABLE',
   };
 }
 
@@ -829,48 +868,191 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
     }
 
     if (provider === 'openrouter') {
-      if (!configuredModel) {
-        return { ok: false, provider, model: '(model seçilmedi)', latencyMs: Date.now() - startTime, error: 'Model seçilmemiş — önce Free Models listesinden model seçin', errorCode: 'NO_MODEL' };
-      }
-
-      const models = await fetchOpenRouterModels(apiKey);
-      const modelTest = await callOpenRouterApi(apiKey, configuredModel, {
+      const modelTest = await completeWithFreeModel({
         messages: [{ role: 'user', content: 'Return exactly: OPENROUTER_TEST_OK' }],
         max_tokens: 20,
-      }, 120000);
+      });
 
       const latencyMs = Date.now() - startTime;
       await incrementRequestCount(provider, true);
 
-      const ok = !!modelTest.content && String(modelTest.content).toUpperCase().includes('OPENROUTER_TEST_OK');
+      const ok = modelTest.ok && !!modelTest.content && String(modelTest.content).toUpperCase().includes('OPENROUTER_TEST_OK');
       return {
         ok,
         provider,
-        model: configuredModel,
+        model: modelTest.ok ? modelTest.model : '(model yok)',
         latencyMs,
-        catalogModels: models.length,
-        error: ok ? undefined : `Model testi OPENROUTER_TEST_OK döndürmedi: ${String(modelTest.content ?? '').slice(0, 80)}`,
-        errorCode: ok ? undefined : 'MODEL_TEST_FAILED',
+        catalogModels: 0,
+        error: ok ? undefined : `Model testi başarısız: ${modelTest.error || 'OPENROUTER_TEST_OK döndürülmedi'}`,
+        errorCode: ok ? undefined : modelTest.errorCode || 'MODEL_TEST_FAILED',
       };
     }
 
     return { ok: false, provider, model, latencyMs: Date.now() - startTime, error: 'Desteklenmeyen sağlayıcı', errorCode: 'UNSUPPORTED' };
   } catch (err: any) {
     const latencyMs = Date.now() - startTime;
-    await incrementRequestCount(provider, false);
+    const classified = classifyError(err);
+    await incrementRequestCount(provider, false, classified.errorMsg);
 
-    let errorMsg = err.message || 'Unknown error';
-    let errorCode = 'UNKNOWN';
-
-    if (errorMsg === 'TIMEOUT') { errorCode = 'TIMEOUT'; errorMsg = 'Zaman aşımı'; }
-    else if (errorMsg.includes('401') || errorMsg.includes('INVALID_KEY')) { errorCode = 'INVALID_KEY'; errorMsg = 'Geçersiz API key'; }
-    else if (errorMsg.includes('429') || errorMsg.includes('RATE_LIMIT')) { errorCode = 'RATE_LIMIT'; errorMsg = 'Rate limit'; }
-
-    await prisma.aIProviderConfig.update({
-      where: { provider },
-      data: { lastStatus: 'error', lastError: errorMsg },
-    });
-
-    return { ok: false, provider, model, latencyMs, error: errorMsg, errorCode };
+    return { ok: false, provider, model, latencyMs, error: classified.errorMsg, errorCode: classified.errorCode };
   }
 }
+
+// ==================== V3: AI CATEGORY VERIFICATION ====================
+
+export interface CategoryVerification {
+  productId: string;
+  fit: 'STRONG' | 'MEDIUM' | 'WEAK' | 'REJECT';
+  reason: string;
+  confidence: number;
+  contradictsExcluded: boolean;
+}
+
+export interface SemanticIdentity {
+  coreObject: string;
+  productType: string;
+  primaryFunction: string;
+  useCase: string;
+  material: string | null;
+  excludedInterpretations: string[];
+  domain: string;
+}
+
+export interface StageCandidate {
+  id: string;
+  name: string;
+  fullPath: string;
+  matchStage: string;
+  matchScore: number;
+  semanticFit: string;
+  // FIX(build): categoryCore V3 fast-path adayın gerçek marketplace externalId'sini taşır.
+  externalId?: number | null;
+}
+
+const VERIFICATION_SYSTEM_PROMPT = `You are a STRICT e-commerce category verifier. Your job is to determine if a product belongs in a specific category.
+
+PRODUCT IDENTITY:
+- Core Object: what the product physically IS (e.g., "kulaklık", "kül tablası", "çadır")
+- Product Type: the category of product
+- Primary Function: what it does
+- Use Case: how it's used
+- Material: what it's made of
+- Excluded Interpretations: product types this is NOT
+
+FIT DEFINITIONS (STRICT):
+- STRONG: The product IS this category type. A specific leaf (e.g., "Kulak İçi Kulaklık") is STRONG for a product that IS a kulaklık.
+  Example: Product is "kulaklık" → Category "Kulak İçi Kulaklık" = STRONG (it IS a kulaklık)
+  Example: Product is "kül tablası" → Category "Kül Tablaları" = STRONG
+  Example: Product is "kamp çadırı" → Category "Kamp Çadırları" = STRONG
+  Example: Product is "kasap bıçağı" → Category "Bıçak Setleri" = STRONG (it IS a bıçak)
+  Example: Product is "kedi oyuncağı" → Category "Kedi Oyunları" = STRONG
+  Example: Product is "saklama kabı" → Category "Saklama Kapları" = STRONG
+  Example: Product is "led ışık" → Category "LED Aydınlatma" = STRONG
+  Example: Product is "uzaktan kumanda" → Category "Uzaktan Kumanda" = STRONG
+- MEDIUM: The product is related but this is not its primary category.
+  Example: Product is "aromaterapi difüzörü" → Category "Difüzör" = MEDIUM
+- WEAK: The product shares keywords but is a different product type entirely.
+  Example: Product is "aromaterapi difüzörü" → Category "Gaz Lambası" = WEAK
+- REJECT: Completely different product. Do NOT select as best fit.
+  Example: Product is "aromaterapi difüzörü" → Category "Kulaklık" = REJECT
+
+CRITICAL RULE: If the product IS a specific type of item (e.g., "kulaklık"), then ANY category that contains that item type (e.g., "Kulak İçi Kulaklık", "Kulak Üstü Kulaklık") is a STRONG fit.
+
+RULES:
+1. The product IS the core object. Categories containing the core object type = STRONG.
+2. If product is "X" and category is "X something" or "Something X" → STRONG.
+3. If product is "X" and category is in the same product family → MEDIUM.
+4. If product is "X" and category is a different product type → WEAK or REJECT.
+5. You MUST return fit=STRONG for at least one candidate if a true match exists.
+6. Keyword overlap alone is NOT sufficient — the product must truly BE the category type.
+7. CRITICAL: Excluded interpretations refer to the PRODUCT IDENTITY, not to taxonomy path text.
+   If the product IS "kasap bıçağı" and the candidate is "Bıçak ve Bıçak Seti",
+   the fact that the path contains "Bıçak Setleri" does NOT make it WEAK.
+   A kasap bıçağı IS a bıçak → "Bıçak ve Bıçak Seti" = STRONG.
+   Only reject if the product is genuinely a different product type than what the leaf represents.
+
+RETURN: JSON with a "results" array containing objects with:
+- productId: the product ID
+- fit: STRONG/MEDIUM/WEAK/REJECT
+- reason: brief explanation (must mention the core object)
+- confidence: 0.0-1.0
+- contradictsExcluded: true if the candidate matches an excluded interpretation
+
+Return ONLY valid JSON, no markdown.`;
+
+/**
+ * V3 AI verification: strict semantic check of candidate categories.
+ * Unlike the old system, this does NOT accept "best available" — only true matches.
+ */
+export async function verifyCategoryMatch(
+  identity: SemanticIdentity,
+  candidates: StageCandidate[],
+  previousErrors?: string,
+): Promise<CategoryVerification[]> {
+  if (candidates.length === 0) return [];
+
+  const userMessage = `Verify these candidate categories for the product:
+
+PRODUCT:
+- Core Object: ${identity.coreObject}
+- Product Type: ${identity.productType}
+- Primary Function: ${identity.primaryFunction}
+- Use Case: ${identity.useCase}
+- Material: ${identity.material ?? 'N/A'}
+- Domain: ${identity.domain}
+- Excluded Interpretations: ${identity.excludedInterpretations.join(', ')}
+${previousErrors ? `\nPrevious errors: ${previousErrors}` : ''}
+
+CANDIDATES:
+${candidates.map((c, i) => `${i + 1}. [${c.matchStage}] ${c.name} (score=${c.matchScore}) — Path: ${c.fullPath}`).join('\n')}
+
+For each candidate, determine if the product REALLY belongs there. Return ONLY the JSON.`;
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: VERIFICATION_SYSTEM_PROMPT },
+    { role: 'user', content: userMessage },
+  ];
+
+  const result = await completeWithFreeModel({
+    messages,
+    temperature: 0.1,
+    max_tokens: 2000,
+    response_format: { type: 'json_object' },
+  });
+
+  if (!result.ok || !result.content) {
+    return candidates.map((c) => ({
+      productId: '',
+      fit: 'WEAK' as const,
+      reason: 'AI verification unavailable',
+      confidence: 0.5,
+      contradictsExcluded: false,
+    }));
+  }
+
+  try {
+    const parsed = JSON.parse(result.content);
+    const results = Array.isArray(parsed.results) ? parsed.results : [];
+
+    return results.map((r: any) => ({
+      productId: String(r.productId || ''),
+      fit: ['STRONG', 'MEDIUM', 'WEAK', 'REJECT'].includes(r.fit) ? r.fit : 'WEAK',
+      reason: String(r.reason || ''),
+      confidence: clamp(parseFloat(r.confidence) || 0.5, 0, 1),
+      contradictsExcluded: Boolean(r.contradictsExcluded),
+    }));
+  } catch {
+    return candidates.map((c) => ({
+      productId: '',
+      fit: 'WEAK' as const,
+      reason: 'AI verification parse error',
+      confidence: 0.5,
+      contradictsExcluded: false,
+    }));
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
