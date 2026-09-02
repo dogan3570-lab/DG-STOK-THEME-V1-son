@@ -10,6 +10,34 @@
  *  - Sadece runtime object / structured log
  */
 
+// ==================== RESPONSE TEXT EXTRACTION ====================
+
+/**
+ * FIX(RT-ACC): LLM yanıt metnini tüm bilinen taşıyıcı alanlardan çıkarır.
+ * Reasoning modelleri content:'' + reasoning_content/reasoning doldurabilir;
+ * boş content çalışan modeli "ölü/boş" sanmamak için gerekli.
+ * OpenAI chat formatı + delta stream formatı + output array formatı desteklenir.
+ */
+export function extractResponseText(data: any): string {
+  const msg = data?.choices?.[0]?.message;
+  const delta = data?.choices?.[0]?.delta;
+  const candidates = [
+    msg?.content,
+    typeof msg?.content === 'object' && msg?.content !== null ? (msg.content.text ?? '') : undefined,
+    msg?.reasoning_content,
+    msg?.reasoning,
+    data?.output_text,
+    Array.isArray(data?.output)
+      ? data.output.map((o: any) => o?.content?.map((c: any) => c?.text ?? '').join('')).join('')
+      : undefined,
+    delta?.content,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim().length > 0) return c;
+  }
+  return '';
+}
+
 // ==================== ERROR STATUS TYPES ====================
 
 export type ErrorStatus =

@@ -35,6 +35,16 @@ export function classifyHttpStatus(status: number, retryAfterSeconds: number | n
       httpStatus: status,
     };
   }
+  if (status === 556) {
+    return {
+      code: 'SERVICE_UNAVAILABLE',
+      message: 'Pazaryeri hizmeti etkin değil (556 — panelden etkinleştirilmeli)',
+      retryable: false,
+      permanent: true,
+      cooldownMs: null,
+      httpStatus: status,
+    };
+  }
   if (status >= 500) {
     return { code: 'PROVIDER_ERROR', message: 'Pazaryeri sunucu hatası', retryable: true, permanent: false, cooldownMs: null, httpStatus: status };
   }

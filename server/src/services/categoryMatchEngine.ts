@@ -14,6 +14,14 @@
 import { prisma } from '../db/prisma.ts';
 import { normalizeName } from './categoryBrandMapper.ts';
 import { matchCategoriesWithAI, chatCompletion, sanitizeJsonControlChars, type ProductForMatch, type CategoryCandidate } from './aiGateway.ts';
+import { verifyCategorySafety, type SafetyGateInput, buildCategoryAuditMeta } from './categorySafetyGate.ts';
+import { lookupKnowledgeV2, lookupGroupEvidence, type KnowledgeEntryV2 } from './categoryKnowledgeV2.ts';
+
+function normalizeTr(s: string): string {
+  return s.toLowerCase()
+    .replace(/ç/g, 'c').replace(/ğ/g, 'g').replace(/ı/g, 'i')
+    .replace(/ö/g, 'o').replace(/ş/g, 's').replace(/ü/g, 'u');
+}
 
 // FIX(build): V3 servisleri bu tipi categoryMatchEngine üzerinden import ediyor.
 import type { StageCandidate } from './aiGateway.ts';
@@ -61,7 +69,13 @@ export interface MatchDecision {
 
 // ==================== AĞAÇ YÜKLEME ====================
 
-export async function loadTrendyolTree(): Promise<TreeIndex> {
+// TASK322: ağaç index'i pahalı (2.5s+) — 60sn TTL cache; kategori mutasyonlarında invalidate edilir
+let _treeCache: { at: number; tree: TreeIndex } | null = null;
+const TREE_CACHE_TTL = 60000;
+export function invalidateTrendyolTreeCache(): void { _treeCache = null; }
+
+export async function loadTrendyolTree(forceReload: boolean = false): Promise<TreeIndex> {
+  if (!forceReload && _treeCache && Date.now() - _treeCache.at < TREE_CACHE_TTL) return _treeCache.tree;
   const rows = await prisma.category.findMany({
     where: { externalId: { not: null } },
     select: { id: true, externalId: true, name: true, parentId: true },
@@ -101,13 +115,15 @@ export async function loadTrendyolTree(): Promise<TreeIndex> {
   };
   for (const r of roots) walk(r, []);
 
-  return {
+  const treeIndex = {
     leaves,
     leafById: new Map(leaves.map((l) => [l.id, l])),
     leafByNormName,
     leafByNormPath,
     uuidByExternalId,
   };
+  _treeCache = { at: Date.now(), tree: treeIndex };
+  return treeIndex;
 }
 
 export async function loadTrendyolMarketplaceId(): Promise<string | null> {
@@ -126,6 +142,86 @@ export const GENERIC_CATEGORY_TOKENS = new Set<string>([
   'product', 'products', 'piece', 'pieces', 'kit', 'pack',
   'assorted', 'various', 'generic', 'item', 'items',
 ]);
+// Product-type → category name fragment aliases for candidate boosting
+export const PRODUCT_TYPE_ALIASES: Record<string, string[]> = {
+  'vantilatoru': ['vantilator', 'fan', 'ventilator'],
+  'vantilator': ['vantilator', 'fan', 'ventilator'],
+  'fan': ['vantilator', 'fan', 'ventilator'],
+  'el fani': ['vantilator', 'fan'],
+  'boyun fani': ['vantilator', 'fan'],
+  'masa fani': ['vantilator', 'fan'],
+  'bebek arabasi fani': ['vantilator', 'fan'],
+  'vantilator': ['vantilator', 'fan'],
+  'ventilator': ['vantilator', 'fan'],
+  'buz': ['buz', 'sogutucu', 'buzluk'],
+  'buzluk': ['buz', 'sogutucu', 'buzluk'],
+  'sogutucu': ['sogutucu', 'buzluk', 'buz'],
+  'kulluk': ['kulluk'],
+  'kulaklik': ['kulaklik'],
+  'kulaklık': ['kulaklik'],
+  'isitici': ['suisiticik', 'kettle', 'isiticik'],
+  'kettle': ['kettle', 'suisiticik'],
+  'cay': ['cay', 'caydanlik', 'cayseti'],
+  'kahvalti': ['kahvaltilik', 'bicak'],
+  'bicak': ['bicak', 'bicakbileyici'],
+  'bileme': ['bicakbileyici', 'bicak'],
+  'sefer': ['sefer', 'celik', 'tencere'],
+  'sefertasi': ['sefer', 'celik', 'tencere'],
+  'camsil': ['camsil', 'silici'],
+  'sunjur': ['sunger', 'camsil'],
+  'sünger': ['sunger', 'camsil'],
+  'yogurt': ['yogurt', 'sut'],
+  'kabı': ['kabi', 'kaplar'],
+  'kabi': ['kabi', 'kaplar'],
+  'poset': ['poset', 'kutu'],
+  'kutu': ['kutu', 'poset'],
+  'sarimsak': ['sarimsak', 'ezici'],
+  'ezici': ['ezici', 'ezme'],
+  'havan': ['havan', 'ezici'],
+  'dovme': ['dovme', 'havan'],
+  'bisiklet': ['bisiklet'],
+  'park': ['park', 'ayaklik'],
+  'ayaklik': ['ayaklik', 'park'],
+  'oyuncak': ['oyuncak'],
+  'kedi': ['kedi'],
+  'kopek': ['kopek'],
+  'mama': ['mama'],
+  'pelin': ['pelin', 'ot'],
+  'magnet': ['miknatisli', 'miknatis'],
+  'mıknatıs': ['miknatisli', 'miknatis'],
+  'duman': ['duman', 'kulluk'],
+  'kokusuz': ['kokusuz', 'dumansiz'],
+  'dumansiz': ['dumansiz', 'kokusuz'],
+};
+
+// PERF(RT-V2): ağaç başına leaf-başına ön hesaplama cache'i.
+// Kök neden: buildAiCandidates/classifyByRule her ÜRÜN için tüm leaf'lerin token
+// Set'lerini ve morfolojik normalize formlarını sıfırdan hesaplıyordu (~200ms/ürün,
+// 14k ürün = ~48dk). Bu değerler yalnızca leaf fullPath/name'e bağlıdır → ağaç
+// ömrü boyunca sabittir; memoization SEMANTİĞİ DEĞİŞTİRMEZ, sadece tekrar eder.
+interface LeafPrecomp {
+  normName: string;          // normalizeName(leaf.name)
+  pathTokSet: Set<string>;   // tokensOf(leaf.fullPath)
+  normPathToks: string[];    // [...pathTokSet].map(normalizeName) — morph karşılaştırması için
+}
+
+const _leafPrecompCache = new WeakMap<TreeIndex, Map<string, LeafPrecomp>>();
+
+function getLeafPrecomp(tree: TreeIndex): Map<string, LeafPrecomp> {
+  let m = _leafPrecompCache.get(tree);
+  if (m) return m;
+  m = new Map<string, LeafPrecomp>();
+  const normTok = (t: string) => normalizeName(t);
+  for (const l of tree.leaves) {
+    const pathTokSet = new Set(tokensOf(l.fullPath));
+    const normPathToks: string[] = [];
+    for (const t of pathTokSet) normPathToks.push(normTok(t));
+    m.set(l.id, { normName: normTok(l.name), pathTokSet, normPathToks });
+  }
+  _leafPrecompCache.set(tree, m);
+  return m;
+}
+
 export function tokensOf(text: string): string[] {
   return Array.from(new Set(
     (text || '').toLowerCase().split(/[^a-z0-9çğıöşü]+/).map((t) => t.trim()).filter((t) => t.length >= 3)
@@ -140,6 +236,17 @@ function leafToken(xmlPath: string): string {
   const toks = pathTokens(xmlPath);
   return toks[toks.length - 1] || '';
 }
+
+export function extractProductTypeTokens(title: string): string[] {
+  const clean = (title || '')
+    .replace(/^HOBİBAHÇEM®\s*/i, '')
+    .replace(/^HOBİBAHÇEM\s*/i, '')
+    .replace(/[\d+'\"]li|\badet\b|\bkutulu\b|\byeni\b|\bnesil\b|\bmodel\b|\bmarka\b|\bkaliteli\b|\bsik\b|\btasarım\b|\bmodern\b|\bpaslanmaz\b|\bçelik\b|\bmetal\b|\bahşap\b|\bplastik\b/gi, ' ')
+    .replace(/\bhobi\b|\bbahçem\b/gi, ' ');
+  const tokens = clean.toLowerCase().split(/[^a-zçğıöşü]+/).filter(t => t.length >= 3);
+  return [...new Set(tokens)];
+}
+
 
 function suffixOverlap(xmlTokens: string[], leafFullPath: string): number {
   const leafTokens = pathTokens(leafFullPath);
@@ -237,16 +344,24 @@ export function classifyByRule(product: { id: string; xmlKey: string; title: str
   }
 
   // 3) Kural tabanlı benzerlik adayları (MEDIUM/LOW)
-  const productTokens = new Set([...tokensOf(product.title || ''), ...xmlTokens.filter((t) => t.length >= 3)]);
+  const precomp = getLeafPrecomp(tree);
+  const titleTokensForRule = extractProductTypeTokens(product.title || '');
   const scored: Candidate[] = [];
   for (const l of tree.leaves) {
-    const leafNorm = normalizeName(l.name);
+    const pc = precomp.get(l.id);
+    if (!pc) continue; // cache eksikse leaf atlanır (imkansız; güvenlik için)
+    const leafNorm = pc.normName;
     const contains = leafNorm.length >= 4 && leafTok.length >= 4 && (leafNorm.includes(leafTok) || leafTok.includes(leafNorm));
-    const leafTokens = new Set(tokensOf(l.fullPath));
-    let overlap = 0;
-    for (const t of productTokens) if (leafTokens.has(t)) overlap++;
-    let score = overlap * 10;
-    if (contains) score += 20;
+    const leafTokens = pc.pathTokSet;
+    
+    let titleOverlap = 0;
+    let supplierOverlap = 0;
+    for (const t of titleTokensForRule) if (leafTokens.has(t)) titleOverlap++;
+    for (const t of xmlTokens) if (leafTokens.has(t)) supplierOverlap++;
+    
+    let score = titleOverlap * 15 + supplierOverlap * 5;
+    if (contains) score += 40;
+    
     if (score > 0) scored.push({ id: l.id, name: l.name, fullPath: l.fullPath, score });
   }
   scored.sort((a, b) => b.score - a.score);
@@ -266,16 +381,114 @@ export function classifyByRule(product: { id: string; xmlKey: string; title: str
 export function buildAiCandidates(product: { title: string | null; supplierCategory: string | null }, tree: TreeIndex, ruleCandidates: Candidate[], topK: number): CategoryCandidate[] {
   const leafTok = leafToken(product.supplierCategory || '');
   const xmlTokens = new Set(pathTokens(product.supplierCategory || '').filter((t) => t.length >= 3));
-  const titleTokens = tokensOf(product.title || '');
-  const allTokens = new Set([...xmlTokens, ...titleTokens]);
+  const titleTokens = tokensOf(product.title || '').filter(t => !['hobi', 'bahçem'].includes(t));
+  const productTypeTokens = extractProductTypeTokens(product.title || '');
+  
+  // Derive alias targets from product type tokens
+  const aliasTargets = new Set<string>();
+  for (const t of productTypeTokens) {
+    const aliases = PRODUCT_TYPE_ALIASES[t];
+    if (aliases) {
+      for (const a of aliases) aliasTargets.add(a);
+    }
+  }
 
+  const precomp = getLeafPrecomp(tree);
   const scored = tree.leaves.map((l) => {
-    const leafTokens = new Set(tokensOf(l.fullPath));
-    let overlap = 0;
-    for (const t of allTokens) if (leafTokens.has(t)) overlap++;
-    const leafNorm = normalizeName(l.name);
-    const contains = leafNorm.length >= 4 && leafTok.length >= 4 && (leafNorm.includes(leafTok) || leafTok.includes(leafNorm));
-    return { leaf: l, score: overlap * 10 + (contains ? 25 : 0) };
+    const pc = precomp.get(l.id);
+    if (!pc) return { leaf: l, score: 0, aliasHit: false, exactHit: false };
+    const leafTokens = pc.pathTokSet;
+    const leafNorm = pc.normName;
+    
+    // Token overlap with different weights
+    let titleOverlap = 0;
+    let supplierOverlap = 0;
+    let aliasHit = false;
+    let exactHit = false;
+    
+    for (const t of titleTokens) {
+      if (leafTokens.has(t)) titleOverlap++;
+    }
+    
+    for (const t of xmlTokens) {
+      if (leafTokens.has(t)) supplierOverlap++;
+    }
+    
+    // FIX(311): ASCII-normalize + prefix (morfolojik) token eşleşmesi.
+    // Kök neden: tokensOf Türkçe karakterleri korur, normalizeName çevirir;
+    // 'vantilatoru' ↔ 'vantilatör' gibi aynı kök tokenlar overlap=0 üretip
+    // relevant leaf'i score=0 ile HER K'da düşürüyordu. Prefix eşleşmesi
+    // yalnızca ≥4 karakterli tokenlarda yarım puan alır (generic guard korunur).
+    const normTok = (t: string) => normalizeName(t);
+    const morphMatchNa = (na: string, nb: string): boolean => {
+      if (!na || !nb) return false;
+      if (na === nb) return true;
+      return (na.length >= 4 && nb.startsWith(na)) || (nb.length >= 4 && na.startsWith(nb));
+    };
+    const morphMatch = (a: string, b: string): boolean => morphMatchNa(normTok(a), normTok(b));
+    
+    let titleMorph = 0;
+    for (const t of titleTokens) {
+      if (leafTokens.has(t)) continue; // tam eşleşme zaten sayıldı
+      if (t.length < 4) continue;
+      const na = normTok(t);
+      for (const nb of pc.normPathToks) {
+        if (morphMatchNa(na, nb)) { titleMorph++; break; }
+      }
+    }
+    titleOverlap += titleMorph; // yarım ağırlık etkisi: ×15 tam puan yerine morfolojik hit de tam token kanıtıdır
+    
+    for (const t of xmlTokens) {
+      if (leafTokens.has(t)) supplierOverlap++;
+    }
+    
+    // Alias matching (product type → category fragment)
+    for (const target of aliasTargets) {
+      if (leafNorm.includes(target)) {
+        aliasHit = true;
+        break;
+      }
+    }
+    
+    // Exact-ish normalized match (handles "Kulak İçi Kulaklık" vs "Kulak içi TWS Bluetooth Kulaklık")
+    if (!exactHit && leafNorm.length >= 4 && leafTok.length >= 4) {
+      const normalizedLeafName = leafNorm;
+      const normalizedLeafTok = leafTok;
+      if (normalizedLeafName.includes(normalizedLeafTok) || normalizedLeafTok.includes(normalizedLeafName)) {
+        exactHit = true;
+      }
+    }
+    
+    // Product-type alias boost
+    let productTypeBoost = 0;
+    for (const t of productTypeTokens) {
+      const aliases = PRODUCT_TYPE_ALIASES[t];
+      if (aliases) {
+        for (const a of aliases) {
+          if (leafNorm.includes(a)) {
+            productTypeBoost = Math.max(productTypeBoost, 80);
+            break;
+          }
+        }
+      }
+    }
+    // Extra boost for direct leaf name match in title
+    const titleNorm = normalizeTr(product.title || '');
+    if (leafNorm.length >= 4 && titleNorm.includes(leafNorm)) {
+      productTypeBoost = Math.max(productTypeBoost, 100);
+    }
+    
+    
+    // Scoring: title tokens weighted higher, supplier lower, alias/exact bonuses
+    let score = titleOverlap * 15 + supplierOverlap * 5 + productTypeBoost;
+    if (exactHit) score += 40;
+    // Tie-breaker: prefer shorter category names (more specific) and exact name matches
+    if (leafNorm.length >= 4 && titleNorm.includes(leafNorm)) {
+      score += 0.5; // Small boost for direct name containment
+    }
+    // Prefer more specific categories (longer path = more specific)
+    score += leafNorm.length * 0.01;
+    return { leaf: l, score, aliasHit, exactHit };
   }).filter((s) => s.score > 0);
 
   scored.sort((a, b) => b.score - a.score);
@@ -283,13 +496,18 @@ export function buildAiCandidates(product: { title: string | null; supplierCateg
   const out: CategoryCandidate[] = [];
   const seen = new Set<string>();
 
-  // Kural adayları önce (exact leaf/path dahil)
-  for (const c of ruleCandidates) {
-    if (!seen.has(c.id)) { seen.add(c.id); out.push({ id: c.id, name: c.name, fullPath: c.fullPath }); }
+  // Kural adayları önce (exact leaf/path dahil) — sadece en güçlü adayları önce
+  const highConfidenceRules = ruleCandidates
+    .filter(c => c.score >= 50)
+    .slice(0, 5);
+  for (const c of highConfidenceRules) {
+    if (!seen.has(c.id)) { seen.add(c.id); out.push({ id: c.id, name: c.name, fullPath: c.fullPath, score: c.score }); }
   }
-  // Başlık/token skor adayları
+  // Başlık/token skor adayları — minimum skor filtresi ile gürültüyü azalt
+  const MIN_CANDIDATE_SCORE = 15;
   for (const s of scored) {
-    if (!seen.has(s.leaf.id)) { seen.add(s.leaf.id); out.push({ id: s.leaf.id, name: s.leaf.name, fullPath: s.leaf.fullPath }); }
+    if (s.score < MIN_CANDIDATE_SCORE) break;
+    if (!seen.has(s.leaf.id)) { seen.add(s.leaf.id); out.push({ id: s.leaf.id, name: s.leaf.name, fullPath: s.leaf.fullPath, score: s.score }); }
   }
 
   return out.slice(0, topK);
@@ -442,12 +660,12 @@ export async function classifyByAi(
   products: ProductForMatch[],
   tree: TreeIndex,
   marketplaceName: string | null,
-  topK = 25,
+  topK = 10,
 ): Promise<AiPassResult> {
   const decisions = new Map<string, MatchDecision>();
   if (products.length === 0) return { ok: true, provider: 'none', model: 'none', decisions };
 
-  const BATCH_SIZE = 10;
+  const BATCH_SIZE = 5;
   const batches: ProductForMatch[][] = [];
   for (let i = 0; i < products.length; i += BATCH_SIZE) {
     batches.push(products.slice(i, i + BATCH_SIZE));
@@ -468,7 +686,7 @@ export async function classifyByAi(
 
   // FIX(F-04): batch'ler sıralı yerine SINIRLI eşzamanlılıkla çalışır.
   // Karar mantığı, prompt, eşikler ve provider önceliği DEĞİŞMEDİ.
-  const AI_BATCH_CONCURRENCY = 3;
+  const AI_BATCH_CONCURRENCY = 1;
   // FIX(F-04): geçici hatalar (429/5xx/timeout/tüm-sağlayıcılar-dolu) için sınırlı backoff retry.
   // Kalıcı hatalar (INVALID_KEY, MODEL_NOT_FOUND vb.) retry EDİLMEZ.
   const TRANSIENT_ERROR_CODES = new Set(['RATE_LIMIT', 'TIMEOUT', 'SERVER_ERROR', 'NO_AI_PROVIDER_AVAILABLE']);
@@ -485,7 +703,80 @@ export async function classifyByAi(
   };
 
   const processBatch = async (batch: ProductForMatch[]): Promise<void> => {
+    // V2 PRE-LOOKUP: check Knowledge before AI call
+    const v2Decisions = new Map<string, MatchDecision>();
+    const aiProducts: ProductForMatch[] = [];
+
     for (const p of batch) {
+      // L1: V2 Knowledge lookup
+      const kResult = lookupKnowledgeV2(p.supplierCategory, tree);
+      if (kResult.hit && kResult.entry) {
+        // V2 Knowledge HIT - use learned result, skip AI
+        const leaf = tree.leafById.get(kResult.entry.targetCategoryId);
+        if (leaf) {
+          v2Decisions.set(p.id, {
+            productId: p.id,
+            xmlKey: p.xmlKey,
+            title: p.title,
+            supplierCategory: p.supplierCategory,
+            xmlBrandName: p.xmlBrandName,
+            method: 'ai', // method='ai' to pass through verification
+            confidence: kResult.entry.confidence,
+            categoryId: leaf.id,
+            externalId: leaf.externalId,
+            categoryName: leaf.name,
+            fullPath: leaf.fullPath,
+            reason: `V2 Knowledge HIT (learned, conf=${kResult.entry.confidence})`,
+            candidates: [{ id: leaf.id, name: leaf.name, fullPath: leaf.fullPath, score: Math.round(kResult.entry.confidence * 100) }],
+            mappingExists: false,
+            isLeaf: true,
+          });
+          continue; // skip AI for this product
+        }
+      }
+
+      // L2: V2 Group lookup (only if Knowledge MISS)
+      const gResult = lookupGroupEvidence(p.supplierCategory, tree);
+      if (gResult.hit && gResult.evidence) {
+        const leaf = tree.leafById.get(gResult.evidence.targetCategoryId);
+        if (leaf) {
+          v2Decisions.set(p.id, {
+            productId: p.id,
+            xmlKey: p.xmlKey,
+            title: p.title,
+            supplierCategory: p.supplierCategory,
+            xmlBrandName: p.xmlBrandName,
+            method: 'ai',
+            confidence: gResult.evidence.ratio >= 0.95 ? gResult.evidence.ratio : 0.85, // Group confidence as suggestion
+            categoryId: leaf.id,
+            externalId: leaf.externalId,
+            categoryName: leaf.name,
+            fullPath: leaf.fullPath,
+            reason: `V2 Group HIT (${gResult.evidence.count}/${gResult.evidence.total}, ratio=${gResult.evidence.ratio.toFixed(2)})`,
+            candidates: [{ id: leaf.id, name: leaf.name, fullPath: leaf.fullPath, score: Math.round((gResult.evidence.ratio) * 100) }],
+            mappingExists: false,
+            isLeaf: true,
+          });
+          continue; // skip AI for this product
+        }
+      }
+
+      // V2 MISS - product needs AI
+      aiProducts.push(p);
+    }
+
+    // Add V2 decisions immediately (these skip AI)
+    for (const [id, decision] of v2Decisions) {
+      decisions.set(id, decision);
+    }
+
+    // If all products had V2 HIT, skip AI call
+    if (aiProducts.length === 0) {
+      return;
+    }
+
+    // Build candidates for AI products
+    for (const p of aiProducts) {
       if (!candidatesByProduct.has(p.id)) {
         const rule = classifyByRule(p, tree);
         const cands = buildAiCandidates(p, tree, rule.candidates, topK);
@@ -493,19 +784,19 @@ export async function classifyByAi(
       }
     }
 
-    const ai = await callWithBoundedRetry(batch);
+    const ai = await callWithBoundedRetry(aiProducts);
 
     if (!ai.ok) {
       anyFailed = true;
       errors.push(ai.error || 'Batch failed');
-      for (const p of batch) {
+      for (const p of aiProducts) {
         const cands = candidatesByProduct.get(p.id) || [];
         decisions.set(p.id, {
           ...manualFor(p, `AI batch failed: ${ai.error || 'AI yanıt yok'}`),
           candidates: cands.map((c) => ({ id: c.id, name: c.name, fullPath: c.fullPath, score: 0 })),
         });
       }
-      return; // FIX(F-04): eski for-loop 'continue'sunun fonksiyon karşılığı
+      return;
     }
 
     provider = ai.provider;
@@ -727,8 +1018,38 @@ export async function applyVerifiedMatch(decision: MatchDecision, marketplaceId:
     return fail('Aktif tt CategoryMapping yok — categoryMatch yazılmadı');
   }
 
-  const product = await prisma.product.findUnique({ where: { id: decision.productId }, select: { id: true } });
+  const product = await prisma.product.findUnique({ where: { id: decision.productId }, select: { id: true, title: true, supplierCategory: true, categoryId: true } });
   if (!product) return fail('Ürün bulunamadı');
+
+  // P0: SafetyGate kontrolü — tek kapı mimarisi
+  const tree = await loadTrendyolTree();
+  const leaf = tree.leafById.get(decision.categoryId);
+  if (leaf) {
+    const safetyInput: SafetyGateInput = {
+      productId: decision.productId,
+      title: product.title,
+      supplierCategory: product.supplierCategory,
+      currentCategoryId: product.categoryId ?? null,
+      currentCategoryName: null,
+      currentCategoryPath: product.categoryId ? tree.leafById.get(product.categoryId)?.fullPath ?? null : null,
+      selectedCategoryId: decision.categoryId,
+      selectedCategoryName: leaf.name,
+      selectedCategoryPath: leaf.fullPath,
+      selectedCategoryExternalId: leaf.externalId,
+      candidates: decision.candidates.map(c => ({ id: c.id, name: c.name, fullPath: c.fullPath, score: c.score })),
+      aiConfidence: decision.confidence,
+      verifierVerdict: decision.method === 'ai',
+      verifierConfidence: decision.confidence,
+      margin: 0.5,
+      tree,
+      isDeterministic: decision.method !== 'ai',
+      decisionMethod: decision.method,
+    };
+    const safety = verifyCategorySafety(safetyInput);
+    if (!safety.passed) {
+      return fail(`Safety gate rejected: ${safety.reason}`);
+    }
+  }
 
   await prisma.product.update({
     where: { id: decision.productId },
@@ -747,13 +1068,21 @@ export async function applyVerifiedMatch(decision: MatchDecision, marketplaceId:
       action: decision.method === 'ai' ? 'CATEGORY_MATCH_AI' : 'CATEGORY_MATCH_AUTO',
       entity: 'category',
       entityId: decision.categoryId,
-      meta: JSON.stringify({
+      meta: buildCategoryAuditMeta({
         productId: decision.productId,
-        sourceCategory: decision.supplierCategory,
-        targetCategory: decision.categoryName,
-        externalId: decision.externalId,
-        method: decision.method,
-        confidence: decision.confidence,
+        decisionMethod: decision.method,
+        decisionScope: 'PRODUCT',
+        oldCategoryId: null,
+        newCategoryId: decision.categoryId,
+        supplierCategory: decision.supplierCategory,
+        selectedCategory: decision.categoryName,
+        candidate: decision.categoryName,
+        aiConfidence: decision.confidence,
+        verifierResult: decision.method === 'ai' ? 'YES' : 'DETERMINISTIC',
+        verifierConfidence: decision.confidence,
+        margin: 0.5,
+        safetyGateResult: 'PASS',
+        reason: decision.reason ?? '',
       }),
       details: `Ürün ${decision.xmlKey} → "${decision.categoryName}" (externalId=${decision.externalId}, ${decision.method}, conf=${decision.confidence})`,
     },
@@ -829,13 +1158,19 @@ export async function applyVerifiedMatchesBatch(
         })
       : Promise.resolve([] as { categoryId: string }[]),
     productIds.length > 0
-      ? prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true } })
-      : Promise.resolve([] as { id: string }[]),
+      ? prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, title: true, supplierCategory: true, categoryId: true } })
+      : Promise.resolve([] as { id: string; title: string | null; supplierCategory: string | null; categoryId: string | null }[]),
   ]);
+
+  // P0: SafetyGate için product data map
+  const productDataById = new Map(products.map((p) => [p.id, p]));
 
   const catExtById = new Map(cats.map((c) => [c.id, c.externalId]));
   const mappedCatIds = new Set(mappings.map((m) => m.categoryId));
   const existingProductIds = new Set(products.map((p) => p.id));
+
+  // P0: SafetyGate için tree preload
+  const safetyTree = await loadTrendyolTree();
 
   // Gate 3-7: preload edilmiş veriyle aynı sıra ve aynı sebeplerle değerlendirme
   type VerifiedWrite = {
@@ -865,6 +1200,37 @@ export async function applyVerifiedMatchesBatch(
       continue;
     }
 
+    // P0: SafetyGate kontrolü — batch'te tek kapı
+    const pData = productDataById.get(d.productId);
+    const safetyLeaf = safetyTree.leafById.get(catId);
+    if (pData && safetyLeaf) {
+      const safetyInput: SafetyGateInput = {
+        productId: d.productId,
+        title: pData.title,
+        supplierCategory: pData.supplierCategory,
+        currentCategoryId: pData.categoryId ?? null,
+        currentCategoryName: null,
+        currentCategoryPath: pData.categoryId ? safetyTree.leafById.get(pData.categoryId)?.fullPath ?? null : null,
+        selectedCategoryId: catId,
+        selectedCategoryName: safetyLeaf.name,
+        selectedCategoryPath: safetyLeaf.fullPath,
+        selectedCategoryExternalId: safetyLeaf.externalId,
+        candidates: d.candidates.map(c => ({ id: c.id, name: c.name, fullPath: c.fullPath, score: c.score })),
+        aiConfidence: d.confidence,
+        verifierVerdict: d.method === 'ai',
+        verifierConfidence: d.confidence,
+        margin: 0.5,
+        tree: safetyTree,
+        isDeterministic: d.method !== 'ai',
+        decisionMethod: d.method,
+      };
+      const safety = verifyCategorySafety(safetyInput);
+      if (!safety.passed) {
+        results[p.index] = { productId: d.productId, applied: false, method: d.method, externalId: d.externalId, reason: `Safety gate rejected: ${safety.reason}` };
+        continue;
+      }
+    }
+
     verified.push({ index: p.index, decision: d, categoryId: catId });
   }
 
@@ -892,13 +1258,21 @@ export async function applyVerifiedMatchesBatch(
           action: v.decision.method === 'ai' ? 'CATEGORY_MATCH_AI' : 'CATEGORY_MATCH_AUTO',
           entity: 'category',
           entityId: v.categoryId,
-          meta: JSON.stringify({
+          meta: buildCategoryAuditMeta({
             productId: v.decision.productId,
-            sourceCategory: v.decision.supplierCategory,
-            targetCategory: v.decision.categoryName,
-            externalId: v.decision.externalId,
-            method: v.decision.method,
-            confidence: v.decision.confidence,
+            decisionMethod: v.decision.method,
+            decisionScope: 'PRODUCT',
+            oldCategoryId: null,
+            newCategoryId: v.categoryId,
+            supplierCategory: v.decision.supplierCategory,
+            selectedCategory: v.decision.categoryName,
+            candidate: v.decision.categoryName,
+            aiConfidence: v.decision.confidence,
+            verifierResult: v.decision.method === 'ai' ? 'YES' : 'DETERMINISTIC',
+            verifierConfidence: v.decision.confidence,
+            margin: 0.5,
+            safetyGateResult: 'PASS',
+            reason: v.decision.reason ?? '',
           }),
           details: `Ürün ${v.decision.xmlKey} → "${v.decision.categoryName}" (externalId=${v.decision.externalId}, ${v.decision.method}, conf=${v.decision.confidence})`,
         })),

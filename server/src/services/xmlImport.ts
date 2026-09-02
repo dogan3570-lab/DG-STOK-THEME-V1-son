@@ -1,9 +1,11 @@
 import { prisma } from '../db/prisma.ts';
 import { invalidateDashboardStatsCache } from '../routes/dashboard.ts';
 import { ensureDefaultListingTemplates } from '../bootstrap.ts';
-import {reconcileProductGates, queueReconcileProductGates} from './readinessService.ts';
-import { reconcileProductMarketplaceState } from './marketplaceReconcile.ts';
+import {reconcileProductGates, queueReconcileProductGates, queueReconcileProductGatesBulk} from './readinessService.ts';
+import { reconcileProductMarketplaceState, reconcileProductMarketplaceStateBulk } from './marketplaceReconcile.ts';
 import { isMarketplaceOperational } from './marketplaceTruth.ts';
+import { invalidateTitleIndex } from './titleSearchIndex.ts';
+import { detectVariantAttributes } from './readiness.ts';
 
 export type XmlImportResult = {
   ok: boolean;
@@ -494,6 +496,7 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
 
     const results = [] as Array<{ xmlKey: string; created: boolean; matchedBy?: 'xmlKey' | 'sku'; outcome: string; errorDetail?: string }>;
     let failedCount = 0;
+    // TASK314 tombstone sayaçları mevcut skippedCount'a entegre (ayrı değişken gerekmez)
     let skippedCount = 0;
 
     const allCategories = await prisma.category.findMany({ select: { id: true, name: true } });
@@ -556,140 +559,177 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
       const batch = uniqueItems.slice(i, i + BATCH_SIZE);
       const batchResults: typeof results = [];
 
+      // FIX(2M): Toplu mevcut ürün kontrolü — N+1 kaldırıldı (500'e kadar ürün tek sorguda)
+      const batchXmlKeys = batch.map(it => it.xmlKey);
+      const existingProducts = await prisma.product.findMany({
+        where: { xmlKey: { in: batchXmlKeys } },
+        select: { id: true, xmlKey: true, matchedBy: true, categoryMatch: true, status: true },
+      });
+      const existingMap = new Map(existingProducts.map(p => [p.xmlKey, p]));
+
+      const protectedMatchedBys = ['manual', 'ai', 'auto', 'verified', 'canonical'];
+      const toCreate: typeof batch = [];
+      const toUpdate: typeof batch = [];
+
       for (const item of batch) {
-        try {
+        const existing = existingMap.get(item.xmlKey);
+        if (existing && existing.status === 'DELETED') {
+          skippedCount++;
+          batchResults.push({ xmlKey: item.xmlKey, created: false, outcome: 'skipped_deleted', errorDetail: 'kullanıcı silmiş (tombstone)' });
+          continue;
+        }
+        if (existing) {
+          toUpdate.push(item);
+        } else {
+          toCreate.push(item);
+        }
+      }
+
+      // Yeni ürünler — bulk createMany (skipDuplicates ile çakışma koruması)
+      if (toCreate.length > 0) {
+        const createData = toCreate.map(item => {
           const categoryParts = [item.topCategory, item.mainCategory, item.subCategory, item.category].filter(Boolean);
           const supplierCategory = categoryParts.length > 0 ? categoryParts.join(' > ') : null;
-
           const catName = (item.category || item.subCategory || item.mainCategory || item.topCategory || '').toLowerCase().trim();
-          let categoryId = catName ? categoryMap.get(catName) || null : null;
-          if (!categoryId && catName) {
-            try {
-              const newCat = await prisma.category.create({ data: { name: catName } });
-              categoryId = newCat.id;
-              categoryMap.set(catName, newCat.id);
-            } catch {
-              const existingCat = await prisma.category.findFirst({ where: { name: { equals: catName } } });
-              if (existingCat) {
-                categoryId = existingCat.id;
-                categoryMap.set(catName, existingCat.id);
-              }
-            }
-          }
-
+          const categoryId = catName ? categoryMap.get(catName) || defaultCategory.id : defaultCategory.id;
           const brandName = (item.brand || '').toLowerCase().trim();
-          let brandId = brandName ? brandMap.get(brandName) || null : null;
-          if (!brandId && brandName) {
-            try {
-              const newBrand = await prisma.brand.create({ data: { name: brandName } });
-              brandId = newBrand.id;
-              brandMap.set(brandName, newBrand.id);
-            } catch {
-              const existingBrand = await prisma.brand.findFirst({ where: { name: { equals: brandName } } });
-              if (existingBrand) {
-                brandId = existingBrand.id;
-                brandMap.set(brandName, existingBrand.id);
-              }
-            }
-          }
-
-          // GERÇEK VARIANT: aynı parent/group altında 2+ seçenek varsa varyantlıdır.
-          // AKILLIBAYI1 XML'inde parent/group yok → hasVariants=false → NOT_REQUIRED.
+          const brandId = brandName ? brandMap.get(brandName) || defaultBrand.id : defaultBrand.id;
           const groupKey = item.parentId || item.groupId;
           const hasVariants = !!groupKey && (groupCounts.get(groupKey) || 0) > 1;
+          const titleHasVariant = detectVariantAttributes(item.title || '').length > 0;
+          const shouldWaitForVariant = hasVariants || titleHasVariant;
 
-          // V3 USER MAPPING PROTECTION: check if product has protected match before overwriting
-          const protectedMatchedBys = ['manual', 'ai', 'auto', 'verified', 'canonical'];
-          const existingProduct = await prisma.product.findUnique({
-            where: { xmlKey: item.xmlKey },
-            select: { id: true, matchedBy: true, categoryMatch: true },
-          }).catch(() => null);
-          const hasProtectedMatch = existingProduct?.categoryMatch && existingProduct.matchedBy && protectedMatchedBys.includes(existingProduct.matchedBy);
-
-          const created = await prisma.product.upsert({
-            where: { xmlKey: item.xmlKey },
-            update: {
-              title: item.title,
-              sku: item.sku,
-              barcode: item.barcode,
-              stock: Number.isFinite(item.stock) ? item.stock : 0,
-              minStock: Number.isFinite(item.minStock) ? item.minStock : 0,
-              salePrice: item.price,
-              vatRate: item.tax,
-              description: item.description,
-              images: item.images,
-              link: item.link,
-              unit: item.unit,
-              currency: item.currency,
-              detail: item.detail,
-              // V3: only overwrite categoryId if no protected match exists
-              ...(hasProtectedMatch ? {} : {
-                categoryId: categoryId || defaultCategory.id,
-                categoryMatch: false,
-                matchedBy: null,
-                aiScore: null,
-                aiSuggestedCategoryId: null,
-                lastMatchDate: null,
-              }),
-              brandId: brandId || defaultBrand.id,
-              xmlBrandName: item.brand || null,
-              supplierCategory,
-              brandMatch: true,
-              variantMatch: false,
-              variantStatus: hasVariants ? 'WAITING_AI' : 'NOT_REQUIRED',
-              templateMatch: true,
-              status: 'XML',
-              xmlSourceId: sourceId,
-            },
-            create: {
-              xmlKey: item.xmlKey,
-              title: item.title,
-              sku: item.sku,
-              barcode: item.barcode,
-              stock: Number.isFinite(item.stock) ? item.stock : 0,
-              minStock: Number.isFinite(item.minStock) ? item.minStock : 0,
-              salePrice: item.price,
-              vatRate: item.tax,
-              description: item.description,
-              images: item.images,
-              link: item.link,
-              unit: item.unit,
-              currency: item.currency,
-              detail: item.detail,
-              categoryId: categoryId || defaultCategory.id,
-              brandId: brandId || defaultBrand.id,
-              xmlBrandName: item.brand || null,
-              supplierCategory,
-              categoryMatch: false,
-              brandMatch: true,
-              variantMatch: false,
-              variantStatus: hasVariants ? 'WAITING_AI' : 'NOT_REQUIRED',
-              templateMatch: true,
-              status: 'XML',
-              xmlSourceId: sourceId,
-            },
-          });
-
-          // VERİ KÖPRÜSÜ: ürünü tüm aktif pazaryerlerine PENDING state ile bağla
-          for (const mpId of activeMarketplaceIds) {
-            reconcileProductMarketplaceState(created.id, mpId).catch(() => null);
-          }
-
-          queueReconcileProductGates(created.id);
-
-          const isNew = created.createdAt.getTime() === created.updatedAt.getTime();
-          batchResults.push({
+          return {
             xmlKey: item.xmlKey,
-            created: isNew,
-            outcome: isNew ? 'created' : 'updated'
-          });
+            title: item.title,
+            sku: item.sku,
+            barcode: item.barcode,
+            stock: Number.isFinite(item.stock) ? item.stock : 0,
+            minStock: Number.isFinite(item.minStock) ? item.minStock : 0,
+            salePrice: item.price,
+            vatRate: item.tax,
+            description: item.description,
+            images: item.images,
+            link: item.link,
+            unit: item.unit,
+            currency: item.currency,
+            detail: item.detail,
+            categoryId,
+            brandId,
+            xmlBrandName: item.brand || null,
+            supplierCategory,
+            categoryMatch: false,
+            brandMatch: true,
+            variantMatch: false,
+            variantStatus: hasVariants ? 'WAITING_AI' : 'NOT_REQUIRED',
+            templateMatch: true,
+            status: 'XML' as const,
+            xmlSourceId: sourceId,
+          };
+        });
 
-          // Başlık tabanlı varyant kaydı KALDIRILDI: XML'de gerçek varyant yapısı
-          // yoksa hiçbir varyant kaydı yazılmaz (false-positive önlenir).
-        } catch (err) {
-          failedCount++;
-          batchResults.push({ xmlKey: item.xmlKey, created: false, outcome: 'failed', errorDetail: String(err) });
+        try {
+          await prisma.product.createMany({ data: createData });
+        } catch (e: any) {
+          // P2002 = unique constraint — race condition ile zaten eklendi, sorun yok
+          if (e?.code !== 'P2002') {
+            console.error('[Import] createMany failure:', e);
+          }
         }
+
+        // Oluşturulan ürünleri IDs ile çek (PMS reconcile için gerekli)
+        const createdXmlKeys = createData.map(d => d.xmlKey);
+        const createdProducts = await prisma.product.findMany({
+          where: { xmlKey: { in: createdXmlKeys } },
+          select: { id: true, xmlKey: true },
+        });
+        const createdMap = new Map(createdProducts.map(p => [p.xmlKey, p]));
+
+        // FIX(2M): Toplu PMS reconcile — ürün başına N+1 sorgu yerine tek raw SQL
+        const createdIds = createdProducts.map(p => p.id);
+        for (const mpId of activeMarketplaceIds) {
+          reconcileProductMarketplaceStateBulk(createdIds, mpId).catch(() => null);
+        }
+        queueReconcileProductGatesBulk(createdIds);
+
+        for (const item of toCreate) {
+          const created = createdMap.get(item.xmlKey);
+          if (created) {
+            batchResults.push({ xmlKey: item.xmlKey, created: true, outcome: 'created' });
+          } else {
+            // createMany skipDuplicates — muhtemelen race condition ile eklendi
+            batchResults.push({ xmlKey: item.xmlKey, created: false, outcome: 'updated' });
+          }
+        }
+      }
+
+      // Mevcut ürünler — bulk update (koruma kontrolü ile)
+      if (toUpdate.length > 0) {
+        for (const item of toUpdate) {
+          try {
+            const existing = existingMap.get(item.xmlKey)!;
+            const categoryParts = [item.topCategory, item.mainCategory, item.subCategory, item.category].filter(Boolean);
+            const supplierCategory = categoryParts.length > 0 ? categoryParts.join(' > ') : null;
+            const catName = (item.category || item.subCategory || item.mainCategory || item.topCategory || '').toLowerCase().trim();
+            const categoryId = catName ? categoryMap.get(catName) || defaultCategory.id : defaultCategory.id;
+            const brandName = (item.brand || '').toLowerCase().trim();
+            const brandId = brandName ? brandMap.get(brandName) || defaultBrand.id : defaultBrand.id;
+            const groupKey = item.parentId || item.groupId;
+            const hasVariants = !!groupKey && (groupCounts.get(groupKey) || 0) > 1;
+            const titleHasVariant = detectVariantAttributes(item.title || '').length > 0;
+            const shouldWaitForVariant = hasVariants || titleHasVariant;
+            const hasProtectedMatch = existing.categoryMatch && existing.matchedBy && protectedMatchedBys.includes(existing.matchedBy);
+
+            await prisma.product.update({
+              where: { xmlKey: item.xmlKey },
+              data: {
+                title: item.title,
+                sku: item.sku,
+                barcode: item.barcode,
+                stock: Number.isFinite(item.stock) ? item.stock : 0,
+                minStock: Number.isFinite(item.minStock) ? item.minStock : 0,
+                salePrice: item.price,
+                vatRate: item.tax,
+                description: item.description,
+                images: item.images,
+                link: item.link,
+                unit: item.unit,
+                currency: item.currency,
+                detail: item.detail,
+                ...(hasProtectedMatch ? {} : {
+                  categoryId: categoryId || defaultCategory.id,
+                  categoryMatch: false,
+                  matchedBy: null,
+                  aiScore: null,
+                  aiSuggestedCategoryId: null,
+                  lastMatchDate: null,
+                }),
+                brandId: brandId || defaultBrand.id,
+                xmlBrandName: item.brand || null,
+                supplierCategory,
+                brandMatch: true,
+                variantMatch: false,
+            variantStatus: shouldWaitForVariant ? 'WAITING_AI' : 'NOT_REQUIRED',
+                templateMatch: true,
+                status: 'XML',
+                xmlSourceId: sourceId,
+              },
+            });
+            batchResults.push({ xmlKey: item.xmlKey, created: false, outcome: 'updated' });
+          } catch (err) {
+            failedCount++;
+            batchResults.push({ xmlKey: item.xmlKey, created: false, outcome: 'failed', errorDetail: String(err) });
+          }
+        }
+
+        // FIX(2M): Toplu reconcilePMS — mevcut ürünler için tek raw SQL
+        const updatedIds = toUpdate
+          .map(item => existingMap.get(item.xmlKey)?.id)
+          .filter(Boolean) as string[];
+        for (const mpId of activeMarketplaceIds) {
+          reconcileProductMarketplaceStateBulk(updatedIds, mpId).catch(() => null);
+        }
+        queueReconcileProductGatesBulk(updatedIds);
       }
 
       results.push(...batchResults);
@@ -732,6 +772,7 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
     });
 
     invalidateDashboardStatsCache();
+    invalidateTitleIndex().catch(() => null); // non-blocking title index refresh
 
     await prisma.auditLog.create({
       data: {

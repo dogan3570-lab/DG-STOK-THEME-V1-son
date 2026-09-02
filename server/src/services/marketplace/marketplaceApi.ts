@@ -17,6 +17,10 @@ export interface MarketplaceApiCallInput {
   payload: MarketplaceListingPayload;
 }
 
+// FIX(2M): Marketplace credential cache — 30s TTL, batch send'de N DB read + N decrypt önler
+const MP_CACHE_TTL = 30_000;
+const _mpCache = new Map<string, { mp: any; cred: DecryptedMarketplaceCredentials; ts: number }>();
+
 function safeParse(raw: string | null | undefined): Record<string, unknown> {
   if (!raw) return {};
   try {
@@ -26,6 +30,30 @@ function safeParse(raw: string | null | undefined): Record<string, unknown> {
     /* bozuk settings boş kabul edilir */
   }
   return {};
+}
+
+async function getMarketplaceWithCredentials(marketplaceId: string) {
+  const cached = _mpCache.get(marketplaceId);
+  if (cached && Date.now() - cached.ts < MP_CACHE_TTL) {
+    return { mp: cached.mp, cred: cached.cred };
+  }
+
+  const mp = await prisma.marketplace.findUnique({ where: { id: marketplaceId } });
+  if (!mp) return { mp: null, cred: null };
+
+  const settings = safeParse(mp.settings);
+  const refreshTokenEnc = typeof settings.refreshTokenEnc === 'string' ? settings.refreshTokenEnc : null;
+  const cred: DecryptedMarketplaceCredentials = {
+    apiKey: mp.apiKey ? decryptCredential(mp.apiKey) : null,
+    apiSecret: mp.apiSecret ? decryptCredential(mp.apiSecret) : null,
+    refreshToken: refreshTokenEnc ? decryptCredential(refreshTokenEnc) : null,
+    merchantId: mp.merchantId,
+    sellerId: typeof settings.sellerId === 'string' ? settings.sellerId : null,
+    storeId: mp.storeId,
+  };
+
+  _mpCache.set(marketplaceId, { mp, cred, ts: Date.now() });
+  return { mp, cred };
 }
 
 function unconfiguredResult(provider: string, error: NormalizedProviderError): MarketplaceSendResult {
@@ -78,10 +106,10 @@ export async function updateMarketplaceInventory(input: {
   marketplaceId: string;
   payload: MarketplaceInventoryUpdatePayload;
 }): Promise<MarketplaceInventoryUpdateResult> {
-  const mp = await prisma.marketplace.findUnique({ where: { id: input.marketplaceId } });
+  const { mp, cred } = await getMarketplaceWithCredentials(input.marketplaceId);
   const adapter = mp ? getAdapter(mp.key) : null;
 
-  if (!mp || !adapter) {
+  if (!mp || !adapter || !cred) {
     return inventoryError(mp?.key ?? 'tt', {
       code: 'MARKETPLACE_NOT_FOUND', message: 'Pazaryeri bulunamadı', retryable: false, permanent: true, cooldownMs: null, httpStatus: null,
     }, false);
@@ -92,17 +120,6 @@ export async function updateMarketplaceInventory(input: {
       code: 'UNSUPPORTED', message: 'Bu pazaryeri için satış aç/kapat desteklenmiyor', retryable: false, permanent: true, cooldownMs: null, httpStatus: null,
     }, true);
   }
-
-  const settings = safeParse(mp.settings);
-  const refreshTokenEnc = typeof settings.refreshTokenEnc === 'string' ? settings.refreshTokenEnc : null;
-  const cred: DecryptedMarketplaceCredentials = {
-    apiKey: mp.apiKey ? decryptCredential(mp.apiKey) : null,
-    apiSecret: mp.apiSecret ? decryptCredential(mp.apiSecret) : null,
-    refreshToken: refreshTokenEnc ? decryptCredential(refreshTokenEnc) : null,
-    merchantId: mp.merchantId,
-    sellerId: typeof settings.sellerId === 'string' ? settings.sellerId : null,
-    storeId: mp.storeId,
-  };
 
   const validationError = adapter.validateCredentials(cred);
   if (validationError) {
@@ -147,10 +164,10 @@ export async function updateMarketplaceInventory(input: {
 }
 
 export async function sendListingToMarketplace(input: MarketplaceApiCallInput): Promise<MarketplaceSendResult> {
-  const mp = await prisma.marketplace.findUnique({ where: { id: input.marketplaceId } });
+  const { mp, cred } = await getMarketplaceWithCredentials(input.marketplaceId);
   const adapter = mp ? getAdapter(mp.key) : null;
 
-  if (!mp || !adapter) {
+  if (!mp || !adapter || !cred) {
     return unconfiguredResult(mp?.key ?? 'tt', {
       code: 'MARKETPLACE_NOT_FOUND',
       message: 'Pazaryeri bulunamadı',
@@ -160,17 +177,6 @@ export async function sendListingToMarketplace(input: MarketplaceApiCallInput): 
       httpStatus: null,
     });
   }
-
-  const settings = safeParse(mp.settings);
-  const refreshTokenEnc = typeof settings.refreshTokenEnc === 'string' ? settings.refreshTokenEnc : null;
-  const cred: DecryptedMarketplaceCredentials = {
-    apiKey: mp.apiKey ? decryptCredential(mp.apiKey) : null,
-    apiSecret: mp.apiSecret ? decryptCredential(mp.apiSecret) : null,
-    refreshToken: refreshTokenEnc ? decryptCredential(refreshTokenEnc) : null,
-    merchantId: mp.merchantId,
-    sellerId: typeof settings.sellerId === 'string' ? settings.sellerId : null,
-    storeId: mp.storeId,
-  };
 
   const validationError = adapter.validateCredentials(cred);
   if (validationError) {

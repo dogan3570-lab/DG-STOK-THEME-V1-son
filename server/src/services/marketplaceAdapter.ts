@@ -185,13 +185,16 @@ export async function updateMarketplaceProductInventory(input: {
 }
 
 /**
- * Marketplace adapter sağlık kontrolü.
+ * Marketplace adapter sağlık kontrolü — GERÇEK API çağrısı yapar.
  */
 export async function checkMarketplaceHealth(marketplaceId: string): Promise<{
   marketplaceId: string;
   healthy: boolean;
   message: string;
   configured: boolean;
+  latencyMs: number | null;
+  httpStatus: number | null;
+  connected: boolean;
 }> {
   const mp = await prisma.marketplace.findUnique({
     where: { id: marketplaceId },
@@ -199,54 +202,97 @@ export async function checkMarketplaceHealth(marketplaceId: string): Promise<{
   });
 
   if (!mp) {
-    return { marketplaceId, healthy: false, message: 'Marketplace not found', configured: false };
+    return { marketplaceId, healthy: false, message: 'Marketplace not found', configured: false, latencyMs: null, httpStatus: null, connected: false };
   }
 
   if (!mp.active) {
-    return { marketplaceId, healthy: false, message: 'Marketplace inactive', configured: false };
+    return { marketplaceId, healthy: false, message: 'Marketplace inactive', configured: false, latencyMs: null, httpStatus: null, connected: false };
   }
 
-  if (!mp.apiUrl || !mp.apiKey || !mp.apiSecret) {
-    return { marketplaceId, healthy: false, message: 'Missing configuration', configured: false };
+  if (!mp.apiKey || !mp.apiSecret) {
+    return { marketplaceId, healthy: false, message: 'NOT_CONFIGURED — API Key / API Secret tanımlı değil', configured: false, latencyMs: null, httpStatus: null, connected: false };
   }
 
   const { getAdapter } = await import('./marketplace/registry.ts');
   const adapter = getAdapter(mp.key);
 
   if (!adapter) {
-    return { marketplaceId, healthy: false, message: 'No adapter found', configured: false };
+    return { marketplaceId, healthy: false, message: 'No adapter found', configured: false, latencyMs: null, httpStatus: null, connected: false };
   }
 
   const settings = mp.settings ? JSON.parse(mp.settings) : {};
-  const refreshTokenEnc = typeof settings.refreshTokenEnc === 'string' ? settings.refreshTokenEnc : null;
 
   const cred = {
     apiKey: mp.apiKey ? decryptCredential(mp.apiKey) : null,
     apiSecret: mp.apiSecret ? decryptCredential(mp.apiSecret) : null,
-    refreshToken: mp.settings ? (() => {
-      const s = mp.settings ? JSON.parse(mp.settings) : {};
-      return typeof s.refreshTokenEnc === 'string' ? s.refreshTokenEnc : null;
-    })() : null,
+    refreshToken: settings.refreshTokenEnc || null,
     merchantId: mp.merchantId,
-    sellerId: typeof (mp.settings ? JSON.parse(mp.settings) : {}).sellerId === 'string' ? (mp.settings ? JSON.parse(mp.settings) : {}).sellerId : null,
+    sellerId: typeof settings.sellerId === 'string' ? settings.sellerId : null,
     storeId: mp.storeId,
   };
 
-  const validationError = adapter.validateCredentials({
-    apiKey: mp.apiKey ? decryptCredential(mp.apiKey) : null,
-    apiSecret: mp.apiSecret ? decryptCredential(mp.apiSecret) : null,
-    refreshToken: mp.settings ? (() => {
-      const s = JSON.parse(mp.settings);
-      return typeof s.refreshTokenEnc === 'string' ? s.refreshTokenEnc : null;
-    })() : null,
-    merchantId: mp.merchantId,
-    sellerId: typeof (mp.settings ? JSON.parse(mp.settings) : {}).sellerId === 'string' ? (mp.settings ? JSON.parse(mp.settings) : {}).sellerId : null,
-    storeId: mp.storeId,
-  });
+  const validationError = adapter.validateCredentials(cred);
 
   if (validationError) {
-    return { marketplaceId, healthy: false, message: validationError.message, configured: true };
+    return { marketplaceId, healthy: false, message: validationError.message, configured: true, latencyMs: null, httpStatus: null, connected: false };
   }
 
-  return { marketplaceId, healthy: true, message: 'OK', configured: true };
+  if (!mp.apiUrl) {
+    return { marketplaceId, healthy: false, message: 'NOT_CONFIGURED — API URL tanımlı değil', configured: true, latencyMs: null, httpStatus: null, connected: false };
+  }
+
+  // GERÇEK API ÇAĞRISI — health check request varsa kullan
+  const healthRequest = adapter.buildHealthCheckRequest?.(cred, mp.apiUrl);
+  if (!healthRequest) {
+    // Adapter health check desteklemiyor — credential validation yeterli
+    return { marketplaceId, healthy: true, message: 'OK (credential validated)', configured: true, latencyMs: null, httpStatus: null, connected: true };
+  }
+
+  const { requestWithBoundedRetry } = await import('./marketplace/httpClient.ts');
+  const start = Date.now();
+  try {
+    const response = await requestWithBoundedRetry(healthRequest.url, {
+      method: healthRequest.method,
+      headers: healthRequest.headers,
+    }, (err, attempt) => {
+      console.log(`[health] retry marketplace=${mp.key} attempt=${attempt} code=${err.code}`);
+    });
+    const latencyMs = Date.now() - start;
+    const httpStatus = response.status;
+
+    if (httpStatus >= 200 && httpStatus < 300) {
+      const newStatus = 'connected';
+      await prisma.marketplace.update({ where: { id: marketplaceId }, data: { apiStatus: newStatus } });
+      return { marketplaceId, healthy: true, message: 'OK', configured: true, latencyMs, httpStatus, connected: true };
+    }
+
+    if (httpStatus === 401 || httpStatus === 403) {
+      const newStatus = 'error';
+      await prisma.marketplace.update({ where: { id: marketplaceId }, data: { apiStatus: newStatus } });
+      return { marketplaceId, healthy: false, message: 'Kimlik bilgileri geçersiz (401/403)', configured: true, latencyMs, httpStatus, connected: false };
+    }
+
+    if (httpStatus === 429) {
+      return { marketplaceId, healthy: false, message: 'Rate limit aşıldı (429)', configured: true, latencyMs, httpStatus, connected: false };
+    }
+
+    if (httpStatus >= 500) {
+      return { marketplaceId, healthy: false, message: `Pazaryeri sunucu hatası (${httpStatus})`, configured: true, latencyMs, httpStatus, connected: false };
+    }
+
+    return { marketplaceId, healthy: false, message: `Beklenmeyen yanıt (${httpStatus})`, configured: true, latencyMs, httpStatus, connected: false };
+  } catch (e: unknown) {
+    const latencyMs = Date.now() - start;
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    if (msg.includes('TIMEOUT')) {
+      return { marketplaceId, healthy: false, message: 'Zaman aşımı — API yanııt vermedi', configured: true, latencyMs, httpStatus: null, connected: false };
+    }
+    if (msg.includes('SSRF_BLOCKED')) {
+      return { marketplaceId, healthy: false, message: 'SSRF koruması tarafından engellendi', configured: true, latencyMs, httpStatus: null, connected: false };
+    }
+    if (msg.includes('NETWORK_ERROR')) {
+      return { marketplaceId, healthy: false, message: 'Ağ hatası — pazaryerine ulaşılamadı', configured: true, latencyMs, httpStatus: null, connected: false };
+    }
+    return { marketplaceId, healthy: false, message: msg, configured: true, latencyMs, httpStatus: null, connected: false };
+  }
 }

@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma.ts';
 import { isPrepComplete, isReady, isVariantComplete, type ReadinessProduct } from './readiness.ts';
+import { detectVariantFamily } from './readinessService.ts';
 
 /**
  * DISPATCH ENGINE — Tek merkezi karar motoru.
@@ -325,6 +326,7 @@ export async function autoTransitionReadiness(productId: string): Promise<{
     select: {
       id: true,
       status: true,
+      categoryId: true,
       categoryMatch: true,
       brandMatch: true,
       templateMatch: true,
@@ -334,6 +336,9 @@ export async function autoTransitionReadiness(productId: string): Promise<{
       barcode: true,
       salePrice: true,
       stock: true,
+      brandId: true,
+      title: true,
+      sku: true,
     },
   });
 
@@ -341,12 +346,34 @@ export async function autoTransitionReadiness(productId: string): Promise<{
     return { updated: false, newStatus: 'NOT_FOUND', reason: 'Product not found' };
   }
 
-  const readiness = evaluateReadiness({ ...product, variantStatus: product.variantStatus ?? null } as any);
+  // Variant aile tespiti — NOT_REQUIRED ise kardeş ürünleri kontrol et
+  let effectiveVariantStatus = product.variantStatus;
+  if (effectiveVariantStatus === 'NOT_REQUIRED' && !product.variantMatch && product.brandId && product.title) {
+    const family = await detectVariantFamily(product.id, product.brandId, product.title, product.sku ?? null);
+    if (family.isFamily && family.confidence >= 50) {
+      await prisma.product.update({ where: { id: productId }, data: { variantStatus: 'WAITING_AI' } });
+      effectiveVariantStatus = 'WAITING_AI';
+    }
+  }
+
+  const readiness = evaluateReadiness({ ...product, variantStatus: effectiveVariantStatus ?? null } as any);
+
+  // Mapping kontrolü: ürünün kategorisinde en az 1 aktif mapping var mı?
+  let activeMapping = false;
+  if (product.categoryId) {
+    const mappingCount = await prisma.categoryMapping.count({
+      where: { categoryId: product.categoryId as string, active: true },
+    });
+    activeMapping = mappingCount > 0;
+  }
+
+  const fullReady = readiness.isPrepComplete && product.salePrice != null && (product.stock ?? 0) > 0 && product.images != null && product.barcode != null && activeMapping;
+
   let newStatus = product.status;
 
-  if (readiness.isReady && product.status !== 'READY') {
+  if (fullReady && product.status !== 'READY') {
     newStatus = 'READY';
-  } else if (!readiness.isPrepComplete && product.status === 'READY') {
+  } else if (!fullReady && product.status === 'READY') {
     newStatus = 'XML';
   }
 

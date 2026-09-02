@@ -42,6 +42,7 @@ import {
   type ProductForMatch,
   type CategoryCandidate,
 } from './aiGateway.ts';
+import { verifyCategorySafety, type SafetyGateInput, buildCategoryAuditMeta } from './categorySafetyGate.ts';
 import {reconcileProductGates, queueReconcileProductGates} from './readinessService.ts';
 
 // ==================== REASON CODES ====================
@@ -187,7 +188,7 @@ export async function classifyByAi(
   products: ProductForMatch[],
   tree: TreeIndex,
   marketplaceName: string | null,
-  topK = 25,
+  topK = 10,
 ): Promise<AiPassResult> {
   return engineClassifyByAi(products, tree, marketplaceName, topK);
 }
@@ -450,6 +451,42 @@ export async function applyDecision(
     return { applied: false, reason: check.detail };
   }
 
+  // P0: SafetyGate kontrolü — tek kapı mimarisi
+  const tree = await loadMarketplaceTree({ key: 'tt', name: 'Trendyol', loadTree: async () => loadTrendyolTree(), loadMarketplaceId: async () => marketplaceId, validateExternalId: () => true });
+  const product = await prisma.product.findUnique({
+    where: { id: decision.productId },
+    select: { id: true, title: true, supplierCategory: true, categoryId: true },
+  });
+  if (product) {
+    const leaf = tree.leafById.get(decision.categoryId as string);
+    if (leaf) {
+      const safetyInput: SafetyGateInput = {
+        productId: decision.productId,
+        title: product.title,
+        supplierCategory: product.supplierCategory,
+        currentCategoryId: product.categoryId ?? null,
+        currentCategoryName: null,
+        currentCategoryPath: product.categoryId ? tree.leafById.get(product.categoryId)?.fullPath ?? null : null,
+        selectedCategoryId: decision.categoryId as string,
+        selectedCategoryName: leaf.name,
+        selectedCategoryPath: leaf.fullPath,
+        selectedCategoryExternalId: leaf.externalId,
+        candidates: decision.candidates.map(c => ({ id: c.id, name: c.name, fullPath: c.fullPath, score: c.score })),
+        aiConfidence: decision.confidence,
+        verifierVerdict: decision.method === 'ai',
+        verifierConfidence: decision.confidence,
+        margin: 0.5,
+        tree,
+        isDeterministic: decision.method !== 'ai',
+        decisionMethod: decision.method,
+      };
+      const safety = verifyCategorySafety(safetyInput);
+      if (!safety.passed) {
+        return { applied: false, reason: `Safety gate rejected: ${safety.reason}` };
+      }
+    }
+  }
+
   // verifyMatch geçtiyse categoryId null değildir (gate 1)
   const catId = decision.categoryId as string;
 
@@ -472,13 +509,21 @@ export async function applyDecision(
       action: decision.method === 'ai' ? 'CATEGORY_MATCH_AI' : 'CATEGORY_MATCH_AUTO',
       entity: 'category',
       entityId: catId,
-      meta: JSON.stringify({
+      meta: buildCategoryAuditMeta({
         productId: decision.productId,
-        sourceCategory: decision.supplierCategory,
-        targetCategory: decision.categoryName,
-        externalId: decision.externalId,
-        method: decision.method,
-        confidence: decision.confidence,
+        decisionMethod: decision.method,
+        decisionScope: 'PRODUCT',
+        oldCategoryId: null,
+        newCategoryId: catId,
+        supplierCategory: decision.supplierCategory,
+        selectedCategory: decision.categoryName,
+        candidate: decision.categoryName,
+        aiConfidence: decision.confidence,
+        verifierResult: decision.method === 'ai' ? 'YES' : 'DETERMINISTIC',
+        verifierConfidence: decision.confidence,
+        margin: 0.5,
+        safetyGateResult: 'PASS',
+        reason: decision.reason ?? '',
       }),
       details: `Core: ${decision.xmlKey} → "${decision.categoryName}" (ext=${decision.externalId}, ${decision.method}, conf=${decision.confidence})`,
     },

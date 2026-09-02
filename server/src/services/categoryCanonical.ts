@@ -169,8 +169,27 @@ export function resolveCategoryCandidates(
   let mappingVerified = false;
 
   if (!product.supplierCategory || product.supplierCategory.trim() === '') {
-    method = 'no_source';
-    confidence = 0;
+    // TASK320 FIX (ürün-merkezli matching): supplierCategory boş olsa bile title-only
+    // adaylar hesaplandı (Step 2b/3). Artık körlemesine no_source'a atılmıyor.
+    if (validCandidates.length === 0) {
+      method = 'no_source';
+      confidence = 0;
+    } else {
+      topCandidate = validCandidates[0];
+      isLeaf = true;
+      const titleTokens = new Set(normalizedProduct.tokens);
+      const leafTokens = new Set(
+        (topCandidate.name || '').split(/[^a-zA-Z0-9çğıöşüÇĞİÖŞÜ]+/)
+          .map(t => normalizeName(t.trim()))
+          .filter(t => t.length >= 2)
+      );
+      let titleOverlap = 0;
+      for (const t of titleTokens) if (leafTokens.has(t)) titleOverlap++;
+      method = 'rule_similarity';
+      confidence = titleOverlap >= 3 ? Math.min(0.85, 0.6 + titleOverlap * 0.08) :
+                   titleOverlap >= 2 ? Math.min(0.75, 0.5 + titleOverlap * 0.08) :
+                   titleOverlap >= 1 ? Math.min(0.6, 0.35 + titleOverlap * 0.1) : 0.25;
+    }
   } else if (validCandidates.length === 0) {
     method = 'no_candidate';
     confidence = 0;

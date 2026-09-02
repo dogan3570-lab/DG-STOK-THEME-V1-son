@@ -133,7 +133,7 @@ export async function matchVariantsWithAI(
     temperature: 0.05,
     max_tokens: 4096,
     response_format: { type: 'json_object' },
-  });
+  }, 'VARIANT_MATCHING');
 
   if (!res.ok || !res.content) {
     return {

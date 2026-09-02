@@ -339,3 +339,149 @@ return {
       errorMessage: err.message,
     };
 }
+
+/**
+ * FIX(2M): Toplu gönderim — DB operasyonlarını toplu yapar.
+ * Ürünleri, PMS'leri, template'leri ve category mapping'leri toplu yükler.
+ * Marketplace API çağrısı yine ürün başına yapılır (API batch desteklemiyor).
+ * DB operasyonlarını N*7 → ~5 bulk + N API'ye düşürür.
+ */
+export async function sendBatchProductsToMarketplace(
+  inputs: SendPipelineInput[],
+  concurrency = 5
+): Promise<SendPipelineResult[]> {
+  if (inputs.length === 0) return [];
+
+  const marketplaceId = inputs[0].marketplaceId;
+  const productIds = inputs.map(i => i.productId);
+
+  // Toplu yükleme — N+1 kaldırıldı
+  const [marketplace, products, existingPmsStates, prepRange] = await Promise.all([
+    prisma.marketplace.findUnique({
+      where: { id: marketplaceId },
+      select: { id: true, key: true, name: true, active: true },
+    }),
+    prisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: {
+        id: true, xmlSourceId: true, status: true, title: true, description: true,
+        barcode: true, sku: true, salePrice: true, purchasePrice: true, stock: true,
+        vatRate: true, images: true, categoryMatch: true, brandMatch: true,
+        templateMatch: true, variantMatch: true, variantStatus: true, categoryId: true,
+        brand: { select: { name: true, externalId: true } },
+      },
+    }),
+    prisma.productMarketplaceState.findMany({
+      where: { productId: { in: productIds }, marketplaceId },
+      select: { id: true, productId: true, status: true },
+    }),
+    getPrepStockRange(),
+  ]);
+
+  if (!marketplace) {
+    return inputs.map(i => errorResult(i, 'MARKETPLACE_NOT_FOUND', 'Pazaryeri bulunamadı'));
+  }
+
+  const productMap = new Map(products.map(p => [p.id, p]));
+  const pmsMap = new Map(existingPmsStates.map(s => [s.productId, s]));
+
+  // Category mapping'leri toplu yükle
+  const categoryIds = [...new Set(products.filter(p => p.categoryId).map(p => p.categoryId as string))];
+  const categoryMappings = await prisma.categoryMapping.findMany({
+    where: { categoryId: { in: categoryIds }, marketplaceId, active: true },
+    select: { categoryId: true, externalId: true },
+  });
+  const categoryMappingMap = new Map(categoryMappings.map(m => [m.categoryId, m.externalId]));
+
+  // Sonuçları parallel processing ile hesapla
+  const results: SendPipelineResult[] = [];
+  const chunks: SendPipelineInput[][] = [];
+  for (let i = 0; i < inputs.length; i += concurrency) {
+    chunks.push(inputs.slice(i, i + concurrency));
+  }
+
+  for (const chunk of chunks) {
+    const chunkResults = await Promise.all(chunk.map(async (input): Promise<SendPipelineResult> => {
+      const product = productMap.get(input.productId);
+      if (!product) return errorResult(input, 'PRODUCT_NOT_FOUND', 'Ürün bulunamadı');
+      if (product.xmlSourceId !== input.xmlSourceId) {
+        return errorResult(input, 'WRONG_XML_CONTEXT', 'Ürün bu XML kaynağına ait değil');
+      }
+      if (!isWithinPrepRange(product.stock, prepRange.min, prepRange.max)) {
+        return errorResult(input, 'STOCK_OUT_OF_PREP_RANGE', `Stok hazırlama aralığı dışında`);
+      }
+
+      // PMS claim — mevcut PMS varsa onu kullan, yoksa oluştur
+      const existingPms = pmsMap.get(input.productId);
+      let stateId: string;
+      let stateStatus: string;
+
+      if (existingPms) {
+        if (existingPms.status === 'ACTIVE' || existingPms.status === 'SENDING') {
+          return { productId: input.productId, marketplaceId, ok: false, status: existingPms.status as any, duplicate: true, externalListingId: null, listingUrl: null, externalRef: null, errorCode: 'DUPLICATE', errorMessage: `Zaten ${existingPms.status}` };
+        }
+        const claim = await prisma.productMarketplaceState.updateMany({
+          where: { id: existingPms.id, status: { notIn: ['SENDING', 'ACTIVE'] } },
+          data: { status: 'SENDING', lastActionAt: new Date(), errorMessage: null },
+        });
+        if (claim.count === 0) {
+          return { productId: input.productId, marketplaceId, ok: false, status: 'SENDING', duplicate: true, externalListingId: null, listingUrl: null, externalRef: null, errorCode: 'DUPLICATE', errorMessage: 'SENDING' };
+        }
+        stateId = existingPms.id;
+        stateStatus = 'SENDING';
+      } else {
+        try {
+          const created = await prisma.productMarketplaceState.create({
+            data: { productId: input.productId, marketplaceId, status: 'SENDING', lastActionAt: new Date() },
+            select: { id: true },
+          });
+          stateId = created.id;
+          stateStatus = 'SENDING';
+        } catch (e: any) {
+          if (e?.code === 'P2002') {
+            return { productId: input.productId, marketplaceId, ok: false, status: 'SENDING', duplicate: true, externalListingId: null, listingUrl: null, externalRef: null, errorCode: 'DUPLICATE', errorMessage: 'P2002' };
+          }
+          throw e;
+        }
+      }
+
+      // Payload oluştur (cache'lenmiş mapping ile)
+      const categoryExternalId = product.categoryId ? (categoryMappingMap.get(product.categoryId) ?? null) : null;
+      const resolvedTemplate = await resolveListingTemplate({
+        productId: product.id, categoryId: product.categoryId, marketplaceId,
+      });
+
+      if (!hasListingTemplate(resolvedTemplate)) {
+        await prisma.productMarketplaceState.update({ where: { id: stateId }, data: { status: 'ERROR', errorMessage: 'TEMPLATE_NOT_FOUND', lastActionAt: new Date() } });
+        return { productId: input.productId, marketplaceId, ok: false, status: 'TEMPLATE_NOT_FOUND', duplicate: false, externalListingId: null, listingUrl: null, externalRef: null, errorCode: 'TEMPLATE_NOT_FOUND', errorMessage: 'Şablon bulunamadı' };
+      }
+
+      const payload: MarketplaceListingPayload = {
+        barcode: product.barcode, sku: product.sku, title: product.title ?? '',
+        description: product.description ?? '', price: product.salePrice ?? 0,
+        stock: product.stock, vatRate: product.vatRate, categoryExternalId,
+        brandName: product.brand?.name ?? null,
+        images: product.images ? product.images.split(',').map(s => s.trim()).filter(Boolean) : [],
+      };
+
+      // API çağrısı
+      const apiResult = await sendListingToMarketplace({ marketplaceId, payload });
+
+      if (apiResult.ok && apiResult.batchRequestId) {
+        await prisma.productMarketplaceState.update({ where: { id: stateId }, data: { status: 'SENDING', externalRef: apiResult.batchRequestId, errorMessage: 'APPROVAL_PENDING', lastActionAt: new Date() } });
+        return { productId: input.productId, marketplaceId, ok: false, status: 'SENDING', duplicate: false, externalListingId: null, listingUrl: null, externalRef: null, errorCode: 'APPROVAL_PENDING', errorMessage: 'Kuyruğa alındı' };
+      }
+      if (apiResult.ok && apiResult.externalListingId) {
+        await prisma.productMarketplaceState.update({ where: { id: stateId }, data: { status: 'ACTIVE', listingId: apiResult.externalListingId, externalRef: apiResult.externalRef ?? apiResult.externalListingId, listingUrl: apiResult.listingUrl, price: payload.price, stock: payload.stock, errorMessage: null, lastActionAt: new Date() } });
+        return { productId: input.productId, marketplaceId, ok: true, status: 'ACTIVE', duplicate: false, externalListingId: apiResult.externalListingId, listingUrl: apiResult.listingUrl, externalRef: apiResult.externalRef, errorCode: null, errorMessage: null };
+      }
+
+      const err = apiResult.error ?? { code: 'PROVIDER_ERROR', message: 'Pazaryeri hatası' };
+      await prisma.productMarketplaceState.update({ where: { id: stateId }, data: { status: 'ERROR', errorMessage: `${err.code}: ${err.message}`, lastActionAt: new Date() } });
+      return { productId: input.productId, marketplaceId, ok: false, status: 'ERROR', duplicate: false, externalListingId: null, listingUrl: null, externalRef: null, errorCode: err.code, errorMessage: err.message };
+    }));
+    results.push(...chunkResults);
+  }
+
+  return results;
+}

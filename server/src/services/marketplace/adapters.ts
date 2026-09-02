@@ -167,6 +167,26 @@ class TrendyolAdapter extends BaseAdapter {
   }
 
   /**
+   * Sağlık kontrolü: Trendyol product listing hafif GET — credential + erişilebilirlik doğrular.
+   * GET /integration/product/sellers/{sellerId}/products?page=0&size=1
+   */
+  buildHealthCheckRequest(
+    cred: DecryptedMarketplaceCredentials,
+    apiUrl: string
+  ): AdapterRequest | null {
+    const sellerId = String(cred.sellerId ?? '').trim();
+    if (!sellerId) return null;
+    return {
+      url: `${trendyolBaseUrl(apiUrl)}/product/sellers/${sellerId}/products?page=0&size=1`,
+      method: 'GET',
+      headers: {
+        Authorization: basicAuth(cred.apiKey ?? '', cred.apiSecret ?? ''),
+        'User-Agent': `${sellerId} - SelfIntegration`,
+      },
+    };
+  }
+
+  /**
    * Stok otomasyonu satış aç/kapat: Trendyol price-and-inventory (senkron 2xx).
    * quantity=0 satışı kapatır (stok tükenmiş), quantity>0 satışı açar.
    */
@@ -277,6 +297,20 @@ class HepsiburadaAdapter extends BaseAdapter {
       body: jsonBody(payload),
     };
   }
+
+  buildHealthCheckRequest(
+    cred: DecryptedMarketplaceCredentials,
+    apiUrl: string
+  ): AdapterRequest | null {
+    if (!cred.merchantId) return null;
+    return {
+      url: `${apiUrl.replace(/\/+$/, '')}/listing/merchantid/${cred.merchantId}`,
+      method: 'GET',
+      headers: {
+        Authorization: basicAuth(cred.apiKey ?? '', cred.apiSecret ?? ''),
+      },
+    };
+  }
 }
 
 class N11Adapter extends BaseAdapter {
@@ -300,6 +334,20 @@ class N11Adapter extends BaseAdapter {
         'x-api-secret': cred.apiSecret ?? '',
       },
       body: jsonBody(payload),
+    };
+  }
+
+  buildHealthCheckRequest(
+    cred: DecryptedMarketplaceCredentials,
+    apiUrl: string
+  ): AdapterRequest | null {
+    return {
+      url: `${apiUrl.replace(/\/+$/, '')}/product?page=0&size=1`,
+      method: 'GET',
+      headers: {
+        'x-api-key': cred.apiKey ?? '',
+        'x-api-secret': cred.apiSecret ?? '',
+      },
     };
   }
 }

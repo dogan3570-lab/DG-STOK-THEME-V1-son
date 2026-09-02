@@ -260,24 +260,41 @@ router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, 
   }
 });
 
-// POST /:id/test - Test connection
+// POST /:id/test - GERÇEK API connection test — checkMarketplaceHealth() çağrılır
 router.post('/:id/test', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id ?? '');
-    const mp = await prisma.marketplace.findUnique({ where: { id }, select: { id: true, name: true, apiUrl: true } });
+    const mp = await prisma.marketplace.findUnique({ where: { id }, select: { id: true, name: true, apiUrl: true, apiKey: true, apiSecret: true } });
     if (!mp) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
     }
-    // Gerçek pazaryeri API entegrasyonu bulunmuyor; bu uç simülasyon yapmaz,
-    // yalnızca "yapılandırılmadı" durumunu dürüstçe bildirir.
-    await prisma.marketplace.update({
-      where: { id },
-      data: { apiStatus: 'unknown' },
-    });
+
+    if (!mp.apiKey || !mp.apiSecret) {
+      await prisma.marketplace.update({ where: { id }, data: { apiStatus: 'unknown' } });
+      return res.json({
+        ok: false,
+        connected: false,
+        latencyMs: null,
+        httpStatus: null,
+        error: 'NOT_CONFIGURED — API Key / API Secret tanımlı değil',
+        message: `${mp.name} için API credential tanımlanmamış`,
+      });
+    }
+
+    const { checkMarketplaceHealth } = await import('../services/marketplaceAdapter.ts');
+    const health = await checkMarketplaceHealth(id);
+
+    const newStatus = health.connected ? 'connected' : 'error';
+    await prisma.marketplace.update({ where: { id }, data: { apiStatus: newStatus } });
+
     res.json({
-      ok: false,
-      simulated: true,
-      message: 'Gerçek pazaryeri API entegrasyonu yapılandırılmadı (NOT CONFIGURED) — bu uç simülasyon değildir',
+      ok: health.healthy,
+      connected: health.connected,
+      latencyMs: health.latencyMs,
+      httpStatus: health.httpStatus,
+      error: health.healthy ? null : health.message,
+      message: health.message,
+      configured: health.configured,
     });
   } catch (error) {
     console.error('Error testing marketplace:', error);

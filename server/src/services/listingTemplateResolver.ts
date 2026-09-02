@@ -29,11 +29,29 @@ export interface ResolveListingTemplateInput {
   marketplaceId: string;
 }
 
+// FIX(2M): Template cache — şablonlar nadiren değişir, 60s TTL ile N+1 önlenir
+const TEMPLATE_CACHE_TTL = 60_000;
+const _templateCache = new Map<string, { result: ResolvedListingTemplate; ts: number }>();
+
+export function invalidateTemplateCache(): void {
+  _templateCache.clear();
+}
+
+function cacheKey(input: ResolveListingTemplateInput): string {
+  return `${input.marketplaceId}:${input.productId}:${input.categoryId ?? ''}:${input.brandId ?? ''}`;
+}
+
 export async function resolveListingTemplate(
   input: ResolveListingTemplateInput
 ): Promise<ResolvedListingTemplate> {
   if (!input.marketplaceId || !input.productId) {
     return { id: null, name: null, source: 'NO_TEMPLATE' };
+  }
+
+  const key = cacheKey(input);
+  const cached = _templateCache.get(key);
+  if (cached && Date.now() - cached.ts < TEMPLATE_CACHE_TTL) {
+    return cached.result;
   }
 
   // 1. ÜRÜN BAZLI ŞABLON
@@ -42,7 +60,9 @@ export async function resolveListingTemplate(
     orderBy: { updatedAt: 'desc' },
   });
   if (productTemplate) {
-    return { id: productTemplate.id, name: productTemplate.name, source: 'PRODUCT' };
+    const result = { id: productTemplate.id, name: productTemplate.name, source: 'PRODUCT' as const };
+    _templateCache.set(key, { result, ts: Date.now() });
+    return result;
   }
 
   // 2. KATEGORİ BAZLI ŞABLON
@@ -58,7 +78,9 @@ export async function resolveListingTemplate(
       orderBy: { updatedAt: 'desc' },
     });
     if (categoryTemplate) {
-      return { id: categoryTemplate.id, name: categoryTemplate.name, source: 'CATEGORY' };
+      const result = { id: categoryTemplate.id, name: categoryTemplate.name, source: 'CATEGORY' as const };
+      _templateCache.set(key, { result, ts: Date.now() });
+      return result;
     }
   }
 
@@ -74,11 +96,15 @@ export async function resolveListingTemplate(
     orderBy: { updatedAt: 'desc' },
   });
   if (generalTemplate) {
-    return { id: generalTemplate.id, name: generalTemplate.name, source: 'GENERAL' };
+    const result = { id: generalTemplate.id, name: generalTemplate.name, source: 'GENERAL' as const };
+    _templateCache.set(key, { result, ts: Date.now() });
+    return result;
   }
 
   // 4. ŞABLON YOK
-  return { id: null, name: null, source: 'NO_TEMPLATE' };
+  const noResult = { id: null, name: null, source: 'NO_TEMPLATE' as const };
+  _templateCache.set(key, { result: noResult, ts: Date.now() });
+  return noResult;
 }
 
 export function hasListingTemplate(resolved: ResolvedListingTemplate): boolean {

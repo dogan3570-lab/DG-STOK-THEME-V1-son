@@ -89,9 +89,19 @@ export async function getStockAutomationConfig(): Promise<StockAutomationConfig>
 }
 
 /** Hazırlama stok aralığı — send pipeline gate'i için hafif okuma. */
+// FIX(2M): prepRange cache — ayarlardan nadiren değişir, 30s TTL
+let _prepRangeCache: { min: number; max: number } | null = null;
+let _prepRangeTs = 0;
+const PREP_RANGE_CACHE_TTL = 30_000;
+
 export async function getPrepStockRange(): Promise<{ min: number; max: number }> {
+  if (_prepRangeCache && Date.now() - _prepRangeTs < PREP_RANGE_CACHE_TTL) {
+    return _prepRangeCache;
+  }
   const config = await getStockAutomationConfig();
-  return { min: config.prepMin, max: config.prepMax };
+  _prepRangeCache = { min: config.prepMin, max: config.prepMax };
+  _prepRangeTs = Date.now();
+  return _prepRangeCache;
 }
 
 export interface StockAutomationRunStats {
@@ -115,10 +125,13 @@ function salesStateFromStatus(status: string | null | undefined): SalesState {
 }
 
 /**
- * Global stok otomasyonunu çalıştırır.
- * Yalnızca pazaryerine gönderilmiş ürünler (ProductMarketplaceState kaydı olan)
- * değerlendirilir. Gerçek marketplace API 2xx doğrulanmadan DB durumu değişmez.
+ * FIX(2M): Cursor-based batch processing — tüm state'leri RAM'e almaz.
+ * Her batch 500 kaydı işler, ürünleri ayrı sorgu ile yükler.
+ * Piyasa API çağrıları concurrency=5 ile sınırlıdır.
  */
+const STOCK_BATCH_SIZE = 500;
+const STOCK_API_CONCURRENCY = 5;
+
 export async function runStockAutomation(): Promise<StockAutomationRunStats> {
   const config = await getStockAutomationConfig();
   const stats: StockAutomationRunStats = { scanned: 0, closed: 0, opened: 0, skipped: 0, errors: 0, actions: [] };
@@ -127,92 +140,127 @@ export async function runStockAutomation(): Promise<StockAutomationRunStats> {
     return stats;
   }
 
-  const states = await prisma.productMarketplaceState.findMany({
-    where: { status: { in: ['ACTIVE', 'SENDING', 'CLOSED'] } },
-    select: { id: true, productId: true, marketplaceId: true, status: true },
-    orderBy: { lastActionAt: 'asc' },
-  });
+  let cursor: string | undefined;
 
-  const products = await prisma.product.findMany({
-    where: { id: { in: states.map((s) => s.productId) } },
-    select: { id: true, stock: true, barcode: true, sku: true, salePrice: true },
-  });
-  const productMap = new Map(products.map((p) => [p.id, p]));
-
-  for (const state of states) {
-    stats.scanned++;
-    const product = productMap.get(state.productId);
-    if (!product || product.stock == null) {
-      stats.skipped++;
-      continue;
-    }
-    const stock = product.stock;
-    const currentState = salesStateFromStatus(state.status);
-    const action = decideSalesAction(stock, config.closeAt, config.openAt, currentState);
-
-    if (action === 'HOLD') {
-      stats.skipped++;
-      continue;
-    }
-
-    // Gerçek marketplace API çağrısı. Hata halinde DB durumu DEĞİŞMEZ.
-    const result = await updateMarketplaceInventory({
-      marketplaceId: state.marketplaceId,
-      payload: {
-        barcode: product.barcode ?? null,
-        sku: product.sku ?? null,
-        stock: action === 'CLOSE' ? 0 : stock,
-        price: product.salePrice ?? null,
+  while (true) {
+    // Cursor-based: her seferinde 500 state yükle (RAM bounded)
+    const states = await prisma.productMarketplaceState.findMany({
+      where: {
+        status: { in: ['ACTIVE', 'SENDING', 'CLOSED'] },
+        ...(cursor ? { id: { gt: cursor } } : {}),
       },
+      select: { id: true, productId: true, marketplaceId: true, status: true },
+      orderBy: { id: 'asc' },
+      take: STOCK_BATCH_SIZE,
     });
 
-    if (!result.ok) {
-      stats.errors++;
-      stats.actions.push({
-        productId: state.productId,
-        marketplaceId: state.marketplaceId,
-        action: action === 'CLOSE' ? 'CLOSED' : 'OPENED',
-        ok: false,
-        code: result.error?.code ?? 'PROVIDER_ERROR',
-      });
+    if (states.length === 0) break;
 
-      await prisma.auditLog.create({
-        data: {
-          action: action === 'CLOSE' ? 'STOCK_AUTO_CLOSE_FAILED' : 'STOCK_AUTO_OPEN_FAILED',
-          entity: 'StockAutomation',
-          entityId: state.id,
-          meta: JSON.stringify({ productId: state.productId, marketplaceId: state.marketplaceId, stock, code: result.error?.code ?? null }),
-          success: false,
-        },
-      });
-      continue;
+    // Batch product fetch (N+1 kaldırıldı)
+    const productIds = [...new Set(states.map(s => s.productId))];
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, stock: true, barcode: true, sku: true, salePrice: true },
+    });
+    const productMap = new Map(products.map(p => [p.id, p]));
+
+    // API çağrılarını concurrency ile sınırla
+    const pendingActions: Array<Promise<void>> = [];
+    for (const state of states) {
+      stats.scanned++;
+      const product = productMap.get(state.productId);
+      if (!product || product.stock == null) {
+        stats.skipped++;
+        continue;
+      }
+      const stock = product.stock;
+      const currentState = salesStateFromStatus(state.status);
+      const action = decideSalesAction(stock, config.closeAt, config.openAt, currentState);
+
+      if (action === 'HOLD') {
+        stats.skipped++;
+        continue;
+      }
+
+      const actionPromise = (async () => {
+        const result = await updateMarketplaceInventory({
+          marketplaceId: state.marketplaceId,
+          payload: {
+            barcode: product.barcode ?? null,
+            sku: product.sku ?? null,
+            stock: action === 'CLOSE' ? 0 : stock,
+            price: product.salePrice ?? null,
+          },
+        });
+
+        if (!result.ok) {
+          stats.errors++;
+          stats.actions.push({
+            productId: state.productId,
+            marketplaceId: state.marketplaceId,
+            action: action === 'CLOSE' ? 'CLOSED' : 'OPENED',
+            ok: false,
+            code: result.error?.code ?? 'PROVIDER_ERROR',
+          });
+
+          await prisma.auditLog.create({
+            data: {
+              action: action === 'CLOSE' ? 'STOCK_AUTO_CLOSE_FAILED' : 'STOCK_AUTO_OPEN_FAILED',
+              entity: 'StockAutomation',
+              entityId: state.id,
+              meta: JSON.stringify({ productId: state.productId, marketplaceId: state.marketplaceId, stock, code: result.error?.code ?? null }),
+              success: false,
+            },
+          });
+          return;
+        }
+
+        const newStatus = action === 'CLOSE' ? 'CLOSED' : 'ACTIVE';
+        await prisma.productMarketplaceState.update({
+          where: { id: state.id },
+          data: { status: newStatus, stock: action === 'CLOSE' ? 0 : stock, lastActionAt: new Date() },
+        });
+
+        await prisma.auditLog.create({
+          data: {
+            action: action === 'CLOSE' ? 'STOCK_AUTO_CLOSE' : 'STOCK_AUTO_OPEN',
+            entity: 'StockAutomation',
+            entityId: state.id,
+            meta: JSON.stringify({ productId: state.productId, marketplaceId: state.marketplaceId, stock }),
+            success: true,
+          },
+        });
+
+        if (action === 'CLOSE') stats.closed++; else stats.opened++;
+        stats.actions.push({
+          productId: state.productId,
+          marketplaceId: state.marketplaceId,
+          action: action === 'CLOSE' ? 'CLOSED' : 'OPENED',
+          ok: true,
+          code: null,
+        });
+      })();
+
+      pendingActions.push(actionPromise);
+
+      // Concurrency limit
+      if (pendingActions.length >= STOCK_API_CONCURRENCY) {
+        await Promise.race(pendingActions);
+        // Tamamlananları temizle
+        for (let i = pendingActions.length - 1; i >= 0; i--) {
+          const settled = await Promise.race([pendingActions[i].then(() => true).catch(() => true)]);
+          if (settled) pendingActions.splice(i, 1);
+        }
+      }
     }
 
-    // API 2xx doğrulandı → DB durumu/log güncelle
-    const newStatus = action === 'CLOSE' ? 'CLOSED' : 'ACTIVE';
-    await prisma.productMarketplaceState.update({
-      where: { id: state.id },
-      data: { status: newStatus, stock: action === 'CLOSE' ? 0 : stock, lastActionAt: new Date() },
-    });
+    // Kalanları bekle
+    if (pendingActions.length > 0) {
+      await Promise.allSettled(pendingActions);
+    }
 
-    await prisma.auditLog.create({
-      data: {
-        action: action === 'CLOSE' ? 'STOCK_AUTO_CLOSE' : 'STOCK_AUTO_OPEN',
-        entity: 'StockAutomation',
-        entityId: state.id,
-        meta: JSON.stringify({ productId: state.productId, marketplaceId: state.marketplaceId, stock }),
-        success: true,
-      },
-    });
-
-    if (action === 'CLOSE') stats.closed++; else stats.opened++;
-    stats.actions.push({
-      productId: state.productId,
-      marketplaceId: state.marketplaceId,
-      action: action === 'CLOSE' ? 'CLOSED' : 'OPENED',
-      ok: true,
-      code: null,
-    });
+    cursor = states[states.length - 1].id;
+    if (states.length < STOCK_BATCH_SIZE) break;
   }
 
   return stats;

@@ -75,6 +75,45 @@ export async function reconcileProductMarketplaceState(
   }
 }
 
+/**
+ * FIX(2M): Toplu PMS reconcile — ürün listesi için tek INSERT OR IGNORE.
+ * XML import'tan çağrıldığında N+1'i önler (ürün başına 3-4 sorgu → 1 raw SQL).
+ * Idempotent: duplicate PMS yaratılmaz, mevcut kayıtlara dokunulmaz.
+ */
+export async function reconcileProductMarketplaceStateBulk(
+  productIds: string[],
+  marketplaceId: string
+): Promise<{ created: number; existing: number }> {
+  if (productIds.length === 0) return { created: 0, existing: 0 };
+
+  // Mevcut PMS'leri toplu kontrol et
+  const existingPms = await prisma.productMarketplaceState.findMany({
+    where: { productId: { in: productIds }, marketplaceId },
+    select: { productId: true },
+  });
+  const existingSet = new Set(existingPms.map(p => p.productId));
+  const missing = productIds.filter(id => !existingSet.has(id));
+
+  if (missing.length === 0) {
+    return { created: 0, existing: existingPms.length };
+  }
+
+  // SQLite: INSERT OR IGNORE — idempotent bulk create
+  try {
+    const created = await prisma.$executeRaw`
+      INSERT OR IGNORE INTO ProductMarketplaceState (id, productId, marketplaceId, status)
+      VALUES ${Prisma.join(
+        missing.map((productId) => Prisma.sql`(${productId}, ${productId}, ${marketplaceId}, 'PENDING')`),
+        ', '
+      )}
+    `;
+    return { created: Number(created), existing: existingPms.length };
+  } catch (error) {
+    console.error('[ReconcileBulk] INSERT OR IGNORE failed:', error);
+    return { created: 0, existing: existingPms.length };
+  }
+}
+
 export type ReconcileMarketplaceOptions = {
   /** ilerleme logu her N üründe bir basılır */
   logEvery?: number;

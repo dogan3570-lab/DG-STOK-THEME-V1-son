@@ -28,6 +28,11 @@ const COLOR_LABEL: Record<string, string> = {
   krem: 'Krem', gri: 'Gri', altin: 'Altin', gumus: 'Gumus', metalik: 'Gri', fume: 'Gri',
 };
 
+const SIZES = new Set([
+  'xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl', 'xxxl', '2xl', '3xl', '4xl', '5xl',
+  'small', 'medium', 'large', 'xlarge',
+]);
+
 function tokenize(text: string): string[] {
   return (text || '').toLowerCase().split(/[^a-z0-9çğıöşü]+/).filter(Boolean);
 }
@@ -37,19 +42,55 @@ export interface DetectedVariant {
   value: string;
 }
 
-/** Başlık/key/açıklama metninden varyant işaretlerini tespit eder.
+/**
+ * Variant kanıtı tespiti — TEK BAŞINA VARYANT YARATMAZ.
  *
- *  KESİN KURAL (V2): Başlıktaki renk/beden/numara/kapasite/ölçü bilgisi ASLA
- *  varyant DEĞİLDİR. "Siyah", "Siyah-Beyaz", "Beden: S", "Numara: 45",
- *  "45 Cm", "65W", "128 GB" gibi değerler tek ürünün ÖZELLİĞİDİR; ürünü
- *  varyantlı yapmaz. Gerçek varyant ancak XML yapısında aynı ana ürün altında
- *  birden fazla satılabilir seçenek (parent/variant/option kaydı) varsa vardır.
- *  AKILLIBAYI1 XML'inde parent/variant/option/color/beden alanı YOKTUR; bu
- *  nedenle başlık tabanlı tespit devre dışıdır ve her zaman boş döner.
- *  (XML yapısı tabanlı tespit xmlImport.parseXmlImportPayload içinde yapılır.)
+ * V2 KURALLARI:
+ *  - Başlıktaki tek renk/beden kelimesi variant DEĞİLDİR (false positive koruması).
+ *  - SKU'daki renk/beden suffix'i tek başına variant oluşturmayabilir.
+ *  - productId pattern'leri (SKU_COPY_XX) kesin kanıttır.
+ *  - Çoklu kanıt (title + sku + barcode) birlikte değerlendirilmeli.
+ *
+ * Dönen değerler: Aday kanıt. Caller kendi mantığıyla değerlendirir.
+ * confidence LOW ise tek başına variant oluşturmaz.
  */
-export function detectVariantAttributes(_text: string): DetectedVariant[] {
-  return [];
+export function detectVariantAttributes(text: string): DetectedVariant[] {
+  const tokens = tokenize(text);
+  if (tokens.length === 0) return [];
+
+  const found: DetectedVariant[] = [];
+  const textLower = (text || '').toLowerCase();
+
+  // 1) SKU variant pattern: SKU_COPY_XX, SKU-XX, _XX suffix
+  const skuCopyMatch = textLower.match(/sku[_-]?copy[_-]?(\d{1,3})/);
+  if (skuCopyMatch) {
+    found.push({ name: 'Beden', value: skuCopyMatch[1] });
+    return found;
+  }
+
+  // 2) Title pattern: "Ürün Adı RENK BEDEN" (son 2 token renk+beden kombinasyonu)
+  if (tokens.length >= 4) {
+    const lastTwo = tokens.slice(-2);
+    const isColor = COLORS.has(lastTwo[0]);
+    const isSize = SIZES.has(lastTwo[1]);
+    if (isColor && isSize) {
+      found.push({ name: 'Renk', value: COLOR_LABEL[lastTwo[0]] || lastTwo[0] });
+      found.push({ name: 'Beden', value: lastTwo[1].toUpperCase() });
+      return found;
+    }
+  }
+
+  // 3) Pipe/comma separated: "Mavi | Siyah | Kirmizi" pattern
+  if (text.includes('|') || text.includes(',')) {
+    const parts = text.split(/[,|]/).map(p => p.trim().toLowerCase()).filter(Boolean);
+    const colorParts = parts.filter(p => COLORS.has(p));
+    if (colorParts.length >= 2) {
+      found.push({ name: 'Renk', value: COLOR_LABEL[colorParts[0]] || colorParts[0] });
+      return found;
+    }
+  }
+
+  return found;
 }
 
 export function hasVariantAttributes(text: string): boolean {

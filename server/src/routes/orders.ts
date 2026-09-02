@@ -124,4 +124,37 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
+// POST /orders/sync - GERÇEK Trendyol API'den sipariş senkronizasyonu
+router.post('/sync', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const marketplaceId = String(req.body?.marketplaceId ?? '');
+    if (!marketplaceId) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'marketplaceId zorunludur' } });
+    }
+
+    const { syncTrendyolOrders } = await import('../services/marketplace/orderSync.ts');
+    const result = await syncTrendyolOrders(marketplaceId, {
+      startDate: req.body?.startDate,
+      endDate: req.body?.endDate,
+      page: req.body?.page,
+      size: req.body?.size,
+    });
+
+    res.json({
+      ok: result.ok,
+      message: result.ok ? `${result.fetched} sipariş çekildi: ${result.created} yeni, ${result.updated} güncellendi, ${result.duplicate} duplicate` : result.error,
+      fetched: result.fetched,
+      created: result.created,
+      updated: result.updated,
+      duplicate: result.duplicate,
+      latencyMs: result.latencyMs,
+      httpStatus: result.httpStatus,
+      error: result.error,
+    });
+  } catch (error) {
+    console.error('Error syncing orders:', error);
+    res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Sipariş senkronizasyonu başarısız' } });
+  }
+});
+
 export default router;

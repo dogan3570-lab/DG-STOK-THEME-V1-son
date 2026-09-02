@@ -1,5 +1,6 @@
 import { prisma } from '../db/prisma.ts';
 import { decryptApiKey } from './crypto.ts';
+import { extractResponseText } from './errorTaxonomy.ts';
 
 // ==================== TYPES ====================
 
@@ -104,7 +105,9 @@ export async function getRegistry(): Promise<OpenRouterRegistry> {
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.models)) {
-      return parsed as OpenRouterRegistry;
+      const reg = parsed as OpenRouterRegistry;
+      normalizeQuarantines(reg);
+      return reg;
     }
     return emptyRegistry();
   } catch {
@@ -139,15 +142,53 @@ export interface ClassifiedError {
 
 const REGISTRY_KEY = 'openrouter_registry';
 const OR_API_BASE = 'https://openrouter.ai/api/v1';
-const MAX_ATTEMPTS_PER_REQUEST = 3;
+const MAX_ATTEMPTS_PER_REQUEST = 5;
 const COOLDOWN_BASE_MS = 5 * 60 * 1000;
 const COOLDOWN_MAX_MS = 4 * 60 * 60 * 1000;
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const REFRESH_RETRY_BACKOFF_MS = 5 * 60 * 1000;
 const FREE_MODEL_REQUEST_THRESHOLD = Number(process.env.OPENROUTER_FREE_MODEL_REQUEST_THRESHOLD ?? '90');
 const DISCOVERY_COOLDOWN_MS = 2 * 60 * 1000;
+/** FIX(RT-ACC): Kalıcı sınıf karantina inceleme süresi (removed_by_* hariç). */
+const QUARANTINE_REVIEW_MS = 30 * 60 * 1000;
 let discoveryLock = false;
 let lastDiscoveryTimestamp = 0;
+
+// ==================== MUTEX (FIX RT-ACC: lost-update race) ====================
+let registryLock: Promise<unknown> = Promise.resolve();
+function withRegistryLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = registryLock.then(fn, fn);
+  registryLock = run.catch(() => {});
+  return run;
+}
+
+// ==================== QUARANTINE NORMALIZATION ====================
+
+/**
+ * FIX(RT-ACC): Karantina süre tutarlılığı (omniRouteManager ile aynı politika).
+ * - removed_by_openrouter: kalıcı (katalog geri gelince discover merge temizler —
+ *   mevcut merge zaten listede kalmalarını sağlar; dönüşte resurrect için merge'e bakın).
+ * - Diğer kalıcı sınıflar: quarantinedAt + QUARANTINE_REVIEW_MS sonunda taze şans.
+ */
+function normalizeQuarantines(reg: OpenRouterRegistry): void {
+  const now = Date.now();
+  for (const m of reg.models) {
+    if (!m.quarantineReason || m.quarantineReason === 'removed_by_openrouter') continue;
+    if (!m.quarantinedAt) {
+      m.quarantinedAt = new Date(now).toISOString();
+      continue;
+    }
+    if (new Date(m.quarantinedAt).getTime() + QUARANTINE_REVIEW_MS <= now) {
+      m.quarantineReason = null;
+      m.quarantinedAt = null;
+      m.health = 'unknown';
+      m.consecutiveFailures = 0;
+      m.cooldownUntil = null;
+      m.lastError = null;
+      m.lastErrorCode = null;
+    }
+  }
+}
 // ==================== DISCOVERY ====================
 
 async function fetchCatalog(apiKey: string): Promise<any[]> {
@@ -240,63 +281,74 @@ export async function discoverAndPersist(): Promise<{ ok: boolean; freeCount: nu
   }
 
   try {
-    const catalog = await fetchCatalog(apiKey);
-    const totalCount = catalog.length;
-    const freeFromApi = catalog.filter(isFreeModel);
+    return await withRegistryLock(async () => {
+      const catalog = await fetchCatalog(apiKey);
+      const totalCount = catalog.length;
+      const freeFromApi = catalog.filter(isFreeModel);
 
-    const registry = await getRegistry();
-    const existingMap = new Map<string, OpenRouterModelEntry>();
-    for (const m of registry.models) {
-      existingMap.set(m.id, m);
-    }
-
-    const apiModelIds = new Set<string>();
-    const now = new Date().toISOString();
-    const merged: OpenRouterModelEntry[] = [];
-
-    for (const apiModel of freeFromApi) {
-      apiModelIds.add(apiModel.id);
-      const existing = existingMap.get(apiModel.id);
-
-      if (existing) {
-        existing.contextLength = apiModel.context_length ?? existing.contextLength;
-        existing.pricing = apiModel.pricing ?? existing.pricing;
-        existing.name = apiModel.name || apiModel.id || existing.name;
-        existing.createdAt = apiModel.created ?? existing.createdAt;
-        existing.lastCheckedAt = now;
-        merged.push(existing);
-      } else {
-        const entry = modelFromCatalog(apiModel);
-        entry.lastCheckedAt = now;
-        merged.push(entry);
+      const registry = await getRegistry();
+      const existingMap = new Map<string, OpenRouterModelEntry>();
+      for (const m of registry.models) {
+        existingMap.set(m.id, m);
       }
-    }
 
-    for (const existing of existingMap.values()) {
-      if (!apiModelIds.has(existing.id)) {
-        if (!existing.quarantineReason) {
-          existing.health = 'quarantined';
-          existing.quarantineReason = 'removed_by_openrouter';
-          existing.quarantinedAt = now;
+      const apiModelIds = new Set<string>();
+      const now = new Date().toISOString();
+      const merged: OpenRouterModelEntry[] = [];
+
+      for (const apiModel of freeFromApi) {
+        apiModelIds.add(apiModel.id);
+        const existing = existingMap.get(apiModel.id);
+
+        if (existing) {
+          existing.contextLength = apiModel.context_length ?? existing.contextLength;
+          existing.pricing = apiModel.pricing ?? existing.pricing;
+          existing.name = apiModel.name || apiModel.id || existing.name;
+          existing.createdAt = apiModel.created ?? existing.createdAt;
+          existing.lastCheckedAt = now;
+          // FIX(RT-ACC): Kataloga geri dönen model karantinadan çıkar.
+          if (existing.quarantineReason === 'removed_by_openrouter') {
+            existing.quarantineReason = null;
+            existing.quarantinedAt = null;
+            existing.health = 'unknown';
+            existing.consecutiveFailures = 0;
+            existing.lastError = null;
+            existing.lastErrorCode = null;
+          }
+          merged.push(existing);
+        } else {
+          const entry = modelFromCatalog(apiModel);
+          entry.lastCheckedAt = now;
+          merged.push(entry);
         }
-        existing.lastCheckedAt = now;
-        merged.push(existing);
       }
-    }
 
-    const keyUsage = await fetchKeyUsage(apiKey);
+      for (const existing of existingMap.values()) {
+        if (!apiModelIds.has(existing.id)) {
+          if (!existing.quarantineReason) {
+            existing.health = 'quarantined';
+            existing.quarantineReason = 'removed_by_openrouter';
+            existing.quarantinedAt = now;
+          }
+          existing.lastCheckedAt = now;
+          merged.push(existing);
+        }
+      }
 
-    registry.models = merged;
-    registry.discoveredAt = now;
-    registry.lastDiscoveryError = null;
-    registry.keyUsage = keyUsage;
-    await saveRegistry(registry);
+      const keyUsage = await fetchKeyUsage(apiKey);
 
-    if (merged.length === 0) {
-      await setActiveModel(null);
-    }
+      registry.models = merged;
+      registry.discoveredAt = now;
+      registry.lastDiscoveryError = null;
+      registry.keyUsage = keyUsage;
+      await saveRegistry(registry);
 
-    return { ok: true, freeCount: merged.length, totalCount };
+      if (merged.length === 0) {
+        await setActiveModel(null);
+      }
+
+      return { ok: true, freeCount: merged.length, totalCount };
+    });
   } catch (err: any) {
     const msg = err.message || 'Keşif hatası';
     const registry = await getRegistry();
@@ -325,12 +377,16 @@ export function isUsable(m: OpenRouterModelEntry): boolean {
     const until = new Date(m.cooldownUntil).getTime();
     if (Date.now() < until) return false;
   }
-  if (m.totalRequests >= FREE_MODEL_REQUEST_THRESHOLD) return false;
+  // FIX(RT326): totalRequests lifetime ban KALDIRILDI.
+  // Lifetime totalRequests sonsuza kadar dışlanmaya yol açmamalı.
+  // Sağlık kararı: quarantine, cooldown, failure-rate üzerinden verilir.
+  // totalRequests yalnızca telemetry/istatistik amaçlıdır.
   if (m.id.includes('content-safety') || m.id.includes('safety')) return false;
   return true;
 }
 
 export function hasRotationLimitReached(m: OpenRouterModelEntry): boolean {
+  // FIX(RT326): Artık lifetime ban üretmez; sadece high-usage bilgisi döndürür.
   return m.totalRequests >= FREE_MODEL_REQUEST_THRESHOLD;
 }
 
@@ -347,6 +403,11 @@ function modelScore(m: OpenRouterModelEntry): number {
   const total = m.totalRequests || 1;
   const failRate = m.failedRequests / total;
   score -= failRate * 50;
+
+  // FIX(RT326): totalRequests artık yalnızca depriyoritizasyon cezası (ban değil).
+  // Yoğun kullanılan modeller alt sıralara itilir ama dışlanmaz.
+  // rotation limit aşımında bile seçim devam eder.
+  score -= Math.min(30, m.totalRequests / 3);
 
   if (m.contextLength) {
     score += Math.min(30, m.contextLength / 10000);
@@ -415,35 +476,54 @@ export async function getOrSelectActiveModel(exclude: Set<string> = new Set()): 
  * transient:   429, 5xx, timeout → cooldown + fallback
  * permanent:   404, 410, model_not_found, unsupported, deprecated → quarantine
  * auth:        401, 403 → provider lastStatus=error
+ *
+ * FIX(RT-ACC): HTTP status ÖNCE gelir (spec #7). Metin eşleşmeleri
+ * word-boundary ile sıkılaştırıldı ("1429" artık 429 sanılmaz,
+ * "people" içindeki 'eol' artık deprecated sanılmaz).
  */
 export function classifyError(err: any): ClassifiedError {
   const msg = String(err?.message || err?.toString?.() || '').toLowerCase();
   const status = extractHttpStatus(msg);
 
-  if (msg.includes('401') || msg.includes('invalid_key') || msg.includes('unauthorized') || msg.includes('forbidden') || msg.includes('403')) {
-    return { type: 'auth', errorCode: msg.includes('403') ? 'FORBIDDEN' : 'INVALID_KEY', errorMsg: 'API key yetkisi geçersiz' };
+  // FIX(RT-ACC): Gerçek HTTP status her şeyden önce.
+  if (status >= 500) {
+    return { type: 'transient', errorCode: 'SERVER_ERROR', errorMsg: 'OpenRouter sunucu hatası' };
+  }
+  if (status === 429) {
+    return { type: 'transient', errorCode: 'RATE_LIMIT', errorMsg: 'Rate limit aşıldı' };
+  }
+  if (status === 403) {
+    return { type: 'auth', errorCode: 'FORBIDDEN', errorMsg: 'Erişim yasak' };
+  }
+  if (status === 401) {
+    return { type: 'auth', errorCode: 'INVALID_KEY', errorMsg: 'API key yetkisi geçersiz' };
   }
 
-  if (msg.includes('429') || msg.includes('rate_limit') || msg.includes('too many requests')) {
+  // Metin fallback'i — status çıkarılamadığında (yalın gövde metinleri).
+  if (/\b401\b/.test(msg) || msg.includes('invalid_key') || msg.includes('unauthorized')) {
+    return { type: 'auth', errorCode: 'INVALID_KEY', errorMsg: 'API key yetkisi geçersiz' };
+  }
+  if (/\b403\b/.test(msg) || msg.includes('forbidden')) {
+    return { type: 'auth', errorCode: 'FORBIDDEN', errorMsg: 'Erişim yasak' };
+  }
+  if (/\b429\b/.test(msg) || msg.includes('rate_limit') || msg.includes('too many requests') || msg.includes('rate limit exceeded')) {
     return { type: 'transient', errorCode: 'RATE_LIMIT', errorMsg: 'Rate limit aşıldı' };
   }
   if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('abort')) {
     return { type: 'transient', errorCode: 'TIMEOUT', errorMsg: 'İstek zaman aşımı' };
   }
-  if (status >= 500) {
-    return { type: 'transient', errorCode: 'SERVER_ERROR', errorMsg: 'OpenRouter sunucu hatası' };
-  }
 
-  if (msg.includes('404') || msg.includes('model_not_found') || msg.includes('model not found')) {
+  if (status === 404 || /\b404\b/.test(msg) || msg.includes('model_not_found') || msg.includes('model not found')) {
     return { type: 'permanent', errorCode: 'MODEL_NOT_FOUND', errorMsg: 'Model bulunamadı/kullanımdan kalkmış' };
   }
-  if (msg.includes('410') || msg.includes('gone') || msg.includes('deprecated') || msg.includes('eol') || msg.includes('end of life')) {
+  // FIX(RT-ACC): 'eol' çıplak alt-dizi olarak kaldırıldı ('people' tuzakları).
+  if (status === 410 || /\b410\b/.test(msg) || /\bgone\b/.test(msg) || msg.includes('deprecated') || msg.includes('end of life')) {
     return { type: 'permanent', errorCode: 'MODEL_DEPRECATED', errorMsg: 'Model kullanımdan kalkmış' };
   }
   if (msg.includes('unsupported') || msg.includes('not available for this model') || msg.includes('does not exist') || msg.includes('unknown model')) {
     return { type: 'permanent', errorCode: 'UNSUPPORTED_MODEL', errorMsg: 'Model desteklenmiyor' };
   }
-  if (msg.includes('402') || msg.includes('payment required') || msg.includes('payment_required') || msg.includes('insufficient balance') || msg.includes('insufficient credits') || msg.includes('billing')) {
+  if (status === 402 || /\b402\b/.test(msg) || msg.includes('payment required') || msg.includes('payment_required') || msg.includes('insufficient balance') || msg.includes('insufficient credits') || msg.includes('billing')) {
     return { type: 'auth', errorCode: 'INSUFFICIENT_CREDITS', errorMsg: 'OpenRouter bakiye yetersiz (hesap bazlı)' };
   }
   if (status === 400) {
@@ -482,52 +562,60 @@ export async function recordModelOutcome(
   errorMsg?: string,
   latencyMs?: number
 ): Promise<void> {
-  const registry = await getRegistry();
-  const model = registry.models.find(m => m.id === modelId);
-  if (!model) return;
+  await withRegistryLock(async () => {
+    const registry = await getRegistry();
+    const model = registry.models.find(m => m.id === modelId);
+    if (!model) return;
 
-  const now = new Date().toISOString();
-  model.lastUsedAt = now;
-  model.lastCheckedAt = now;
+    const now = new Date().toISOString();
+    model.lastUsedAt = now;
+    model.lastCheckedAt = now;
 
-  if (ok) {
-    model.totalRequests++;
-    model.successfulRequests++;
-    model.health = 'healthy';
-    model.consecutiveFailures = 0;
-    model.lastError = null;
-    model.lastErrorCode = null;
-    model.cooldownUntil = null;
-    model.lastLatencyMs = latencyMs ?? null;
-  } else {
-    model.totalRequests++;
-    model.failedRequests++;
-    model.lastError = errorMsg ?? null;
-    model.lastErrorCode = errorCode ?? null;
-    model.lastLatencyMs = latencyMs ?? null;
-
-    const classified = errorCode
-      ? classifyError(new Error(`${errorCode} ${errorMsg || ''}`))
-      : { type: 'unknown' as const, errorCode: errorCode || 'UNKNOWN', errorMsg: errorMsg || 'Bilinmeyen hata' };
-
-    if (classified.type === 'permanent') {
-      model.health = 'quarantined';
-      model.quarantineReason = classified.errorMsg;
-      model.quarantinedAt = now;
+    if (ok) {
+      model.totalRequests++;
+      model.successfulRequests++;
+      model.health = 'healthy';
+      model.consecutiveFailures = 0;
+      model.lastError = null;
+      model.lastErrorCode = null;
       model.cooldownUntil = null;
-    } else if (classified.type === 'transient' || classified.type === 'unknown') {
-      model.consecutiveFailures++;
-      model.health = 'degraded';
-      model.cooldownUntil = new Date(Date.now() + computeCooldownDuration(model.consecutiveFailures)).toISOString();
-    }
-  }
+      // FIX(RT-ACC): Başarı her türlü karantinayı temizler (savunmacı).
+      model.quarantineReason = null;
+      model.quarantinedAt = null;
+      model.lastLatencyMs = latencyMs ?? null;
+    } else {
+      model.totalRequests++;
+      model.failedRequests++;
+      model.lastError = errorMsg ?? null;
+      model.lastErrorCode = errorCode ?? null;
+      model.lastLatencyMs = latencyMs ?? null;
 
-  await saveRegistry(registry);
+      const classified = errorCode
+        ? classifyError(new Error(`${errorCode} ${errorMsg || ''}`))
+        : { type: 'unknown' as const, errorCode: errorCode || 'UNKNOWN', errorMsg: errorMsg || 'Bilinmeyen hata' };
+
+      if (classified.type === 'permanent') {
+        model.health = 'quarantined';
+        model.quarantineReason = classified.errorMsg;
+        model.quarantinedAt = now;
+        model.cooldownUntil = null;
+      } else if (classified.type === 'transient' || classified.type === 'unknown') {
+        model.consecutiveFailures++;
+        model.health = 'degraded';
+        model.quarantineReason = null;
+        model.quarantinedAt = null;
+        model.cooldownUntil = new Date(Date.now() + computeCooldownDuration(model.consecutiveFailures)).toISOString();
+      }
+    }
+
+    await saveRegistry(registry);
+  });
 
   const activeId = await getActiveModel();
   if (activeId === modelId && !ok) {
-    const activeStillUsable = isUsable(model);
-    if (!activeStillUsable) {
+    const registry2 = await getRegistry();
+    const model2 = registry2.models.find(m => m.id === modelId);
+    if (model2 && !isUsable(model2)) {
       const next = await selectBestModel(new Set([modelId]));
       if (next) {
         await setActiveModel(next.id);
@@ -544,6 +632,35 @@ export async function recordModelSuccess(modelId: string, latencyMs?: number): P
 
 export async function recordModelFailure(modelId: string, errorCode: string, errorMsg: string, latencyMs?: number): Promise<void> {
   return recordModelOutcome(modelId, false, errorCode, errorMsg, latencyMs);
+}
+
+// ==================== MANUAL RESET (FIX RT-ACC) ====================
+
+/**
+ * Model veya tüm modeller için runtime cezalarını sıfırlar
+ * (cooldown + karantina + failure sayaçları). removed_by_* dahil.
+ */
+export async function resetModelState(modelId?: string): Promise<{ resetCount: number }> {
+  return withRegistryLock(async () => {
+    const registry = await getRegistry();
+    let resetCount = 0;
+    for (const m of registry.models) {
+      if (modelId && m.id !== modelId) continue;
+      m.cooldownUntil = null;
+      m.quarantineReason = null;
+      m.quarantinedAt = null;
+      m.health = 'unknown';
+      m.consecutiveFailures = 0;
+      m.lastError = null;
+      m.lastErrorCode = null;
+      resetCount++;
+    }
+    await saveRegistry(registry);
+    if (modelId === undefined) {
+      await setActiveModel(null).catch(() => {});
+    }
+    return { resetCount };
+  });
 }
 // ==================== QUOTA ====================
 
@@ -733,7 +850,16 @@ export async function completeWithFreeModel(request: {
       }
 
       const data: any = await res.json();
-      const content = data?.choices?.[0]?.message?.content ?? null;
+      // FIX(RT-ACC): Reasoning modeller content:'' + reasoning_content/reasoning
+      // döndürebilir. Boş metin → INVALID_RESPONSE, sıradaki modele geç;
+      // boş yanıt SAHTE başarı sayılmaz.
+      const text = extractResponseText(data);
+      if (!text) {
+        await recordModelFailure(modelEntry.id, 'INVALID_RESPONSE', 'Boş yanıt (content/reasoning yok)', latencyMs);
+        lastError = 'Boş yanıt (content/reasoning yok)';
+        lastErrorCode = 'INVALID_RESPONSE';
+        continue;
+      }
       const usage = data?.usage
         ? {
             prompt_tokens: data.usage.prompt_tokens ?? 0,
@@ -746,7 +872,7 @@ export async function completeWithFreeModel(request: {
 
       return {
         ok: true,
-        content,
+        content: text,
         model: modelEntry.id,
         usage,
       };

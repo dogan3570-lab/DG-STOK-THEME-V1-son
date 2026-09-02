@@ -73,6 +73,11 @@ function emptySummary(error?: string): VariantFlowSummary {
 }
 
 function extractCleanVariants(p: { title: string | null; xmlKey: string; sku: string | null; description: string | null }): Array<{ name: string; value: string }> {
+  // Title-first: title'ı bağımsız analiz et (SKU/barkod token'ları sonuçları ezmesin)
+  const titleAttrs = detectVariantAttributes(p.title || '');
+  if (titleAttrs.length > 0) return titleAttrs;
+
+  // Title'da bulunamazsa, birleşik text ile fallback
   const text = [p.title, p.xmlKey, p.sku, p.description].filter(Boolean).join(' ');
   return detectVariantAttributes(text);
 }
@@ -213,7 +218,7 @@ Return ONLY the JSON.`;
     temperature: 0.05,
     max_tokens: 2048,
     response_format: { type: 'json_object' },
-  });
+  }, 'VARIANT_MATCHING');
 
   if (!res.ok || !res.content) return null;
 

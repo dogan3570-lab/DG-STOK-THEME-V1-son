@@ -105,4 +105,14 @@ export interface MarketplaceAdapter {
     payload: MarketplaceInventoryUpdatePayload,
     apiUrl: string
   ): AdapterRequest | null;
+
+  /**
+   * Sağlık kontrolü için hafif bir GET isteği üretir.
+   * Credential'ın geçerli olduğunu ve API'nin erişilebilir olduğunu doğrular.
+   * Adapter desteklemiyorsa null döner (sağlık kontrolü credentials-only yapılır).
+   */
+  buildHealthCheckRequest?(
+    cred: DecryptedMarketplaceCredentials,
+    apiUrl: string
+  ): AdapterRequest | null;
 }

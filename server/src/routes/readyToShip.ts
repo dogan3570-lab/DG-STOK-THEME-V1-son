@@ -10,8 +10,22 @@ import { createDispatchJob, startDispatchJob, populateMarketplaceNames, updatePr
 import { sendProductToMarketplace, sendBatchToMarketplace, updateMarketplaceProductInventory, checkMarketplaceHealth } from '../services/marketplaceAdapter.ts';
 import { resolveListingTemplate, hasListingTemplate } from '../services/listingTemplateResolver.ts';
 import { resolveListingPrice } from '../services/listingPriceResolver.ts';
-import {reconcileReadiness, reconcileProductGates, queueReconcileProductGates} from '../services/readinessService.ts';
+import {reconcileReadiness, reconcileProductGates, queueReconcileProductGates, detectVariantFamily} from '../services/readinessService.ts';
+import { invalidateProductsStatsCache } from './products.ts';
 import { getOperationalMarketplaceIds, isMarketplaceOperational } from '../services/marketplaceTruth.ts';
+import { requestTemplateSync, getTemplateSyncStatus } from '../services/templateSyncService.ts';
+import { computeVatIncludedPurchasePrice } from './products.ts';
+import { getPrepStockRange, isWithinPrepRange } from '../services/stockAutomation.ts';
+
+// SEND-CENTER: insan-okur kural açıklaması (değerler DB MarketplacePricingRule'dan gelir, hardcode YOK).
+function describePricingRule(r?: { minPrice: number; maxPrice: number; profitMargin: number; fixedAmount: number } | null): string {
+  if (!r) return 'Kural yok';
+  const parts: string[] = [];
+  if (r.profitMargin) parts.push(`%${String(r.profitMargin).replace(/\.0+$/, '')}`);
+  if (r.fixedAmount) parts.push(`${String(r.fixedAmount).replace(/\.0+$/, '')} TL`);
+  const band = r.maxPrice > 0 ? `${r.minPrice}-${r.maxPrice} bandı` : 'tüm fiyatlar';
+  return parts.length > 0 ? `${parts.join(' + ')} · ${band}` : `Kâr kuralı tanımlı değil · ${band}`;
+}
 
 const router = Router();
 
@@ -113,6 +127,8 @@ async function syncTemplateMatch(context: { xmlSourceIds?: string[]; marketplace
         });
         queueReconcileProductGates(p.id);
         updated++;
+        // TASK313-R3: ürün havuzu KPI cache'i bayatlamasın
+        invalidateProductsStatsCache();
       }
     }
 
@@ -145,6 +161,8 @@ async function syncReconcileStatus(context: { xmlSourceIds?: string[]; marketpla
   const BATCH = 500;
   let promoted = 0;
 
+  // FIX(312-R2): promote kriterleri reconcileReadiness() ile birebir hizalandi.
+  const prepRange = await getPrepStockRange();
   for (const mpId of resolveMpIds) {
     let offset = 0;
     let hasMore = true;
@@ -158,6 +176,12 @@ async function syncReconcileStatus(context: { xmlSourceIds?: string[]; marketpla
           templateMatch: true,
           OR: [{ variantMatch: true }, { variantStatus: 'NOT_REQUIRED' }],
           marketplaceStates: { some: { marketplaceId: mpId } },
+          // FIX(312-R2): promote kriterleri reconcileReadiness() ile birebir
+          // (salePrice + stok araligi + aktif CategoryMapping). Aksi halde bu yol,
+          // mapping'siz READY demote edilen urunleri sessizce geri READY yapar.
+          salePrice: { not: null },
+          stock: { gte: prepRange.min, lte: prepRange.max },
+          category: { mappings: { some: { marketplaceId: mpId, active: true } } },
           ...(context.xmlSourceIds?.length ? { xmlSourceId: { in: context.xmlSourceIds } } : {}),
         },
         select: { id: true },
@@ -181,6 +205,18 @@ async function syncReconcileStatus(context: { xmlSourceIds?: string[]; marketpla
 
   return promoted;
 }
+
+// ==================== SYNC STATUS ====================
+
+router.get('/sync-status', requireAuth, (_req: Request, res: Response) => {
+  try {
+    const status = getTemplateSyncStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('Error fetching sync status:', error);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch sync status' } });
+  }
+});
 
 // ==================== CONTEXT ENDPOINT ====================
 
@@ -227,12 +263,12 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
     const xmlSourceIds = context.xmlSourceIds;
     const marketplaceIds = context.marketplaceIds;
 
-    // Sync templateMatch using canonical resolver before computing stats.
-    // Always runs — syncTemplateMatch handles both context and no-context cases.
-    await syncTemplateMatch({ xmlSourceIds, marketplaceIds });
+    // FIX(2M): syncTemplateMatch request path'ten çıkarıldı → background'a taşındı.
+    // Response artık DB'deki mevcut templateMatch değerlerini kullanır.
+    requestTemplateSync({ xmlSourceIds, marketplaceIds });
 
     const universeCount = await prisma.product.count({
-      where: xmlSourceIds.length ? { xmlSourceId: { in: xmlSourceIds } } : {},
+      where: { ...(xmlSourceIds.length ? { xmlSourceId: { in: xmlSourceIds } } : {}), status: { not: 'DELETED' } },
     });
 
     // Build context-aware stats query
@@ -253,7 +289,7 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
         SUM(CASE WHEN stock <= 0 THEN 1 ELSE 0 END) as "missingStock",
         SUM(CASE WHEN status = 'ERROR' THEN 1 ELSE 0 END) as "errorCount"
       FROM Product
-      WHERE 1=1
+      WHERE status != 'DELETED'
       ${xmlSourceIds.length ? Prisma.sql`AND xmlSourceId IN (${Prisma.join(xmlSourceIds.map(id => Prisma.sql`${id}`), ', ')})` : Prisma.empty}
       ${marketplaceIds.length ? Prisma.sql`AND id IN (SELECT productId FROM ProductMarketplaceState WHERE marketplaceId IN (${Prisma.join(marketplaceIds.map(id => Prisma.sql`${id}`), ', ')}) )` : Prisma.empty}
     `;
@@ -337,8 +373,8 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     const xmlSourceIds = req.query?.xmlSourceIds ? String(req.query.xmlSourceIds).split(',').filter(Boolean) : [];
     const marketplaceIds = req.query?.marketplaceIds ? String(req.query.marketplaceIds).split(',').filter(Boolean) : [];
 
-    // Sync templateMatch before listing to ensure accurate filter/stats
-    await syncTemplateMatch({ xmlSourceIds, marketplaceIds });
+    // FIX(2M): syncTemplateMatch request path'ten çıkarıldı → background'a taşındı.
+    requestTemplateSync({ xmlSourceIds, marketplaceIds });
 
     // NOTE: syncReconcileStatus removed from page-load — lifecycle reconcile now happens
     // at each gate-write point (category, brand, variant, template, PMS, price).
@@ -349,11 +385,22 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     const sortBy = String(req.query?.sortBy ?? 'createdAt');
     const sortOrder = String(req.query?.sortOrder ?? 'desc');
     const page = Math.max(1, Number(req.query?.page ?? 1));
-    const limit = Math.min(250, Math.max(10, Number(req.query?.limit ?? 50)));
+    // SEND-CENTER: operasyon ekranı page-size 50/100/500/1000 destekler (server-side pagination;
+    // take üst sınırı 1000 — istemci tüm dataset'i asla tek istekte çekemez).
+    const limit = Math.min(1000, Math.max(10, Number(req.query?.limit ?? 50)));
     const skip = (page - 1) * limit;
 
     const context = { xmlSourceIds, marketplaceIds };
     const where = buildProductWhere({ xmlSourceIds, marketplaceIds });
+    // FIX(MIN-STOCK): Ürün Hazırlama "Minimum Stok" ayarı (stockAuto.prepMin, canonical
+    // getPrepStockRange) RTS eligibility'nin ZORUNLU parçasıdır. stock < prepMin ürün
+    // bu havuza GİRMEZ. Kural yalnızca backend'de uygulanır (authoritative).
+    const prepRange = await getPrepStockRange();
+    where.stock = {
+      ...(where.stock as object),
+      gte: prepRange.min,
+      lte: prepRange.max,
+    };
     // pms_missing filter needs products WITHOUT PMS — remove the base marketplaceStates {some} filter
     // which restricts to products WITH PMS (contradicts the {none} filter below)
     if (missingReason === 'pms_missing' && where.marketplaceStates) {
@@ -461,7 +508,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
           xmlSourceId: true,
           category: { select: { id: true, name: true } },
           brand: { select: { id: true, name: true } },
-          xmlSource: { select: { id: true, name: true, company: true } },
+          xmlSource: { select: { id: true, name: true, company: true, vatRate: true, purchasePriceVatStatus: true } },
         },
       }),
       prisma.product.count({ where: where as any }),
@@ -479,18 +526,34 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     }) : [];
     const pmsSet = new Set(pmsRows.map(r => r.productId));
 
-    // TRENDYOL SATIS FIYATI (canonical): Product.salePrice + aktif MarketplacePricingRule
-    // bantlari -> resolveListingPrice. Send gate ile AYNI fonksiyon/sonuc; UI bu degeri
-    // gosterir, boylece UI == API == payload.price invarianti saglanir.
-    // purchasePrice satis hesabina girmez; yalnizca UI bilgilendirme icin donebilir.
-    const ttMp = await prisma.marketplace.findFirst({ where: { key: 'tt', active: true }, select: { id: true } });
-    let ttRulesAll: { id: string; xmlSourceId: string | null; minPrice: number; maxPrice: number; profitMargin: number; fixedAmount: number; rounding: string | null }[] = [];
-    if (ttMp) {
-      ttRulesAll = await prisma.marketplacePricingRule.findMany({
-        where: { marketplaceId: ttMp.id, active: true },
+    // FIX(312-R2): liste missingReasons icin aktif CategoryMapping seti (validate ile ayni semantik).
+    const listCatIds = Array.from(new Set(items.map(i => i.category?.id).filter((x): x is string => !!x)));
+    const listMpIds = primaryMarketplaceId ? [primaryMarketplaceId] : marketplaceIds;
+    const listActiveMappingSet = new Set((listCatIds.length > 0 ? await prisma.categoryMapping.findMany({
+      where: { categoryId: { in: listCatIds }, marketplaceId: { in: listMpIds }, active: true },
+      select: { categoryId: true, marketplaceId: true },
+    }) : []).map(m => `${m.categoryId}|${m.marketplaceId}`));
+
+    // SEND-CENTER: TÜM aktif pazaryerleri için canonical fiyat (resolveListingPrice — send gate
+    // ile AYNI fonksiyon). Trendyol'a özgü eski davranış geriye uyumlu 'trendyolListPrice' olarak korunur.
+    const activeMps = await prisma.marketplace.findMany({
+      where: { active: true },
+      select: { id: true, key: true, name: true, active: true, apiKey: true, apiSecret: true, apiUrl: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    let rulesAll: { marketplaceId: string; xmlSourceId: string | null; minPrice: number; maxPrice: number; profitMargin: number; fixedAmount: number; rounding: string | null }[] = [];
+    if (activeMps.length > 0) {
+      rulesAll = await prisma.marketplacePricingRule.findMany({
+        where: { active: true, marketplaceId: { in: activeMps.map(m => m.id) } },
         orderBy: { minPrice: 'asc' },
       });
     }
+    const mpMeta = activeMps.map(m => ({
+      id: m.id, key: m.key, name: m.name,
+      operational: isMarketplaceOperational(m),
+      reason: m.active === false ? 'PASIF' : (isMarketplaceOperational(m) ? null : 'API bağlantısı yapılandırılmamış'),
+    }));
+    const ttMpId = activeMps.find(m => m.key === 'tt')?.id ?? null;
 
     const itemsWithReadiness = await Promise.all(items.map(async (item) => {
       // Resolve template authoritatively
@@ -543,6 +606,10 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 
       const missingReasons: string[] = [];
       if (!item.categoryMatch) missingReasons.push('Kategori');
+      else {
+        const listCatId = item.category?.id ?? null;
+        if (!listCatId || !marketplaceIds.some(mp => listActiveMappingSet.has(`${listCatId}|${mp}`))) missingReasons.push('Kategori eşlemesi');
+      }
       if (!item.brandMatch) missingReasons.push('Marka');
       if (!isVariantComplete({ variantMatch: item.variantMatch, variantStatus: item.variantStatus })) missingReasons.push('Varyant');
       if (!authoritativeTemplateMatch) missingReasons.push('Şablon');
@@ -553,20 +620,45 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
       if (item.stock <= 0) missingReasons.push('Stok');
       if (item.status === 'ERROR') missingReasons.push('Hata');
 
-      // Canonical Trendyol fiyat hesabi (send gate ile ayni resolver):
-      // BASE = Product.salePrice; bant = MarketplacePricingRule (xmlSource uyumlu).
-      const itemRules = ttRulesAll
-        .filter(r => !r.xmlSourceId || r.xmlSourceId === item.xmlSourceId)
-        .map(r => ({ minPrice: r.minPrice, maxPrice: r.maxPrice, profitMargin: r.profitMargin, fixedAmount: r.fixedAmount, rounding: r.rounding ?? undefined }));
-      const tyPrice = resolveListingPrice(item.salePrice, itemRules);
-      const trendyolListPrice = tyPrice.status === 'OK' ? tyPrice.listingPrice : null;
+      // SEND-CENTER fiyat zinciri (ürün × aktif pazaryeri):
+      //   purchasePrice → KDV (XmlSource.purchasePriceVatStatus) → vatIncluded
+      //   salePrice → MarketplacePricingRule bandı → resolveListingPrice (send gate == UI)
+      // DOUBLE-VAT YOK: kaynak 'dahil' ise vatIncluded = purchasePrice (tekrar KDV eklenmez).
+      const vatIncluded = computeVatIncludedPurchasePrice(
+        { purchasePrice: item.purchasePrice, salePrice: item.salePrice, vatRate: null },
+        { vatRate: item.xmlSource?.vatRate ?? null, purchasePriceVatStatus: item.xmlSource?.purchasePriceVatStatus ?? 'dahil' },
+      );
+
+      const marketplacePrices = activeMps.map((m) => {
+        const rulesForMp = rulesAll
+          .filter(r => r.marketplaceId === m.id && (!r.xmlSourceId || r.xmlSourceId === item.xmlSourceId))
+          .map(r => ({ minPrice: r.minPrice, maxPrice: r.maxPrice, profitMargin: r.profitMargin, fixedAmount: r.fixedAmount, rounding: r.rounding ?? undefined }));
+        const ruleUsed = rulesForMp.find(r => !r.maxPrice || (item.salePrice != null && item.salePrice >= r.minPrice && item.salePrice <= r.maxPrice)) ?? rulesForMp[0] ?? null;
+        const res = resolveListingPrice(item.salePrice, rulesForMp);
+        return {
+          marketplaceId: m.id,
+          key: m.key,
+          name: m.name,
+          operational: mpMeta.find(x => x.id === m.id)?.operational ?? false,
+          price: res.status === 'OK' ? res.listingPrice : null,
+          status: res.status,
+          ruleDesc: describePricingRule(ruleUsed),
+        };
+      });
+      const trendyolListPrice = marketplacePrices.find(p => p.marketplaceId === ttMpId)?.price ?? null;
 
       return {
         ...item,
         isReady: ready,
         hasPms,
         trendyolListPrice,
-        trendyolPriceStatus: tyPrice.status,
+        trendyolPriceStatus: marketplacePrices.find(p => p.marketplaceId === ttMpId)?.status ?? 'NO_MARKETPLACE',
+        // PARITY FIX: Product Pool (products.ts computeVatIncludedPurchasePrice) ile BİREBİR aynı
+        // çağrı — fallback semantiği (purchasePrice || salePrice || 0) korunur; strict null-gate YOK.
+        purchasePriceVatIncluded: vatIncluded,
+        sourceVatRate: item.xmlSource?.vatRate ?? null,
+        sourceVatStatus: item.xmlSource?.purchasePriceVatStatus ?? null,
+        marketplacePrices,
         missingReasons,
         templateReady,
         templateId,
@@ -579,6 +671,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 
     res.json({
       items: itemsWithReadiness,
+      marketplaces: mpMeta,
       pagination: {
         page,
         limit,
@@ -603,8 +696,8 @@ router.get('/graph', requireAuth, async (req: Request, res: Response) => {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'marketplaceIds required for graph' } });
     }
 
-    // Sync templateMatch before computing graph counts
-    await syncTemplateMatch({ xmlSourceIds, marketplaceIds });
+    // FIX(2M): syncTemplateMatch request path'ten çıkarıldı → background'a taşındı.
+    requestTemplateSync({ xmlSourceIds, marketplaceIds });
 
     const graphData = await Promise.all(marketplaceIds.map(async (mpId) => {
       const mp = await prisma.marketplace.findUnique({ where: { id: mpId }, select: { id: true, name: true, key: true } });
@@ -707,11 +800,12 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
         variantStatus: true,
         templateMatch: true,
         xmlSourceId: true,
+        supplierCategory: true,
         createdAt: true,
         updatedAt: true,
         category: { select: { id: true, name: true } },
         brand: { select: { id: true, name: true } },
-        xmlSource: { select: { id: true, name: true, company: true } },
+        xmlSource: { select: { id: true, name: true, company: true, vatRate: true, purchasePriceVatStatus: true } },
         variants: { select: { id: true, name: true, value: true } },
         marketplaceStates: {
           select: {
@@ -797,11 +891,57 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
     if (product.stock <= 0) missingReasons.push('Stokta ürün yok');
     if (product.status === 'ERROR') missingReasons.push('Üründe hata var');
 
+    // SEND-CENTER detay: liste endpoint'iyle AYNI canonical fiyat zinciri (double-VAT yok,
+    // resolveListingPrice == send gate motoru). Yeni hesaplama motoru YAZILMADI.
+    const activeMpsDetail = await prisma.marketplace.findMany({
+      where: { active: true },
+      select: { id: true, key: true, name: true, active: true, apiKey: true, apiSecret: true, apiUrl: true, apiStatus: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const rulesDetail = activeMpsDetail.length > 0 ? await prisma.marketplacePricingRule.findMany({
+      where: { active: true, marketplaceId: { in: activeMpsDetail.map(m => m.id) } },
+      orderBy: { minPrice: 'asc' },
+    }) : [];
+    const vatIncludedDetail = computeVatIncludedPurchasePrice(
+      { purchasePrice: product.purchasePrice, salePrice: product.salePrice, vatRate: null },
+      { vatRate: product.xmlSource?.vatRate ?? null, purchasePriceVatStatus: product.xmlSource?.purchasePriceVatStatus ?? 'dahil' },
+    );
+    const marketplacePricesDetail = activeMpsDetail.map((m) => {
+      const rulesForMp = rulesDetail
+        .filter(r => r.marketplaceId === m.id && (!r.xmlSourceId || r.xmlSourceId === product.xmlSourceId))
+        .map(r => ({ minPrice: r.minPrice, maxPrice: r.maxPrice, profitMargin: r.profitMargin, fixedAmount: r.fixedAmount, rounding: r.rounding ?? undefined }));
+      const ruleUsed = rulesForMp.find(r => !r.maxPrice || (product.salePrice != null && product.salePrice >= r.minPrice && product.salePrice <= r.maxPrice)) ?? rulesForMp[0] ?? null;
+      const res = resolveListingPrice(product.salePrice, rulesForMp);
+      const pmsRow = product.marketplaceStates.find(s => s.marketplaceId === m.id);
+      return {
+        marketplaceId: m.id,
+        key: m.key,
+        name: m.name,
+        operational: isMarketplaceOperational(m),
+        apiStatus: m.apiStatus,
+        price: res.status === 'OK' ? res.listingPrice : null,
+        status: res.status,
+        ruleDesc: describePricingRule(ruleUsed),
+        eligibility: pmsRow ? pmsRow.status : 'NO_STATE',
+        blockedReason: !isMarketplaceOperational(m) ? 'API bağlantısı yapılandırılmamış'
+          : (res.status !== 'OK' ? res.status
+            : (!product.categoryMatch ? 'Kategori eksik'
+              : (!product.brandMatch ? 'Marka eksik'
+                : (!isVariantComplete({ variantMatch: product.variantMatch, variantStatus: product.variantStatus }) ? 'Varyant eksik'
+                  : (pmsRow ? null : 'Pazaryeri state yok'))))),
+      };
+    });
+
     res.json({
       ...product,
       isReady: ready,
       hasPms,
       missingReasons,
+      // PARITY FIX: Product Pool ile birebir aynı canonical değer (fallback dahil).
+      purchasePriceVatIncluded: vatIncludedDetail,
+      sourceVatRate: product.xmlSource?.vatRate ?? null,
+      sourceVatStatus: product.xmlSource?.purchasePriceVatStatus ?? null,
+      marketplacePrices: marketplacePricesDetail,
       templateReady,
       templateId,
       templateName,
@@ -819,12 +959,18 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
 
 router.post('/send', requireAuth, async (req: Request, res: Response) => {
   try {
-    const productIds = (Array.isArray(req.body?.productIds) ? req.body.productIds : []).map((x: unknown) => String(x)).filter(Boolean);
+
+    const prepRange = await getPrepStockRange();    const productIds = (Array.isArray(req.body?.productIds) ? req.body.productIds : []).map((x: unknown) => String(x)).filter(Boolean);
     const bodyXmlSourceIds = req.body?.xmlSourceIds ? (Array.isArray(req.body.xmlSourceIds) ? req.body.xmlSourceIds : [req.body.xmlSourceIds]).map(String) : [];
     const bodyMarketplaceIds = req.body?.marketplaceIds ? (Array.isArray(req.body.marketplaceIds) ? req.body.marketplaceIds : [req.body.marketplaceIds]).map(String) : (req.body.marketplaceId ? [String(req.body.marketplaceId)] : []);
 
     if (productIds.length === 0) {
       return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'productIds zorunludur' } });
+    }
+    // HARDENING(F-22): ustsinirsiz productIds -> sinirsiz paralel gate degerlendirmesi
+    // mumkundu. Gonderim mantigi DEGISMEDi; yalnizca giris dogrulamasi (proje konvansiyonu 500).
+    if (productIds.length > 500) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Tek istekte en fazla 500 urun gonderilebilir' } });
     }
     if (bodyXmlSourceIds.length === 0) {
       return res.status(400).json({ ok: false, error: { code: 'CONTEXT_REQUIRED', message: 'xmlSourceIds zorunludur' } });
@@ -869,6 +1015,13 @@ router.post('/send', requireAuth, async (req: Request, res: Response) => {
 
     const productMap = new Map(products.map(p => [p.id, p]));
 
+    // FIX(312-R2): /send de operational match gate'i uygular (validate ile ayni semantik).
+    const sendCatIds = Array.from(new Set(products.map(p => p.categoryId).filter((x): x is string => !!x)));
+    const sendActiveMappingSet = new Set((sendCatIds.length > 0 ? await prisma.categoryMapping.findMany({
+      where: { categoryId: { in: sendCatIds }, marketplaceId: { in: marketplaceIds }, active: true },
+      select: { categoryId: true, marketplaceId: true },
+    }) : []).map(m => `${m.categoryId}|${m.marketplaceId}`));
+
     // Pre-fetch marketplace states for duplicate/eligibility check
     const marketplaceStates = await prisma.productMarketplaceState.findMany({
       where: {
@@ -903,8 +1056,11 @@ router.post('/send', requireAuth, async (req: Request, res: Response) => {
       const templateOk = hasListingTemplate(resolvedTpl);
 
       // 4/4 gate + status
+      // FIX(312-R2): kategori gate'i artik operational match ile birebir
+      // (aktif CategoryMapping yoksa CATEGORY/MAPPING BLOCK — READY semantigiyle ayni).
+      const valHasMapping = !!product.categoryId && marketplaceIds.some((mp: string) => sendActiveMappingSet.has(`${product.categoryId}|${mp}`));
       const gateStatus = {
-        category: product.categoryMatch === true,
+        category: product.categoryMatch === true && valHasMapping,
         brand: product.brandMatch === true,
         variant: product.variantMatch === true || product.variantStatus === 'NOT_REQUIRED',
         template: templateOk,
@@ -931,7 +1087,7 @@ router.post('/send', requireAuth, async (req: Request, res: Response) => {
       // Price validation
       const priceValid = product.salePrice != null && product.salePrice > 0;
       // Stock validation
-      const stockValid = product.stock != null && product.stock > 0;
+      const stockValid = product.stock != null && isWithinPrepRange(product.stock, prepRange.min, prepRange.max);
 
       const missingGates = Object.entries(gateStatus)
         .filter(([_, v]) => !v)
@@ -994,12 +1150,18 @@ router.post('/send', requireAuth, async (req: Request, res: Response) => {
 
 router.post('/send/validate', requireAuth, async (req: Request, res: Response) => {
   try {
-    const productIds = (Array.isArray(req.body?.productIds) ? req.body.productIds : []).map((x: unknown) => String(x)).filter(Boolean);
+
+    const prepRange = await getPrepStockRange();    const productIds = (Array.isArray(req.body?.productIds) ? req.body.productIds : []).map((x: unknown) => String(x)).filter(Boolean);
     const bodyXmlSourceIds = req.body?.xmlSourceIds ? (Array.isArray(req.body.xmlSourceIds) ? req.body.xmlSourceIds : [req.body.xmlSourceIds]).map(String) : [];
     const bodyMarketplaceIds = req.body?.marketplaceIds ? (Array.isArray(req.body.marketplaceIds) ? req.body.marketplaceIds : [req.body.marketplaceIds]).map(String) : (req.body.marketplaceId ? [String(req.body.marketplaceId)] : []);
 
     if (productIds.length === 0) {
       return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'productIds zorunludur' } });
+    }
+    // HARDENING(F-22): ustsinirsiz productIds -> sinirsiz paralel gate degerlendirmesi
+    // mumkundu. Gonderim mantigi DEGISMEDi; yalnizca giris dogrulamasi (proje konvansiyonu 500).
+    if (productIds.length > 500) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Tek istekte en fazla 500 urun gonderilebilir' } });
     }
     if (bodyXmlSourceIds.length === 0) {
       return res.status(400).json({ ok: false, error: { code: 'CONTEXT_REQUIRED', message: 'xmlSourceIds zorunludur' } });
@@ -1062,6 +1224,14 @@ router.post('/send/validate', requireAuth, async (req: Request, res: Response) =
       mpStateMap.set(`${state.productId}:${state.marketplaceId}`, state);
     }
 
+    // FIX(312-R2): validate aktif CategoryMapping gate'ini raporlar
+    // (READY semantigi ile birebir parity — mapping yoksa CATEGORY/MAPPING BLOCK).
+    const valCatIds = Array.from(new Set(products.map(p => p.categoryId).filter((x): x is string => !!x)));
+    const validateActiveMappingSet = new Set((valCatIds.length > 0 ? await prisma.categoryMapping.findMany({
+      where: { categoryId: { in: valCatIds }, marketplaceId: { in: marketplaceIds }, active: true },
+      select: { categoryId: true, marketplaceId: true },
+    }) : []).map(m => `${m.categoryId}|${m.marketplaceId}`));
+
     const results = await Promise.all(productIds.map(async (productId: string) => {
       const product = productMap.get(productId);
       if (!product) {
@@ -1118,8 +1288,11 @@ router.post('/send/validate', requireAuth, async (req: Request, res: Response) =
         templateReason = 'NO_MARKETPLACE';
       }
 
+      // FIX(312-R2): validate kategori gate'i operational match ile birebir
+      // (aktif CategoryMapping yoksa CATEGORY/MAPPING BLOCK — READY semantigiyle ayni).
+      const valHasMapping = !!product.categoryId && marketplaceIds.some((mp: string) => validateActiveMappingSet.has(`${product.categoryId}|${mp}`));
       const gateStatus = {
-        category: product.categoryMatch === true,
+        category: product.categoryMatch === true && valHasMapping,
         brand: product.brandMatch === true,
         variant: product.variantMatch === true || product.variantStatus === 'NOT_REQUIRED',
         template: templateReady,
@@ -1148,6 +1321,7 @@ router.post('/send/validate', requireAuth, async (req: Request, res: Response) =
       const missingGates = Object.entries(gateStatus)
         .filter(([_, v]) => !v)
         .map(([k]) => k.toUpperCase());
+      if (product.categoryMatch === true && !valHasMapping) missingGates.push('MAPPING');
 
       if (!marketplaceEligible) missingGates.push('MARKETPLACE_ELIGIBLE');
       if (alreadySent) missingGates.push('ALREADY_ACTIVE');
@@ -1159,11 +1333,13 @@ router.post('/send/validate', requireAuth, async (req: Request, res: Response) =
       }
 
       // Stock validation
-      if (product.stock == null || product.stock <= 0) {
+      if (product.stock == null || !isWithinPrepRange(product.stock, prepRange.min, prepRange.max)) {
         missingGates.push('STOCK_INVALID');
       }
 
-      const eligible = allGatesPass && marketplaceEligible && !alreadySent && !duplicate && product.salePrice != null && product.salePrice > 0 && product.stock != null && product.stock > 0;
+      // FIX(MIN-STOCK): eligible hesabı prep-range (minimum stok) gate'ini DAHİL eder.
+      const stockEligible = product.stock != null && isWithinPrepRange(product.stock, prepRange.min, prepRange.max);
+      const eligible = allGatesPass && marketplaceEligible && !alreadySent && !duplicate && product.salePrice != null && product.salePrice > 0 && stockEligible;
 
       return {
         productId,
@@ -1201,7 +1377,8 @@ router.post('/send/validate', requireAuth, async (req: Request, res: Response) =
 // Background job processor
 async function processDispatchJob(jobId: string, productIds: string[], xmlSourceIds: string[], marketplaceIds: string[]) {
   try {
-    const concurrency = 5;
+
+    const prepRange = await getPrepStockRange();    const concurrency = 5;
 
     for (const marketplaceId of marketplaceIds) {
       const mp = await prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { id: true, key: true, name: true } });
@@ -1250,10 +1427,17 @@ async function processDispatchJob(jobId: string, productIds: string[], xmlSource
         },
         select: { productId: true, marketplaceId: true, status: true },
       });
-      const mpStateMap = new Map<string, { productId: string; marketplaceId: string; status: string }>();
-      for (const state of marketplaceStates) {
-        mpStateMap.set(`${state.productId}:${state.marketplaceId}`, state);
-      }
+    const mpStateMap = new Map<string, { productId: string; marketplaceId: string; status: string }>();
+    for (const state of marketplaceStates) {
+      mpStateMap.set(`${state.productId}:${state.marketplaceId}`, state);
+    }
+
+    // FIX(312-R2): /send execution artik aktif CategoryMapping gate'i uygular.
+    const execCatIds = Array.from(new Set(products.map(p => p.categoryId).filter((x): x is string => !!x)));
+    const activeMappingSet = new Set((execCatIds.length > 0 ? await prisma.categoryMapping.findMany({
+      where: { categoryId: { in: execCatIds }, marketplaceId: { in: marketplaceIds }, active: true },
+      select: { categoryId: true, marketplaceId: true },
+    }) : []).map(m => `${m.categoryId}|${m.marketplaceId}`));
 
       for (let i = 0; i < productIdsToSend.length; i += 5) {
         const chunk = productIdsToSend.slice(i, i + 5);
@@ -1273,8 +1457,10 @@ async function processDispatchJob(jobId: string, productIds: string[], xmlSource
           });
           const templateOk = hasListingTemplate(resolvedTpl);
 
+          // FIX(312-R2): /send execution da operational match gate'i uygular.
+          const execHasMapping = !!product.categoryId && activeMappingSet.has(`${product.categoryId}|${mp.id}`);
           const gateStatus = {
-            category: product.categoryMatch === true,
+            category: product.categoryMatch === true && execHasMapping,
             brand: product.brandMatch === true,
             variant: product.variantMatch === true || product.variantStatus === 'NOT_REQUIRED',
             template: templateOk,
@@ -1296,6 +1482,7 @@ async function processDispatchJob(jobId: string, productIds: string[], xmlSource
             const missingGates = Object.entries(gateStatus)
               .filter(([_, v]) => !v)
               .map(([k]) => k.toUpperCase());
+            if (product.categoryMatch === true && !execHasMapping) missingGates.push('MAPPING');
             if (!marketplaceEligible) missingGates.push('MARKETPLACE_ELIGIBLE');
             if (alreadySent) missingGates.push('ALREADY_ACTIVE');
             if (alreadySending) missingGates.push('ALREADY_SENDING');
@@ -1323,7 +1510,7 @@ async function processDispatchJob(jobId: string, productIds: string[], xmlSource
           }
 
           // Stock validation
-          if (product.stock == null || product.stock <= 0) {
+          if (product.stock == null || !isWithinPrepRange(product.stock, prepRange.min, prepRange.max)) {
             updateProgress({
               jobId,
               marketplaceId: mp.id,
@@ -1461,8 +1648,10 @@ router.post('/recheck', requireAuth, async (req: Request, res: Response) => {
     const bodyXmlSourceIds = req.body?.xmlSourceIds ? (Array.isArray(req.body.xmlSourceIds) ? req.body.xmlSourceIds : [req.body.xmlSourceIds]).map(String) : [];
     const bodyMarketplaceIds = req.body?.marketplaceIds ? (Array.isArray(req.body.marketplaceIds) ? req.body.marketplaceIds : [req.body.marketplaceIds]).map(String) : [];
 
-    // Sync templateMatch before recheck to ensure accurate gate evaluation
-    await syncTemplateMatch({ xmlSourceIds: bodyXmlSourceIds, marketplaceIds: bodyMarketplaceIds });
+    // FIX(2M): syncTemplateMatch request path'ten çıkarıldı → background'a taşındı.
+    // /recheck zaten templateMatch=true filtresi kullanıyor; background sync tamamlandığında
+    // templateMatch güncellenmiş olur.
+    requestTemplateSync({ xmlSourceIds: bodyXmlSourceIds, marketplaceIds: bodyMarketplaceIds });
 
     let ids: string[];
 
@@ -1490,6 +1679,10 @@ router.post('/recheck', requireAuth, async (req: Request, res: Response) => {
         return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'productIds zorunludur' } });
       }
       ids = (Array.isArray(productIds) ? productIds : []).map((x: unknown) => String(x)).filter(Boolean);
+      // HARDENING(F-22): auto mod zaten take:1000 ile sınırlı; manuel yol aynı üst sınıra bağlandı.
+      if (ids.length > 1000) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Tek istekte en fazla 1000 ürün recheck edilebilir' } });
+      }
     }
 
     if (ids.length === 0) {
@@ -1500,6 +1693,7 @@ router.post('/recheck', requireAuth, async (req: Request, res: Response) => {
       where: { id: { in: ids } },
       select: {
         id: true,
+        categoryId: true,
         categoryMatch: true,
         brandMatch: true,
         templateMatch: true,
@@ -1510,19 +1704,48 @@ router.post('/recheck', requireAuth, async (req: Request, res: Response) => {
         salePrice: true,
         stock: true,
         status: true,
+        brandId: true,
+        title: true,
+        sku: true,
       },
     });
 
+    // Aktif mapping'leri toplu yükle (N+1 engelleme)
+    const categoryIds = [...new Set(products.filter(p => p.categoryId).map(p => p.categoryId as string))];
+    const targetMarketplaceIds = bodyMarketplaceIds.length > 0 ? bodyMarketplaceIds : await getOperationalMarketplaceIds();
+    const activeMappings = await prisma.categoryMapping.findMany({
+      where: { categoryId: { in: categoryIds }, marketplaceId: { in: targetMarketplaceIds }, active: true },
+      select: { categoryId: true },
+    });
+    const activeMappingSet = new Set(activeMappings.map(m => m.categoryId));
+
     let updatedCount = 0;
     for (const p of products) {
-      const allReady = isPrepComplete({
+      // P0-3: Variant aile tespiti — NOT_REQUIRED ise kardeş ürünleri kontrol et
+      let effectiveVariantStatus = p.variantStatus;
+      if (effectiveVariantStatus === 'NOT_REQUIRED' && !p.variantMatch && p.brandId && p.title) {
+        const family = await detectVariantFamily(p.id, p.brandId, p.title, p.sku ?? null);
+        if (family.isFamily && family.confidence >= 50) {
+          await prisma.product.update({ where: { id: p.id }, data: { variantStatus: 'WAITING_AI' } });
+          effectiveVariantStatus = 'WAITING_AI';
+        }
+      }
+
+      const readiness = evaluateReadiness({
+        id: p.id,
         status: p.status,
         categoryMatch: p.categoryMatch,
         brandMatch: p.brandMatch,
         templateMatch: p.templateMatch,
         variantMatch: p.variantMatch,
-        variantStatus: p.variantStatus,
+        variantStatus: effectiveVariantStatus ?? null,
+        images: p.images,
+        barcode: p.barcode,
+        salePrice: p.salePrice,
+        stock: p.stock ?? 0,
       });
+      const activeMapping = p.categoryId ? activeMappingSet.has(p.categoryId) : false;
+      const allReady = readiness.isPrepComplete && p.salePrice != null && (p.stock ?? 0) > 0 && p.images != null && p.barcode != null && activeMapping;
 
       if (allReady && p.status !== 'READY') {
         await prisma.product.update({ where: { id: p.id }, data: { status: 'READY' } });
@@ -1531,6 +1754,12 @@ router.post('/recheck', requireAuth, async (req: Request, res: Response) => {
         await prisma.product.update({ where: { id: p.id }, data: { status: 'XML' } });
         updatedCount++;
       }
+    }
+
+    if (updatedCount > 0) {
+      await prisma.auditLog.create({
+        data: { action: 'RECHECK_STATUS', entity: 'product', details: `/recheck: ${updatedCount} urun durumu guncellendi (${ids.length} kontrol edildi, auto=${auto})`, actorUserId: (req as any).actor?.userId || null },
+      });
     }
 
     res.json({

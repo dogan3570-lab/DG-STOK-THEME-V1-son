@@ -1,5 +1,5 @@
-import { completeWithFreeModel } from './openRouterManager.ts';
-import { type ChatMessage } from './aiGateway.ts';
+// FIX(V2 #3): DIRECT BYPASS kaldırıldı — transport Master Orchestrator üzerinden.
+import { chatCompletion, type ChatMessage } from './aiGateway.ts';
 import { type SemanticIdentity } from './productUnderstanding.ts';
 
 // ==================== TYPES ====================
@@ -72,12 +72,12 @@ What does this image show? Return ONLY the JSON.`;
     { role: 'user', content: userMessage },
   ];
 
-  const result = await completeWithFreeModel({
+  const result = await chatCompletion({
     messages,
     temperature: 0.1,
     max_tokens: 1000,
     response_format: { type: 'json_object' },
-  });
+  }, 'IMAGE_ANALYSIS');
 
   if (!result.ok || !result.content) {
     return {

@@ -6,8 +6,41 @@ import {
   simulatePrices, generatePreview, generateBarcode, calculateStock, getForbiddenWords,
 } from '../services/listingEngine.ts';
 import {reconcileProductGates, queueReconcileProductGates} from '../services/readinessService.ts';
+import { requestIncrementalSync, requestCategorySync, requestMarketplaceSync, requestFullSync } from '../services/templateSyncService.ts';
+import { invalidateTemplateCache } from '../services/listingTemplateResolver.ts';
 
 const router = Router();
+
+// ==================== TEMPLATE SYNC TRIGGER ====================
+
+/**
+ * Template değişikliğinde etkilenen ürünleri background'da sync et.
+ * Request path'i bloklamaz, duplicate job engeller.
+ */
+function _triggerTemplateSync(
+  marketplaceId: string | null | undefined,
+  productId: string | null | undefined,
+  categoryId: string | null | undefined,
+  _brandId: string | null | undefined,
+): void {
+  // 1. Product-specific template → sadece o ürünü sync et
+  if (productId) {
+    requestIncrementalSync([productId]);
+    return;
+  }
+  // 2. Category-specific template → o category'deki ürünleri sync et
+  if (categoryId) {
+    requestCategorySync(categoryId, marketplaceId ?? undefined);
+    return;
+  }
+  // 3. General template → o marketplace'teki ürünleri sync et
+  if (marketplaceId) {
+    requestMarketplaceSync(marketplaceId);
+    return;
+  }
+  // 4. Hiçbiri yoksa (nadir durum) → full sync
+  requestFullSync();
+}
 
 // ==================== YARDIMCI FONKSİYONLAR ====================
 
@@ -160,6 +193,8 @@ router.post('/import', requireAuth, requireRole(['ADMIN']), async (req, res) => 
       await prisma.listingTemplate.create({ data: { ...data, marketplaceId: data.marketplaceId || null } });
       created++;
     }
+    // Toplu import → full sync tetikle (non-blocking)
+    requestFullSync();
     return res.json({ ok: true, created });
   } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
 });
@@ -222,6 +257,9 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, re
         validationRules: data.validationRules || null,
       },
     });
+    // FIX(2M): Template CRUD tetikleyicisi — etkilenen ürünleri background'da sync et
+    invalidateTemplateCache();
+    _triggerTemplateSync(data.marketplaceId, data.productId, data.categoryId, null);
     return res.status(201).json({ item });
   } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
 });
@@ -270,6 +308,9 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, 
       }
     }
     const item = await prisma.listingTemplate.update({ where: { id: String(req.params.id) }, data: updateData });
+    // FIX(2M): Template CRUD tetikleyicisi — etkilenen ürünleri background'da sync et
+    invalidateTemplateCache();
+    _triggerTemplateSync(item.marketplaceId, item.productId, item.categoryId, null);
     return res.json({ item });
   } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
 });
@@ -280,6 +321,9 @@ router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
     const existing = await prisma.listingTemplate.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Şablon bulunamadı' } });
     await prisma.listingTemplate.delete({ where: { id } });
+    // FIX(2M): Template CRUD tetikleyicisi — silinen template'in etkilediği ürünleri sync et
+    invalidateTemplateCache();
+    _triggerTemplateSync(existing.marketplaceId, existing.productId, existing.categoryId, null);
     return res.json({ ok: true });
   } catch (error: any) {
     if (error.code === 'P2025') {
@@ -298,6 +342,7 @@ router.post('/:id/duplicate', requireAuth, requireRole(['ADMIN', 'OPERATOR']), a
     if (!source) return res.status(404).json({ ok: false, error: 'Kaynak şablon bulunamadı' });
     const { id, createdAt, updatedAt, ...data } = source as any;
     const item = await prisma.listingTemplate.create({ data: { ...data, name: `${data.name} (Kopya)`, active: false } });
+    // Kopya template aktif değil → sync tetikleme (active=false olduğunda tetiklenecek)
     return res.status(201).json({ item });
   } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
 });

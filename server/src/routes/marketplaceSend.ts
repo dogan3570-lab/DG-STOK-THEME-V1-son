@@ -28,9 +28,14 @@ router.post('/send', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req
     if (!marketplaceId) {
       return res.status(400).json({ ok: false, error: { code: 'CONTEXT_REQUIRED', message: 'marketplaceId zorunludur' } });
     }
+    // HARDENING: eski davranış slice(0,100) ile fazlasını SESSİZCE atıyordu → veri kaybı.
+    // Artık fail-closed: üstteki istemci (RTS send center) zaten ≤100 chunk'lar.
+    if (productIds.length > 100) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Tek istekte en fazla 100 ürün gönderilebilir; istemci 100lük parçalara bölmelidir' } });
+    }
 
     const results = [];
-    for (const productId of productIds.slice(0, 100)) {
+    for (const productId of productIds) {
       try {
         results.push(await sendProductToMarketplace({ productId, marketplaceId, xmlSourceId }));
       } catch (e) {

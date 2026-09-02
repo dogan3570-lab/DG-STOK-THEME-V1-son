@@ -21,6 +21,7 @@ import aiSettingsRoutes from './aiSettings.ts';
 import trendyolMappingRoutes from './trendyolMapping.ts';
 import stockAutomationRoutes from './stockAutomation.ts';
 import categoryMatchEngineRoutes from './categoryMatchEngine.ts';
+import categoryCoreV2Routes from './categoryCoreV2.ts';
 import { fetchXmlFromUrl, importXmlProducts } from '../services/xmlImport.ts';
 
 export const router = Router();
@@ -59,6 +60,7 @@ router.use('/ai-settings', aiSettingsRoutes);
 router.use('/trendyol-mapping', trendyolMappingRoutes);
 router.use('/stock-automation', stockAutomationRoutes);
 router.use('/category-engine', categoryMatchEngineRoutes);
+router.use('/category-core-v2', categoryCoreV2Routes);
 
 // ==================== MARKETPLACES ====================
 // Auth + ADMIN rolü gerekli; credential alanları (apiKey, apiSecret, merchantId, storeId) ASLA döndürülmez
@@ -140,6 +142,60 @@ router.post('/xml/import', requireAuth, requireRole(['ADMIN', 'OPERATOR']), asyn
         message: error instanceof Error ? error.message : 'XML import başarısız oldu',
       },
     });
+  }
+});
+
+// ==================== NAV BADGES ====================
+router.get('/nav-badges', requireAuth, async (_req, res) => {
+  try {
+    const [pendingOrders, unreadNotifications] = await Promise.all([
+      prisma.order.count({ where: { status: { in: ['new', 'pending', 'processing'] } } }),
+      prisma.notification.count({ where: { read: false } }),
+    ]);
+    res.json({ pendingOrders, unreadNotifications });
+  } catch (error) {
+    console.error('[nav-badges]', error);
+    res.json({ pendingOrders: 0, unreadNotifications: 0 });
+  }
+});
+
+// ==================== NOTIFICATIONS ====================
+router.get('/notifications', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const page = Math.max(1, Number(req.query?.page ?? 1));
+    const limit = Math.min(100, Math.max(10, Number(req.query?.limit ?? 50)));
+    const skip = (page - 1) * limit;
+    const [items, total, unreadCount] = await Promise.all([
+      prisma.notification.findMany({ orderBy: { createdAt: 'desc' }, skip, take: limit }),
+      prisma.notification.count(),
+      prisma.notification.count({ where: { read: false } }),
+    ]);
+    res.json({ items, total, unreadCount, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+  } catch (error) {
+    console.error('[notifications]', error);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Bildirimler yüklenemedi' } });
+  }
+});
+
+router.put('/notifications/:id/read', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    await prisma.notification.update({ where: { id }, data: { read: true } });
+    const unreadCount = await prisma.notification.count({ where: { read: false } });
+    res.json({ ok: true, unreadCount });
+  } catch (error) {
+    console.error('[notifications read]', error);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Bildirim okunamadı' } });
+  }
+});
+
+router.put('/notifications/read-all', requireAuth, async (_req: Request, res: Response) => {
+  try {
+    await prisma.notification.updateMany({ where: { read: false }, data: { read: true } });
+    res.json({ ok: true, unreadCount: 0 });
+  } catch (error) {
+    console.error('[notifications read-all]', error);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Bildirimler okunamadı' } });
   }
 });
 

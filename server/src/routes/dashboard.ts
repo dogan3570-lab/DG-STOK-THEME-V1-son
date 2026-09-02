@@ -32,6 +32,7 @@ router.get('/stats', requireAuth, async (_req, res) => {
         SUM(CASE WHEN status = 'ERROR' THEN 1 ELSE 0 END) as "errorProducts",
         SUM(CASE WHEN status = 'READY' AND categoryMatch = 1 AND brandMatch = 1 AND templateMatch = 1 AND (variantMatch = 1 OR variantStatus = 'NOT_REQUIRED') THEN 1 ELSE 0 END) as "readyProducts"
       FROM Product
+      WHERE status != 'DELETED'
     `;
     const pRow = productStats[0] || {};
 

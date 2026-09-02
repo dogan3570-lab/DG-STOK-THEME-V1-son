@@ -1,6 +1,8 @@
 import { prisma } from '../db/prisma.ts';
 import { decryptApiKey } from './crypto.ts';
-import { completeWithFreeModel, classifyError } from './openRouterManager.ts';
+import { completeWithFreeModel, classifyError } from './omniRouteManager.ts';
+import { executeMasterRequest, type TaskType } from './omniRouteOrchestrator.ts';
+import { NVIDIA_MODEL_MAP } from './masterExecutors.ts';
 
 export interface ProviderConfig {
   id: string;
@@ -56,17 +58,9 @@ const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     model: 'nvidia/llama-3.1-nemotron-70b-instruct',
   },
-  gemini: {
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    model: 'gemini-pro',
-  },
   deepseek: {
     baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
-  },
-  mistral: {
-    baseUrl: 'https://api.mistral.ai/v1',
-    model: 'mistral-large-latest',
   },
   openai: {
     baseUrl: 'https://api.openai.com/v1',
@@ -76,13 +70,14 @@ const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
     baseUrl: 'https://openrouter.ai/api/v1',
     model: '',
   },
-};
-
-const NVIDIA_MODEL_MAP: Record<string, string> = {
-  'GLM-5.2': 'z-ai/glm-5.2',
-  'Nemotron 70B': 'nvidia/llama-3.1-nemotron-70b-instruct',
-  'Nemotron Ultra 253B': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-  'Nemotron 3 Ultra': 'nvidia/nemotron-3-ultra-550b-a55b',
+  opencode: {
+    baseUrl: 'https://opencode.ai/zen/v1',
+    model: 'big-pickle',
+  },
+  omniroute: {
+    baseUrl: process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128',
+    model: '',
+  },
 };
 
 export async function getActiveProvidersByPriority(): Promise<ProviderConfig[]> {
@@ -98,6 +93,12 @@ export async function getActiveProvidersByPriority(): Promise<ProviderConfig[]> 
     return aHealthy - bHealthy;
   });
   return mapped;
+}
+
+export async function isProviderActive(provider: string): Promise<boolean> {
+  const p = await prisma.aIProviderConfig.findUnique({ where: { provider } });
+  if (!p) return false;
+  return Boolean(p.active);
 }
 
 export async function getProvider(provider: string): Promise<ProviderConfig | null> {
@@ -345,6 +346,60 @@ async function fetchOpenRouterModels(apiKey: string): Promise<any[]> {
   }
 }
 
+async function callOpenCodeApi(
+  apiKey: string,
+  model: string,
+  request: ChatCompletionRequest,
+  timeoutMs: number = 120000
+): Promise<{ content: string; usage?: any }> {
+  const baseUrl = PROVIDER_DEFAULTS.opencode.baseUrl;
+  const url = `${baseUrl}/chat/completions`;
+  const normalizedModel = model.replace(/^opencode\//, '');
+
+  const body = {
+    model: normalizedModel,
+    messages: request.messages,
+    temperature: request.temperature ?? 0.1,
+    max_tokens: request.max_tokens ?? 1024,
+    ...(request.response_format ? { response_format: request.response_format } : {}),
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => '');
+      let errorCode = `HTTP_${res.status}`;
+      if (res.status === 429) errorCode = 'RATE_LIMIT';
+      else if (res.status === 401) errorCode = 'INVALID_KEY';
+      else if (res.status === 403) errorCode = 'FORBIDDEN';
+      else if (res.status === 404) errorCode = 'MODEL_NOT_FOUND';
+      else if (res.status >= 500) errorCode = 'SERVER_ERROR';
+      throw new Error(`${errorCode} ${errorBody}`.slice(0, 500));
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content ?? null;
+    return { content, usage: data.usage };
+  } catch (err: any) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('TIMEOUT');
+    throw err;
+  }
+}
 export async function getOpenRouterFreeModels(): Promise<Array<{ id: string; name: string; context: number | null; pricing: any }>> {
   const apiKey = await getDecryptedApiKey('openrouter');
   if (!apiKey) throw new Error('API key yapılandırılmamış');
@@ -366,88 +421,33 @@ export async function getOpenRouterFreeModels(): Promise<Array<{ id: string; nam
     }));
 }
 
-export async function chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-  const providers = await getActiveProvidersByPriority();
-
-  if (providers.length === 0) {
-    return {
-      ok: false,
-      provider: 'none',
-      model: 'none',
-      content: null,
-      latencyMs: 0,
-      error: 'AI eşleştirme şu anda kullanılamıyor. Kullanılabilir AI sağlayıcısı bulunamadı. Lütfen daha sonra tekrar deneyin.',
-      errorCode: 'NO_AI_PROVIDER_AVAILABLE',
-    };
-  }
-
-  const errors: string[] = [];
-
-  for (const provider of providers) {
-    const apiKey = await getDecryptedApiKey(provider.provider);
-    if (!apiKey) {
-      errors.push(`${provider.displayName}: API key yapılandırılmamış`);
-      continue;
-    }
-
-    const displayModel = provider.model || PROVIDER_DEFAULTS[provider.provider]?.model || 'default';
-    const model = provider.provider === 'nvidia' && NVIDIA_MODEL_MAP[displayModel]
-      ? NVIDIA_MODEL_MAP[displayModel]
-      : displayModel;
-    const startTime = Date.now();
-
-    try {
-      let result: { content: string; usage?: any };
-      let usedModel = model;
-
-      if (provider.provider === 'nvidia') {
-        result = await callNvidiaApi(apiKey, model, request);
-      } else if (provider.provider === 'deepseek') {
-        result = await callDeepseekApi(apiKey, model, request);
-      } else if (provider.provider === 'openrouter') {
-        const orRes = await completeWithFreeModel(request);
-        if (!orRes.ok || !orRes.content) {
-          errors.push(`${provider.displayName}: ${orRes.error || 'No content'}`);
-          continue;
-        }
-        result = { content: orRes.content, usage: orRes.usage ?? undefined };
-        usedModel = orRes.model;
-      } else {
-        errors.push(`${provider.displayName}: Desteklenmeyen sağlayıcı`);
-        continue;
-      }
-
-      const latencyMs = Date.now() - startTime;
-      await incrementRequestCount(provider.provider, true);
-
-      return {
-        ok: true,
-        provider: provider.provider,
-        model: usedModel,
-        content: result.content,
-        latencyMs,
-        usage: result.usage,
-      };
-    } catch (err: any) {
-      const latencyMs = Date.now() - startTime;
-      const classified = classifyError(err);
-      await incrementRequestCount(provider.provider, false, classified.errorMsg);
-
-      errors.push(`${provider.displayName}: ${classified.errorMsg}`);
-
-      if (classified.type === 'auth' && classified.errorCode !== 'INSUFFICIENT_CREDITS') break;
-      continue;
-    }
-  }
+export async function chatCompletion(request: ChatCompletionRequest, taskType: TaskType = 'GENERAL'): Promise<ChatCompletionResponse> {
+  /**
+   * V2 TEK KAPI (#1/#26/#62): Üretim AI trafiğinin TAMAMI Master Orchestrator'dan
+   * geçer. Eski iki katmanlı yapı (orchestrator + manuel provider zinciri)
+   * KALDIRILDI — modüller provider/model SEÇEMEZ, kendi fallback'ini ÇALIŞTIRAMAZ.
+   * Provider/model yürütmesi masterExecutors adaptörlerindedir; testProvider
+   * teşhis yolu ayrıdır ve üretim trafiğine karışmaz.
+   */
+  const result = await executeMasterRequest({
+    taskType,
+    messages: request.messages.map(m => ({ role: m.role, content: m.content })),
+    maxTokens: request.max_tokens ?? 500,
+    temperature: request.temperature ?? 0.7,
+    response_format: request.response_format,
+    metadata: { module: 'gateway.chatCompletion' },
+  });
 
   return {
-    ok: false,
-    provider: providers[0]?.provider || 'none',
-    model: providers[0]?.model || 'none',
-    content: null,
-    latencyMs: 0,
-    error: 'AI eşleştirme şu anda kullanılamıyor. Tüm sağlayıcılar başarısız oldu. Lütfen daha sonra tekrar deneyin.',
-    errorCode: 'NO_AI_PROVIDER_AVAILABLE',
+    ok: result.ok,
+    // Gerçek kaynağı raporla (omniroute/openrouter/nvidia/deepseek) — UI gerçeği
+    provider: result.source || 'none',
+    model: result.model || 'none',
+    content: result.content,
+    latencyMs: result.totalLatencyMs,
+    error: result.error,
+    errorCode: result.errorCode,
+    usage: undefined,
   };
 }
 
@@ -466,6 +466,7 @@ export interface CategoryCandidate {
   id: string;
   name: string;
   fullPath: string;
+  score?: number;
 }
 
 export interface CategoryMatchResult {
@@ -530,11 +531,15 @@ IMPORTANT: "Best available match" is always better than NO_SAFE_MATCH.
 If a candidate is in the same product family or closely related, SELECT IT.
 NO_SAFE_MATCH is only for when ALL candidates are completely wrong.
 
-Confidence:
-- 0.95+: Direct match (product type = category name or clear synonym)
-- 0.85-0.94: Strong match (product type clearly fits category)
-- 0.70-0.84: Good match (best available, minor uncertainty)
-- 0.00-0.69: No safe match
+CONFIDENCE RULES (STRICT — follow exactly):
+- 0.95+: The candidate name is the EXACT product type or an obvious synonym (e.g., "Kulaklık" for earphone, "Vantilatör" for fan)
+- 0.85-0.94: The candidate clearly matches the product type with minor naming difference
+- 0.70-0.84: The candidate is the BEST AVAILABLE but product type name differs from category name
+- Below 0.70: NO_SAFE_MATCH
+
+When the product title contains a word that appears directly in a candidate category name, use 0.95+.
+When the product is clearly the same type as the category but with a different name, use 0.85+.
+Do NOT use confidence below 0.85 when the product type is unambiguous.
 
 Return format:
 {
@@ -689,20 +694,6 @@ export async function matchCategoriesWithAI(
   candidatesByProduct: Map<string, CategoryCandidate[]> | CategoryCandidate[],
   marketplaceName: string | null
 ): Promise<CategoryMatchResponse> {
-  const providers = await getActiveProvidersByPriority();
-
-  if (providers.length === 0) {
-    return {
-      ok: false,
-      provider: 'none',
-      model: 'none',
-      matches: [],
-      latencyMs: 0,
-      error: 'AI eşleştirme şu anda kullanılamıyor. Kullanılabilir AI sağlayıcısı bulunamadı. Lütfen daha sonra tekrar deneyin.',
-      errorCode: 'NO_AI_PROVIDER_AVAILABLE',
-    };
-  }
-
   // Geriye uyumluluk: flat array ise → tüm ürünler için aynı aday listesini kullan
   const candidatesMap: Map<string, CategoryCandidate[]> = candidatesByProduct instanceof Map
     ? candidatesByProduct
@@ -715,103 +706,87 @@ export async function matchCategoriesWithAI(
   }
   const validCategoryIds = allCandidateIds;
   const productIds = new Set(products.map(p => p.id));
-  const errors: string[] = [];
 
-  for (const provider of providers) {
-    const apiKey = await getDecryptedApiKey(provider.provider);
-    if (!apiKey) {
-      errors.push(`${provider.displayName}: API key yapılandırılmamış`);
-      continue;
-    }
+  /**
+   * DeepSeek aktif kontrolü: DeepSeek aktifse CATEGORY_MATCHING'in ilk adayı olur.
+   * DeepSeek pasifse hiç çağrı yapılmaz; sadece aktif free providerlar kullanılır.
+   */
+  const deepSeekActive = await isProviderActive('deepseek') && (await getDecryptedApiKey('deepseek')) !== null;
 
-    const displayModel = provider.model || PROVIDER_DEFAULTS[provider.provider]?.model || 'default';
-    const model = provider.provider === 'nvidia' && NVIDIA_MODEL_MAP[displayModel]
-      ? NVIDIA_MODEL_MAP[displayModel]
-      : displayModel;
-    const messages = buildCategoryMatchPrompt(products, candidatesMap, marketplaceName);
-    const startTime = Date.now();
+  /**
+   * V2 TEK KAPI (#26): Routing kararı Master Orchestrator'da. Eski manuel
+   * provider zinciri KALDIRILDI. JSON uyumsuzluğunda master'a "bu modeli dışla"
+   * bilgisiyle TEK merkezi retry yapılır — modül kendi fallback'ini çalıştırmaz.
+   */
+  const messages = buildCategoryMatchPrompt(products, candidatesMap, marketplaceName);
 
-    try {
-      let result: { content: string; usage?: any };
-      let usedModel = model;
+  const runMaster = (excludeModelKeys?: string[]) => executeMasterRequest({
+    taskType: 'CATEGORY_MATCHING',
+    messages: messages.map(m => ({ role: m.role, content: m.content })),
+    maxTokens: 4096,
+    temperature: 0.05,
+    response_format: { type: 'json_object' },
+    metadata: { module: 'category-match', ...(excludeModelKeys && excludeModelKeys.length > 0 ? { excludeModelKeys } : {}) },
+  });
 
-      if (provider.provider === 'nvidia') {
-        result = await callNvidiaApi(apiKey, model, {
-          messages,
-          temperature: 0.05,
-          max_tokens: 4096,
-          response_format: { type: 'json_object' },
-        });
-      } else if (provider.provider === 'deepseek') {
-        result = await callDeepseekApi(apiKey, model, {
-          messages,
-          temperature: 0.05,
-          max_tokens: 4096,
-          response_format: { type: 'json_object' },
-        });
-      } else if (provider.provider === 'openrouter') {
-        const orRes = await completeWithFreeModel({
-          messages,
-          temperature: 0.05,
-          max_tokens: 4096,
-          response_format: { type: 'json_object' },
-        });
-        if (!orRes.ok || !orRes.content) {
-          errors.push(`${provider.displayName}: ${orRes.error || 'No content'}`);
-          continue;
-        }
-        result = { content: orRes.content, usage: orRes.usage ?? undefined };
-        usedModel = orRes.model;
-      } else {
-        errors.push(`${provider.displayName}: Desteklenmeyen sağlayıcı`);
-        continue;
-      }
+  const toScoped = (r: Awaited<ReturnType<typeof executeMasterRequest>>) => {
+    if (!r.ok || !r.content) return { r, scopedMatches: [] as CategoryMatchResult[], noJson: false };
+    const matches = parseAndValidateMatches(r.content, validCategoryIds, productIds);
+    // FIX(RT326): ürün-bazlı aday kısıtı korunur (iş mantığı DOKUNULMADI).
+    const scopedMatches = matches.filter((m) => {
+      if (m.decision === 'NO_SAFE_MATCH') return true;
+      const own = candidatesMap.get(m.productId);
+      return !!own && own.some((c) => c.id === m.categoryId);
+    });
+    return { r, scopedMatches, noJson: scopedMatches.length === 0 };
+  };
 
-      const latencyMs = Date.now() - startTime;
-      await incrementRequestCount(provider.provider, true);
-
-      if (!result.content) {
-        errors.push(`${provider.displayName}: Boş yanıt`);
-        continue;
-      }
-
-      const matches = parseAndValidateMatches(result.content, validCategoryIds, productIds);
-      // DEBUG: AI yanıtını logla (dry-run sırasında)
-      if (process.env.DRY_RUN_DEBUG === '1') {
-        console.log(`  [AI RAW] model=${usedModel} products=${products.length} matches=${matches.length}`);
-        console.log(`  [AI RAW] content snippet: ${result.content.substring(0, 500)}`);
-        for (const m of matches) {
-          console.log(`  [AI MATCH] ${m.productId} → ${m.categoryId || 'NO_MATCH'} conf=${m.confidence} decision=${m.decision} reason=${m.reasonCode || m.reason}`);
-        }
-      }
-
+  // DeepSeek aktifse önce DeepSeek'i dene; başarısız olursa normal routing ile devam
+  if (deepSeekActive) {
+    const result = toScoped(await runMaster(['deepseek:deepseek-chat']));
+    // DeepSeek başarılıysa (source deepseek) → sonuç döndür
+    if (result.r.ok && result.r.source === 'deepseek') {
       return {
         ok: true,
-        provider: provider.provider,
-        model: usedModel,
-        matches,
-        latencyMs,
-        usage: result.usage,
+        provider: 'deepseek',
+        model: result.r.model,
+        matches: result.scopedMatches,
+        latencyMs: result.r.totalLatencyMs,
       };
-    } catch (err: any) {
-      const latencyMs = Date.now() - startTime;
-      const classified = classifyError(err);
-      await incrementRequestCount(provider.provider, false, classified.errorMsg);
-
-      errors.push(`${provider.displayName}: ${classified.errorMsg}`);
-
-      if (classified.type === 'auth' && classified.errorCode !== 'INSUFFICIENT_CREDITS') break;
-      continue;
     }
+  }
+
+  // DeepSeek pasifse veya DeepSeek başarısızsa → Normal routing ile fallback'lar
+  let result = toScoped(await runMaster());
+
+  // Model 200 dönüp işe yarar JSON üretmediyse (#40/#44): aynı modeli dışlayıp
+  // master'dan bir sonraki en iyi eligible modeli iste.
+  if (result.noJson && result.r.source) {
+    const badKey = `${result.r.source}:${result.r.model}`;
+    console.log(`[ai-gateway] category-match BAD_OUTPUT model=${badKey} → master retry (excluded)`);
+    result = toScoped(await runMaster([badKey]));
+  }
+
+  if (result.r.ok && result.scopedMatches.length > 0) {
+    if (process.env.DRY_RUN_DEBUG === '1') {
+      console.log(`  [AI RAW] model=${result.r.model} products=${products.length} matches=${result.scopedMatches.length}`);
+    }
+    return {
+      ok: true,
+      provider: result.r.source || 'none',
+      model: result.r.model,
+      matches: result.scopedMatches,
+      latencyMs: result.r.totalLatencyMs,
+    };
   }
 
   return {
     ok: false,
-    provider: providers[0]?.provider || 'none',
-    model: providers[0]?.model || 'none',
+    provider: 'none',
+    model: 'none',
     matches: [],
-    latencyMs: 0,
-    error: 'AI eşleştirme şu anda kullanılamıyor. Tüm sağlayıcılar başarısız oldu. Lütfen daha sonra tekrar deneyin.',
+    latencyMs: result.r.totalLatencyMs,
+    error: result.r.error || 'AI eşleştirme şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin.',
     errorCode: 'NO_AI_PROVIDER_AVAILABLE',
   };
 }
@@ -820,6 +795,12 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
   const config = await getProvider(provider);
   if (!config) {
     return { ok: false, provider, model: 'unknown', latencyMs: 0, error: 'Sağlayıcı bulunamadı', errorCode: 'NOT_FOUND' };
+  }
+
+  // ACTIVE CHECK: Pasif providerlar test edilemez
+  const isActive = await isProviderActive(provider);
+  if (!isActive) {
+    return { ok: false, provider, model: config.model || 'unknown', latencyMs: 0, error: 'Sağlayıcı pasif', errorCode: 'PROVIDER_INACTIVE' };
   }
 
   const apiKey = await getDecryptedApiKey(provider);
@@ -838,13 +819,22 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
     if (provider === 'nvidia') {
       const result = await callNvidiaApi(apiKey, model, {
         messages: [{ role: 'user', content: 'Respond with exactly: NVIDIA_OK' }],
-        max_tokens: 10,
+        max_tokens: 20,
       }, 120000);
 
       const latencyMs = Date.now() - startTime;
-      await incrementRequestCount(provider, true);
+      // FIX(RT-ACC): NVIDIA testi de protokol yanıtını doğrular (kör başarı değil).
+      const ok = !!result.content && String(result.content).toUpperCase().includes('NVIDIA_OK');
+      await incrementRequestCount(provider, ok, ok ? undefined : `Model testi NVIDIA_OK döndürmedi: ${String(result.content ?? '').slice(0, 80)}`);
 
-      return { ok: true, provider, model, latencyMs };
+      return {
+        ok,
+        provider,
+        model,
+        latencyMs,
+        error: ok ? undefined : `Model testi NVIDIA_OK döndürmedi: ${String(result.content ?? '').slice(0, 80)}`,
+        errorCode: ok ? undefined : 'MODEL_TEST_FAILED',
+      };
     }
 
     if (provider === 'deepseek') {
@@ -867,6 +857,25 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
       };
     }
 
+    if (provider === 'opencode') {
+      const result = await callOpenCodeApi(apiKey, model, {
+        messages: [{ role: 'user', content: 'Return exactly: OPENCODE_OK' }],
+        max_tokens: 200,
+      }, 120000);
+
+      const latencyMs = Date.now() - startTime;
+      await incrementRequestCount(provider, true);
+
+      const ok = !!result.content && String(result.content).toUpperCase().includes('OPENCODE_OK');
+      return {
+        ok,
+        provider,
+        model,
+        latencyMs,
+        error: ok ? undefined : `Model testi OPENCODE_OK döndürmedi: ${String(result.content ?? '').slice(0, 80)}`,
+        errorCode: ok ? undefined : 'MODEL_TEST_FAILED',
+      };
+    }
     if (provider === 'openrouter') {
       const modelTest = await completeWithFreeModel({
         messages: [{ role: 'user', content: 'Return exactly: OPENROUTER_TEST_OK' }],
@@ -874,17 +883,56 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
       });
 
       const latencyMs = Date.now() - startTime;
-      await incrementRequestCount(provider, true);
+
+      let catalogModels = 0;
+      try {
+        const { getRegistry: getOrRegistry } = await import('./openRouterManager.ts');
+        catalogModels = (await getOrRegistry()).models.length;
+      } catch { /* katalog okunamadıysa 0 kalır */ }
 
       const ok = modelTest.ok && !!modelTest.content && String(modelTest.content).toUpperCase().includes('OPENROUTER_TEST_OK');
+      // FIX(RT-ACC): Başarısız test artık provider'ı 'connected' işaretlemiyor.
+      // Eski kod sonucu beklemeden incrementRequestCount(provider, true) çağırıyordu
+      // → UI "Bağlı" gösterirken gerçekte test başarısızdı.
+      await incrementRequestCount(provider, ok, ok ? undefined : (modelTest.error || 'Model testi başarısız'));
+
       return {
         ok,
         provider,
         model: modelTest.ok ? modelTest.model : '(model yok)',
         latencyMs,
-        catalogModels: 0,
+        catalogModels,
         error: ok ? undefined : `Model testi başarısız: ${modelTest.error || 'OPENROUTER_TEST_OK döndürülmedi'}`,
         errorCode: ok ? undefined : modelTest.errorCode || 'MODEL_TEST_FAILED',
+      };
+    }
+
+    if (provider === 'omniroute') {
+      const { testModel, getRegistry } = await import('./omniRouteManager.ts');
+      // FIX(RC4): config.model boşken PROVIDER_DEFAULTS zinciri 'default'
+      // üretiyordu ve OmniRoute'a gönderiliyordu → garanti hata.
+      // Sadece kullanıcı açıkça model override verdiyse gönder; yoksa
+      // testModel en iyi free modeli kendi seçer.
+      const omniTest = await testModel(modelOverride || undefined);
+
+      const latencyMs = Date.now() - startTime;
+
+      let catalogModels = 0;
+      try {
+        catalogModels = (await getRegistry()).models.length;
+      } catch { /* katalog okunamadıysa 0 kalır */ }
+
+      // FIX(RT-ACC): Başarısız test artık provider'ı 'connected' işaretlemiyor.
+      await incrementRequestCount(provider, omniTest.ok, omniTest.ok ? undefined : (omniTest.error || 'OmniRoute model testi başarısız'));
+
+      return {
+        ok: omniTest.ok,
+        provider,
+        model: omniTest.model,
+        latencyMs,
+        catalogModels,
+        error: omniTest.error,
+        errorCode: omniTest.errorCode,
       };
     }
 
@@ -1013,11 +1061,14 @@ For each candidate, determine if the product REALLY belongs there. Return ONLY t
     { role: 'user', content: userMessage },
   ];
 
-  const result = await completeWithFreeModel({
-    messages,
+  // FIX(V2 #3): DIRECT BYPASS kaldırıldı — transport artık Master Orchestrator'dan.
+  const result = await executeMasterRequest({
+    taskType: 'CATEGORY_MATCHING',
+    messages: messages.map(m => ({ role: m.role, content: m.content })),
     temperature: 0.1,
-    max_tokens: 2000,
+    maxTokens: 2000,
     response_format: { type: 'json_object' },
+    metadata: { module: 'category-core.verify' },
   });
 
   if (!result.ok || !result.content) {
@@ -1031,7 +1082,8 @@ For each candidate, determine if the product REALLY belongs there. Return ONLY t
   }
 
   try {
-    const parsed = JSON.parse(result.content);
+    // Master structured-output doğrulaması geçerli JSON'u validatedJson olarak verir
+    const parsed = result.validatedJson ?? JSON.parse(result.content);
     const results = Array.isArray(parsed.results) ? parsed.results : [];
 
     return results.map((r: any) => ({

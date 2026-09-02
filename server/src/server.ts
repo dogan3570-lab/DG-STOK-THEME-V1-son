@@ -13,7 +13,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { prisma } from './db/prisma.ts';
 import { env } from './env.ts';
-import { attachRoutes } from './routes/index.ts';
+import { router } from './routes/index.ts';
 import { ensureDefaultAdminUser, seedDefaultMarketplaces, seedDefaultAIProviders, ensureDefaultListingTemplates, migrateMarketplaceCredentials, migrateAiProviderKeys } from './bootstrap.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -123,15 +123,20 @@ export function buildServer() {
     })
   );
 
-  app.get('/health', (_req, res) => {
+app.get('/api/health', (_req, res) => {
     res.json({ ok: true, service: 'dg-stok-integrator-server' });
   });
 
-  app.get('/api-status', (_req, res) => {
+  app.get('/api/status', (_req, res) => {
     res.json({
       status: 'ok',
       time: new Date().toISOString(),
     });
+  });
+
+  // also keep legacy /system/health for backward compat
+  app.get('/system/health', (_req, res) => {
+    res.json({ ok: true, service: 'dg-stok-integrator-server' });
   });
 
   // Auth routes (sıkı rate limit - 15 dk / 20 deneme)
@@ -304,7 +309,7 @@ export function buildServer() {
     return res.json({ ok: true, message: 'password_changed' });
   });
 
-  attachRoutes(app);
+  app.use('/api', router);
 
   // Cache busting: index.html / API yanıtları asla stale kalmasın (göz testi tutarlılığı).
   app.use((req, res, next) => {
@@ -312,31 +317,20 @@ export function buildServer() {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
+      res.setHeader('Surrogate-Control', 'no-store');
     }
     next();
   });
 
-  // Serve frontend static files (both dev and production)
-  const possiblePaths = [
-    path.join(__dirname, '../../dist'),          // tsx runtime: server/src -> dist (repo root)
-    path.join(process.cwd(), 'dist'),            // cwd based
-    path.join(process.cwd(), '..', 'dist'),      // fallback from server cwd
-    path.join(__dirname, '../..', 'dist'),
-  ];
+// Serve frontend static files from dist (repo root)
+  // __dirname = C:\PROJE 1\DG-STOK-THEME-V1\server\src
+  // Project root = __dirname + '/../..'
+  const projectRoot = path.resolve(__dirname, '../..');
+  const webDistPath = path.join(projectRoot, 'dist');
 
-  let webDistPath = '';
-  for (const p of possiblePaths) {
-    try {
-      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
-        webDistPath = p;
-        break;
-      }
-    } catch { /* ignore */ }
-  }
-
-  if (webDistPath) {
+  if (fs.existsSync(webDistPath) && fs.statSync(webDistPath).isDirectory()) {
     console.log(`[server] Serving frontend from: ${webDistPath}`);
-    app.use(express.static(webDistPath));
+    app.use(express.static(webDistPath, { etag: false, lastModified: false, maxAge: 0 }));
 
     // API 404: SPA catch-all'dan önce /api/* isteklerine JSON 404 döndür
     app.use('/api/*', (_req, res) => {
@@ -344,10 +338,12 @@ export function buildServer() {
     });
 
     app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
       res.sendFile(path.join(webDistPath, 'index.html'));
     });
   } else {
-    console.warn('[server] Frontend dist not found, API-only mode');
+    console.warn('[server] Frontend dist not found at:', webDistPath);
     console.warn('[server] Run: npm run build (vite) in the theme root');
   }
 
@@ -390,6 +386,17 @@ if (process.env.NODE_ENV !== 'test') {
       console.log('[server] OpenRouter model registry seeded');
       startBackgroundRefresh();
       console.log('[server] OpenRouter background refresh started');
+      // FIX(RT-ACC): OmniRoute background refresh hiç başlatılmıyordu —
+      // katalog yalnızca manuel keşifle güncelleniyor, kaldırılan/dönen
+      // modeller fark edilmiyordu. (startBackgroundRefresh export'u boşta duruyordu.)
+      const { startBackgroundRefresh: startOmniRouteRefresh } = await import('./services/omniRouteManager.ts');
+      startOmniRouteRefresh();
+      console.log('[server] OmniRoute background refresh started');
+      // V3 ZERO-AI-GAP: Availability Supervisor — sağlık/recovery katmanı (tek beyin
+      // Master Orchestrator kalır). Startup'ta en kısa sürede eligible hazırlığı.
+      const { startAvailabilitySupervisor } = await import('./services/omniRouteOrchestrator.ts');
+      startAvailabilitySupervisor();
+      console.log('[server] AI Availability Supervisor started');
       console.log('[server] Bootstrap completed, server should stay alive');
     } catch (error) {
       console.error('[server] database bootstrap failed', error);

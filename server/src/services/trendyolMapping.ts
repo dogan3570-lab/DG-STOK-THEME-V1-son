@@ -91,17 +91,9 @@ export async function mapTrendyolCategories(input: { xmlSourceId: string; market
           active: true,
         },
       });
-      await prisma.product.updateMany({
-        where: { xmlSourceId: input.xmlSourceId, supplierCategory: path, categoryMatch: false },
-        data: { categoryId: category.id, categoryMatch: true, matchedBy: MAPPING_SOURCE, lastMatchDate: new Date() },
-      });
-      const affectedCategoryProducts = await prisma.product.findMany({
-        where: { xmlSourceId: input.xmlSourceId, supplierCategory: path, categoryId: category.id, categoryMatch: true },
-        select: { id: true },
-      });
-      for (const p of affectedCategoryProducts) {
-        queueReconcileProductGates(p.id);
-      }
+      // CATEGORY CORE V2: CategoryMapping yalnizca TAXONOMY KNOWLEDGE'dir.
+      // Mapping kaydi urunlere kategori karari PROPAGATE ETMEZ (updateMany kaldirildi).
+      // Urun kararlarini product-level pipeline (/category-core-v2) verir.
       summary.autoMatched++;
       summary.results.push({ input: path, status: classified.status, externalId: classified.id, externalName: classified.name, reason: null });
     } else {
