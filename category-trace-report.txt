@@ -1,0 +1,76 @@
+DG-STOK KATEGORİ EŞLEŞTİRME — ROOT CAUSE + DOM + STATE + EVENT + API TRACE RAPORU
+=============================================================================
+
+== KÖK NEDEN ==
+showPage('prep-categories') context'siz çağrıldığında (index.html:2592-2610):
+  1) cat-warning-modal ("Eksik Seçim") AÇILIYOR      (satır 2605-2607)
+  2) cat-guard-warn  (ORİJİNAL "İşleme devam etmek...") GİZLENİYOR  (satır 2608-2609)
+  3) retour: prepCategoriesLoad() HİÇ ÇALIŞMIYOR (doğru guard/kilit mantığı yürütülmüyor)
+
+Böylece kullanıcı "Eksik Seçim" modalını görüyor, orijinal mesaj kayıp,
+kategori tablosu "Context seçilmedi" içerik mesajlı görünüyor.
+
+== İKİNCİ UYARININ KAYNAĞI ==
+"Eksik Seçim" metnini içeren KATEGORİYE AİT tek kaynak: #cat-warning-modal (index.html:1058-1068).
+#var-warning-modal (1256-1267) varyant modulü, #var-warning (1224) varyant, #li-guard-warn (1342) listeleme.
+Bunlar DIFFERING module; dokunulmayacak.
+
+== DOM ELEMENT DURUMU ==
+E1 #cat-guard-warn  class="hidden flex items-center..." text="İşleme devam etmek için..." INITIAL hidden=true
+    JS: catRenderGuardWarn() context yoksa AÇIKLA, varsa GİZLE
+E2 #cat-warning-modal class="hidden fixed ..." text="Eksik Seçim" INITIAL hidden=true
+    JS: showPage 2607 AÇIKLA; catRequireMarketplace 5243 AÇIKLA; catCloseWarning 5255 GİZLE
+E3 #var-warning  (varyant)  "İşleme devam etmek..." 
+E4 #var-warning-modal (varyant) "Eksik Seçim"
+E5 #li-guard-warn (listeleme) "İşleme devam etmek..."
+
+== STATE DEĞERLERİ ==
+contextState            = { xmlSourceId:'', xmlSourceName:'', marketplaceId:'', marketplaceName:'', isValid:false }
+contextState.isValid    = !!(xmlSourceId && marketplaceId)
+catState                = { products:[], flatCats:[], totalProducts:0, step:1, xmlSupplierId:<localStorage> }
+catStock topbar         = #context-xml-source, #context-marketplace (disabled till XML)
+catGetMarketplaceId()   = document.getElementById('cat-marketplace').value
+catRenderGuardWarn()    = hidden toggles (guard + toolbar/stepper/tableBody)
+catRequireMarketplace() = context yoksa modal aç (5234-5245)
+catRenderAll()          = 4947
+catFetchAll()           = 4876
+
+== EVENT AKIŞI (context değiştiğinde) ==
+context-xml-source change -> onContextXmlSourceChange -> updateContextUI + syncLocalContextSelectors
+                          -> catState.xmlSupplierId = contextState.xmlSourceId
+                          -> catRenderGuardWarn() -> guard toggle
+context-marketplace change -> onContextMarketplaceChange -> aynı zincir
+
+== API TRACE ==
+catFetchAll:
+  GET /categories/products?limit=1000&xmlSourceId=<ID>&marketplaceId=<ID>
+      prepCategories.ts:558 -> SADECE xmlSourceId okur, marketplaceId IGNORED
+                                status=XML param destekler: categoryMatch=false && categoryId=null
+  GET /categories/tree?limit=1000&xmlSourceId=<ID>&marketplaceId=<ID>
+      prepCategories.ts:87 -> marketplaceId -> categoryMapping filtreleme
+
+"YAPILMIŞ EŞLEŞME" FIELD'I: product.categoryMatch && product.categoryId
+(status=XML server filter tam olarak bunu kullanır - UYDURMA DEĞİL)
+
+BUG: frontend status param göndermiyor => auto_matched gruplar tabloda GÖRÜNÜYOR.
+     FIX: catFetchAll'e status=XML ekle + client tarafı auto_matched dışarıda.
+
+== PATCH PLANI (SADECE index.html, kategori modülü) ==
+1. showPage 2592-2610 bloğunu context'siz kategoriye guard+content kilidi verecek şekilde değiştir:
+   - cat-warning-modal GİZLİ kalsın
+   - cat-guard-warn AÇIK kalsın
+   - kategori içerik sarmalayıcısı #cat-content display:none
+   - return (prepCategoriesLoad envansyon)
+2. cat-warning-modal DOM + catCloseWarning + catRequireMarketplace modal mantığı devre dışı
+   (guard zaten uyarıyı gösteriyor; modal kullanılmayacak)
+3. Kategori panel içeriğine id="cat-content" sarmalayıcı
+4. catRenderGuardWarn/prepCategoriesLoad: #cat-content toggle'ı
+5. catFetchAll: status=XML parametresi -> sadece eşleşmemiş ürünler
+6. catGetFilteredGroups: default step 1'de auto_matched dışla (double güvence)
+
+== SONUÇ KONTROL LİSTESİ ==
+- [x] Kök neden tespit: showPage modali
+- [x] "Eksik Seçim" kaynağı: #cat-warning-modal
+- [x] Yapılmış eşleşme field'ı: categoryMatch && categoryId
+- [ ] Patch uygula
+- [ ] Playwright E2E (headless=false, 6 screenshot + 3 rapor)

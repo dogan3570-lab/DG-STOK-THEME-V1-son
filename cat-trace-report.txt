@@ -1,0 +1,94 @@
+DG-STOK KATEGORİ EŞLEŞTİRME — KÖK NEDEN + DOM + STATE + EVENT + API TRACE
+=========================================================================
+
+== KÖK NEDEN #1 — "Eksik Seçim" modalı ve gizlenen orijinal mesaj ==
+showPage() index.html:2592-2610:
+  contextRequiredPages = ['products','prep-categories','prep-brands','prep-variants',
+                          'prep-listings','ready-to-ship','orders']
+  needsContext = ...; if (needsContext && !isContextValid()) {
+      showToast(...); clearAllPageData();
+      cat-toolbar classList.add('hidden'); cat-stepper hidden;
+      cat-table-body.innerHTML='Context seçilmedi'; display='block';
+      cat-warning-modal.classList.remove('hidden');   // ← "Eksik Seçim" MODALI AÇILIR
+      cat-guard-warn.classList.add('hidden');          // ← ORİJİNAL MESAJ GİZLENİR
+      return;  // prepCategoriesLoad() HİÇ ÇAĞRILMAZ
+  }
+
+  → KULLANICI BEKLENTİSİNİN TERSİ:
+    - "Eksik Seçim" modalı GÖRÜNÜR
+    - Orijinal "İşleme devam etmek..." mesajı GİZLİ
+  Doğrusu: guard görünür, modal GİZLENMELİ.
+
+== KÖK NEDEN #2 — context seçince kategori açılmıyor (loadPrepCategories yok) ==
+refreshCurrentPage() index.html:2230: currentPage==='prep-categories' → loadPrepCategories()
+  loadPrepCategories fonksiyonu YOKTUR (grep: sadece 2230). Gerçek ad: prepCategoriesLoad().
+  → context seçilip kategori sayfasındayken refreshCurrentPage() → ReferenceError
+    → catFetchAll() HİÇ ÇALIŞMAZ → "context varken kategori görünmez".
+
+== KÖK NEDEN #3 — yapılmış eşleşmeler listeye giriyor ==
+catFetchAll() index.html:4876-4901:
+  params: yalnız limit=1000, xmlSourceId, marketplaceId. status GÖNDERİLMEZ.
+  catGetFilteredGroups() 4939-4945: step===1 (varsayılan) → TÜM gruplar (auto_matched dahil).
+  catComputeGroups() 4914: gruptaki tüm ürünler categoryMatch && categoryId ise
+                          status='auto_matched' → catRenderTable bunu DA GÖSTERİR.
+  → EŞLEŞMİŞ KATEGORİLER TEKRAR GÖRÜNÜR.
+  API destekler: /categories/products?status=XML → categoryMatch=false && categoryId=null
+  (prepCategories.ts:573-580). Backend değişmeden status=XML gönderilerek çözülür.
+
+== "YAPILMIŞ" FIELD'I (backend'den, uydurma DEĞİL) ==
+  p.categoryMatch && p.categoryId  (backend prepCategories.ts /match, /products status=XML)
+  Ürün bazlı boolean categoryMatch; marketplace'e göre scoped DEĞİL (backend sınırı,
+  rapor edilir; backend dokunulmaz).
+
+== DOM ELEMENT DURUMU (başlangıç / çalışma zamanı) ==
+E1 #cat-guard-warn  class="hidden flex ...." "İşleme devam etmek için..." [ORİJİNAL] INITIAL hidden=>JS açar
+E2 #cat-warning-modal class="hidden fixed ..." başlık "Eksik Seçim" INITIAL hidden => showPage AÇAR (BUG)
+E3 #var-warning (varyant modülü) "İşleme devam etmek..." — DOKUNULMAZ
+E4 #var-warning-modal (varyant) "Eksik Seçim" — DOKUNULMAZ
+E5 #li-guard-warn (listeleme) "İşleme devam etmek..." — DOKUNULMAZ
+
+== STATE (gerçek değerler) ==
+contextState = { xmlSourceId:'', xmlSourceName:'', marketplaceId:'', marketplaceName:'', isValid:false }
+isContextValid() = contextState.isValid && xmlSourceId && marketplaceId
+catState = { products:[], flatCats:[], totalProducts:0, step:1 (varsayılan),
+            selectedGroups:Set(), currentPage:1, pageSize:50, xmlSupplierId:<localStorage>,
+            loading:true }
+catGetMarketplaceId() = document.getElementById('cat-marketplace').value
+catRenderGuardWarn() = guard/toolbar/stepper/tableBody sınıf toggles
+catRequireMarketplace() = guard gizli ise modal göster; yoksa false
+catRenderAll() = catRenderGuardWarn dahil tüm render
+catFetchAll() = /categories/products + /categories/tree
+
+== EVENT AKIŞI ==
+context-xml-source change → onContextXmlSourceChange: isValid hesapla, updateContextUI,
+    syncLocalContextSelectors, clearAllPageData, refreshCurrentPage
+syncLocalContextSelectors → catState.xmlSupplierId=contextState.xmlSourceId; catRenderGuardWarn()
+context-marketplace change → onContextMarketplaceChange: aynı zincir
+
+== API TRACE ==
+catFetchAll:
+  GET /categories/products?limit=1000&xmlSourceId=<ID>&marketplaceId=<ID>   (products: xmlSourceId okur, marketplaceId YOK SAYAR)
+  GET /categories/tree?limit=1000&xmlSourceId=<ID>&marketplaceId=<ID>        (tree: marketplaceId → categoryMapping filtre)
+  Eksik: status=XML → sadece eşleşmemişler. marketplacesadına backend /categories yok-marketplace-key marital.
+
+== EKSİK : bugün network yok ; kullanıcı istediği:
+XML+MP seçili → request'te xmlSourceId=<seçilen> + marketplaceId=<seçilen> bulunmalı (bulunuyor)
+
+== PATCH PLANI (SADECE index.html, kategori modülü) ==
+P1 showPage 2592-2610: modal GÖSTERME; sadece kategori için catRenderGuardWarn() çağır; return.
+P2 refreshCurrentPage 2230: loadPrepCategories → prepCategoriesLoad (fonksiyon var).
+P3 cat-warning-modal DOM kaldır (1058-1069) + catCloseWarning (5255) kaldır + catRequireMarketplace modal satırları kaldır.
+P4 catFetchAll: params.append('status','XML') → sadece eşleşmemiş ürünler → auto_matched grupları gelmez.
+P5 İçerik tek kapsayıcı #cat-content'e sarılıp no-context duurumunda tek mesaj görünür.
+
+== DOĞRULAMA (değişiklik sonrası) ==
+1 xml yok + mp yok → kilitli, sadece orijinal mesaj, modal YOK
+2 xml var + mp yok → kilitli
+3 xml yok + mp var (mp xml'siz seçilemez) → kilitli
+4 xml + mp var → içerik açılır, API xmlSourceId+marketplaceId içerir, liste gelir
+5 context temizle → tekrar kilitli
+6 "Eksik Seçim" → DOM'da YOK
+7 orijinal mesaj → GÖRÜNÜR
+8 yapılmış eşleşmeler → LİSTEDE YOK
+9 eşleşmemiş kategoriler → VAR
+10 buton click → çalışır (context varken)

@@ -1,0 +1,6 @@
+{
+  "ctrl+shift+m": "model:auto/coding",
+  "ctrl+shift+v": "model:auto/best-vision",
+  "ctrl+shift+a": "model:auto/pro-coding",
+  "ctrl+shift+r": "model:auto/best-reasoning"
+}

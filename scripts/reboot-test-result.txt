@@ -1,0 +1,23 @@
+﻿=========================================
+DG-STOK POST-REBOOT VERIFICATION
+Timestamp: 2026-09-10 12:55:23
+=========================================
+
+PM2 daemon running : FAIL
+dg-stok ONLINE in PM2 : FAIL
+  PM2 output: 
+Backend :4000 LISTEN : FAIL
+Task Scheduler: DG-STOK Watchdog exists : PASS
+  State: Running
+  StartWhenAvailable: True
+  DisallowStartIfOnBatteries: False
+  ExecutionTimeLimit: PT0S
+Watchdog PS1 process running : FAIL
+OpenCode PowerShell still alive : FAIL
+Vite :5175 LISTEN : FAIL
+dgstok-autostart.vbs exists : PASS
+
+=========================================
+TOTAL: 8 checks | PASS: 2 | FAIL: 6
+RESULT: 6 FAILURES
+=========================================

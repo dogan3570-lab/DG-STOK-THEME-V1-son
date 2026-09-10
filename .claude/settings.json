@@ -1,0 +1,39 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:20128/v1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "auto/coding",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "auto/best-coding",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "auto/best-coding-fast"
+  },
+  "model": "auto/coding",
+  "effortLevel": "low",
+  "theme": "dark",
+  "switchModelsOnFlag": false,
+  "customModels": [
+    {
+      "id": "auto/coding",
+      "name": "[ AUTO ] Otomatik Coding",
+      "provider": "omniroute",
+      "contextLength": 1048576
+    },
+    {
+      "id": "auto/best-vision",
+      "name": "[ GÖRSEL ] Görsel Asistan",
+      "provider": "omniroute",
+      "contextLength": 1048576
+    },
+    {
+      "id": "auto/pro-coding",
+      "name": "[ MİMARİ ] Mimari & Büyük İşler",
+      "provider": "omniroute",
+      "contextLength": 1048576
+    },
+    {
+      "id": "auto/best-reasoning",
+      "name": "[ RED TEAM ] Red Team Asistanı",
+      "provider": "omniroute",
+      "contextLength": 1048576
+    }
+  ]
+}

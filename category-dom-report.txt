@@ -1,0 +1,79 @@
+contextState present (app loaded): true
+===== 01 NO CONTEXT =====
+state={
+ "contextState": {
+  "xmlSourceId": "",
+  "xmlSourceName": "",
+  "marketplaceId": "",
+  "marketplaceName": "",
+  "isValid": false
+ },
+ "catState": {
+  "xmlSupplierId": "",
+  "step": 1,
+  "loading": true,
+  "totalProducts": 0,
+  "productCount": 0,
+  "groupCount": 0
+ },
+ "catContent": {
+  "hidden": true,
+  "display": "",
+  "visibility": "visible",
+  "opacity": "1",
+  "pointerEvents": "auto"
+ },
+ "catGuard": {
+  "hidden": false,
+  "display": "",
+  "visibility": "visible",
+  "opacity": "1",
+  "pointerEvents": "auto"
+ },
+ "catTableBody": {
+  "hidden": false,
+  "display": "",
+  "visibility": "visible",
+  "opacity": "1",
+  "pointerEvents": "auto"
+ },
+ "catStepper": {
+  "hidden": true,
+  "display": "",
+  "visibility": "visible",
+  "opacity": "1",
+  "pointerEvents": "auto"
+ },
+ "catToolbar": {
+  "hidden": true,
+  "display": "",
+  "visibility": "visible",
+  "opacity": "1",
+  "pointerEvents": "auto"
+ },
+ "tableBodyText": "",
+ "catMpValue": "",
+ "mpDisabled": false,
+ "rowCount": 0,
+ "firstButton": null
+}
+Eksik Seçim text nodes in DOM = 1
+Original message visible = true
+===== 02 XML ONLY =====
+contextState={"xmlSourceId":"","xmlSourceName":"","marketplaceId":"","marketplaceName":"","isValid":false}
+catState={"xmlSupplierId":"","step":1,"loading":true,"totalProducts":0,"productCount":0,"groupCount":0}
+===== 04 FULL CONTEXT =====
+contextState={"xmlSourceId":"","xmlSourceName":"","marketplaceId":"","marketplaceName":"","isValid":false}
+catState={"xmlSupplierId":"","step":1,"loading":true,"totalProducts":0,"productCount":0,"groupCount":0}
+catMpValue= mpDisabled=true
+rowCount=0
+tableBodyText=
+===== 05 CONTEXT CLEARED =====
+contextState={"xmlSourceId":"","xmlSourceName":"","marketplaceId":"","marketplaceName":"","isValid":false}
+catState={"xmlSupplierId":"","step":1,"loading":true,"totalProducts":0,"productCount":0,"groupCount":0}
+===== 06 UNMATCHED CATEGORIES =====
+contextState={"xmlSourceId":"","xmlSourceName":"","marketplaceId":"","marketplaceName":"","isValid":false}
+catState={"xmlSupplierId":"","step":1,"loading":true,"totalProducts":0,"productCount":0,"groupCount":0}
+rowCount=0
+tableBodyText=
+actionButton=null
