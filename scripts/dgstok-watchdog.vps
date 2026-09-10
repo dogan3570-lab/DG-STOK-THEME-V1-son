@@ -1,0 +1,30 @@
+<#  DG‑STOK Watchdog – Vite + Node backend canlı tutucu  #>
+$ErrorActionPreference = 'Stop'
+$root = Split-Path $PSScriptRoot -Parent
+Set-Location $root
+
+function Start-Processes {
+    # Vite dev server
+    $vite = Start-Process -FilePath 'npm' -ArgumentList 'run dev' -PassThru -WindowStyle Hidden
+    # Backend (build edilmiş dist/index.js varsayımı)
+    $node = Start-Process -FilePath 'node' -ArgumentList 'server/dist/index.js' -PassThru -WindowStyle Hidden
+    @{ Vite=$vite ; Node=$node }
+}
+
+$procs = Start-Processes
+
+while ($true) {
+    foreach ($name in $procs.Keys) {
+        $p = $procs[$name]
+        if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) {
+            Write-Warning "[$name] işlemi sonlandı (PID $($p.Id)). Yeniden başlatılıyor..."
+            $new = if ($name -eq 'Vite') {
+                Start-Process -FilePath 'npm' -ArgumentList 'run dev' -PassThru -WindowStyle Hidden
+            } else {
+                Start-Process -FilePath 'node' -ArgumentList 'server/dist/index.js' -PassThru -WindowStyle Hidden
+            }
+            $procs[$name] = $new
+        }
+    }
+    Start-Sleep -Seconds 5
+}

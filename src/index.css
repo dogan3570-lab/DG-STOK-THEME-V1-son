@@ -1,0 +1,232 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==================== CSS DEĞİŞKENLERİ ==================== */
+:root {
+  --primary: #6366f1;
+  --primary-hover: #4f46e5;
+  --dark-bg: #090d16;
+  --dark-panel: #111827;
+}
+
+/* ==================== BASE ==================== */
+@layer base {
+  html {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-slate-100 text-slate-700 transition-colors duration-300 antialiased;
+  }
+
+  .dark body,
+  html.dark body {
+    @apply bg-[#090d16] text-slate-100;
+  }
+}
+
+/* ==================== PANEL THEME ==================== */
+@layer components {
+  .panel-theme {
+    @apply bg-white border border-slate-200 rounded-2xl;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+    transition: all 0.2s ease-in-out;
+  }
+
+  .dark .panel-theme {
+    @apply bg-[#111827] border-[#1f2937];
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  }
+
+  /* ==================== BUTTON STYLES ==================== */
+  .btn-primary {
+    @apply bg-primary hover:bg-primary-hover text-white font-semibold rounded-xl shadow-lg shadow-primary/25 transition-all duration-200;
+  }
+
+  .btn-secondary {
+    @apply bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl transition-all duration-200;
+  }
+  .dark .btn-secondary {
+    @apply bg-slate-800 hover:bg-slate-700 text-slate-200;
+  }
+
+  .btn-ghost {
+    @apply hover:bg-slate-50 text-slate-600 font-medium rounded-xl transition-all duration-200;
+  }
+  .dark .btn-ghost {
+    @apply hover:bg-slate-800/50 text-slate-400;
+  }
+
+  .btn-danger {
+    @apply bg-red-500/10 hover:bg-red-500/20 text-red-600 font-semibold rounded-xl border border-red-500/20 transition-all duration-200;
+  }
+
+  .btn-success {
+    @apply bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 font-semibold rounded-xl border border-emerald-500/20 transition-all duration-200;
+  }
+
+  /* ==================== INPUT STYLES ==================== */
+  .input-theme {
+    @apply bg-slate-100 text-slate-800 rounded-xl border-none px-4 py-2.5 text-sm;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all;
+  }
+  .dark .input-theme {
+    @apply bg-slate-800/50 text-slate-100;
+  }
+
+  .input-theme::placeholder {
+    @apply text-slate-400;
+  }
+  .dark .input-theme::placeholder {
+    @apply text-slate-500;
+  }
+
+  /* ==================== SELECT STYLES ==================== */
+  .select-theme {
+    @apply bg-slate-100 text-slate-800 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all;
+  }
+  .dark .select-theme {
+    @apply bg-slate-800 text-slate-100 border-slate-700;
+  }
+
+  /* ==================== TABLE STYLES ==================== */
+  .table-header {
+    @apply bg-slate-50 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-100;
+  }
+  .dark .table-header {
+    @apply bg-slate-800/30 border-slate-800/60;
+  }
+
+  .table-row {
+    @apply hover:bg-slate-50/50 transition-colors border-b border-slate-100;
+  }
+  .dark .table-row {
+    @apply hover:bg-slate-800/20 border-slate-800/60;
+  }
+
+  /* ==================== BADGE STYLES ==================== */
+  .badge-success {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold;
+    @apply bg-emerald-500/10 text-emerald-600 border border-emerald-500/20;
+  }
+  .dark .badge-success {
+    @apply text-emerald-400;
+  }
+
+  .badge-warning {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold;
+    @apply bg-amber-500/10 text-amber-600 border border-amber-500/20;
+  }
+  .dark .badge-warning {
+    @apply text-amber-400;
+  }
+
+  .badge-danger {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold;
+    @apply bg-red-500/10 text-red-600 border border-red-500/20;
+  }
+  .dark .badge-danger {
+    @apply text-red-400;
+  }
+
+  .badge-info {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold;
+    @apply bg-blue-500/10 text-blue-600 border border-blue-500/20;
+  }
+  .dark .badge-info {
+    @apply text-blue-400;
+  }
+
+  .badge-purple {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold;
+    @apply bg-purple-500/10 text-purple-600 border border-purple-500/20;
+  }
+  .dark .badge-purple {
+    @apply text-purple-400;
+  }
+
+  .badge-orange {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold;
+    @apply bg-orange-500/10 text-orange-600 border border-orange-500/20;
+  }
+  .dark .badge-orange {
+    @apply text-orange-400;
+  }
+
+  /* ==================== STATUS DOT ==================== */
+  .status-dot-active {
+    @apply w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse;
+  }
+
+  .status-dot-error {
+    @apply w-2.5 h-2.5 rounded-full bg-red-500;
+  }
+
+  .status-dot-idle {
+    @apply w-2.5 h-2.5 rounded-full bg-slate-300;
+  }
+  .dark .status-dot-idle {
+    @apply bg-slate-600;
+  }
+
+  /* ==================== MODAL OVERLAY ==================== */
+  .modal-overlay {
+    @apply fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center;
+  }
+
+  .modal-content {
+    @apply panel-theme w-full max-w-lg p-6 rounded-3xl space-y-6 relative shadow-2xl;
+  }
+
+  /* ==================== ACTIVE NAVIGATION ==================== */
+  .active-nav {
+    @apply bg-gradient-to-br from-primary to-primary-hover text-white shadow-lg shadow-primary/25;
+  }
+
+  /* ==================== SECTION HEADER ==================== */
+  .section-header {
+    @apply flex items-center justify-between mb-4;
+  }
+
+  .section-title {
+    @apply font-bold text-sm text-slate-900;
+  }
+  .dark .section-title {
+    @apply text-white;
+  }
+
+  .section-subtitle {
+    @apply text-xs text-slate-400 mt-0.5;
+  }
+}
+
+/* ==================== SCROLLBAR ==================== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #374151;
+}
+
+/* ==================== FOCUS VISIBLE ==================== */
+*:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.5);
+  outline-offset: 2px;
+}

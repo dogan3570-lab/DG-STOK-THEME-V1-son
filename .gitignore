@@ -1,0 +1,7 @@
+node_modules
+dist
+*.html.bak
+_*
+*.backup
+server/.env
+server/prisma/
