@@ -1,0 +1,28 @@
+[server] Serving frontend from: C:\PROJE 1\DG-STOK-THEME-V1\dist
+[server] listening on :4000
+[server] Web UI: http://localhost:4000
+[Prisma] Database connected successfully
+[server] admin user ready (admin@dgstok.com / admin123)
+[server] default marketplaces seeded
+[server] default AI providers seeded
+[0mPOST /auth/login [32m200[0m 195.416 ms - 302[0m
+[0mGET /xml-sources [32m200[0m 35.505 ms - 755[0m
+[0mGET /marketplaces [32m200[0m 3.761 ms - -[0m
+[0mPOST /auth/login [32m200[0m 183.997 ms - 302[0m
+[0mGET /categories/products?limit=1000&xmlSourceId=949855eb-d68c-4920-b378-c622a6a665e2&marketplaceId=757a071c-98c5-4c96-bb8c-2dceac1568dd [32m200[0m 3276.407 ms - -[0m
+[0mGET /categories/products?limit=1000&xmlSourceId=949855eb-d68c-4920-b378-c622a6a665e2&marketplaceId=757a071c-98c5-4c96-bb8c-2dceac1568dd&status=XML [32m200[0m 357.141 ms - -[0m
+[0mGET /categories/tree?limit=1000&xmlSourceId=949855eb-d68c-4920-b378-c622a6a665e2&marketplaceId=757a071c-98c5-4c96-bb8c-2dceac1568dd [32m200[0m 192.648 ms - -[0m
+[0mGET / [32m200[0m 45.648 ms - -[0m
+[0mGET /auth/me [33m401[0m 3.263 ms - 69[0m
+[0mPOST /auth/login [32m200[0m 236.886 ms - 302[0m
+[0mGET /marketplaces [32m200[0m 49.411 ms - -[0m
+[0mGET /marketplaces [36m304[0m 14.669 ms - -[0m
+[0mGET /xml-sources [32m200[0m 199.525 ms - 755[0m
+[0mGET /xml-sources [36m304[0m 35.518 ms - -[0m
+[0mGET /dashboard/stats [32m200[0m 1562.582 ms - 299[0m
+[0mGET / [32m200[0m 7.770 ms - -[0m
+[0mGET /auth/me [33m401[0m 0.563 ms - 69[0m
+[0mPOST /auth/login [32m200[0m 168.135 ms - 302[0m
+[0mGET /xml-sources [32m200[0m 24.695 ms - 755[0m
+[0mGET / [32m200[0m 24.692 ms - -[0m
+[0mGET /auth/me [33m401[0m 0.797 ms - 69[0m
