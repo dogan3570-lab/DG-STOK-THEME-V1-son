@@ -6,7 +6,7 @@ interface LoginProps {
 
 export default function Login({ onLoginSuccess }: LoginProps) {
   const [email, setEmail] = useState('admin@dgstok.com');
-  const [password, setPassword] = useState('admin123');
+  const [password, setPassword] = useState('Admin1234!');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 

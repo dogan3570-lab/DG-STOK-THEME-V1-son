@@ -333,6 +333,7 @@ export interface V2RunOptions {
   apply?: boolean;          // false => DRY RUN (Product mutation YASAK)
   aiLimit?: number;         // kac urune AI calissin (maliyet kontrolu)
   includeMatched?: boolean; // true => legacy dahil tum urunler yeniden degerlendirilir
+  onProgress?: (processed: number, total: number) => void; // islenen/total urun — canli progress
 }
 
 export interface V2RunMetrics {
@@ -396,6 +397,9 @@ export async function runCategoryCoreV2(opts: V2RunOptions): Promise<V2RunMetric
   let aiBudget = opts.aiLimit ?? 0;
   for (const p of products) {
     metrics.totalEvaluated++;
+    if (opts.onProgress) {
+      try { opts.onProgress(metrics.totalEvaluated, products.length); } catch { /* progress hatasi is akisini bozmaz */ }
+    }
     const useAi = aiBudget > 0;
     if (useAi) { ctx.aiEnabled = true; aiBudget--; } else { ctx.aiEnabled = false; }
     const d = await decideProductV2(p, ctx);

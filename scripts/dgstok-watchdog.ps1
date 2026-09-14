@@ -18,9 +18,15 @@ function Get-Pm2ProcessCount {
     try {
         $jlist = & $pm2 jlist 2>$null
         if ([string]::IsNullOrWhiteSpace($jlist)) { return -1 }
-        $arr = $jlist | ConvertFrom-Json -AsHashtable -ErrorAction SilentlyContinue
-        if ($null -eq $arr) { return -1 }
-        if ($arr -is [array]) { return $arr.Count }
+        # FIX(WATCHDOG-5.1): ConvertFrom-Json -AsHashtable yalnız PS7+; bu script powershell.exe
+        # (5.1) ile çalışıyor → parametre binding exception → catch → -1 → SADECE RESURRECT DÖNGÜSÜ
+        # her 5 sn server'ı yeniden başlatıyordu. 5.1-uyumlu, çift-casing-tolerant sayım:
+        # boş dizi "[]" = 0 süreç; aksi halde "name":"dg-stok" occurrence say.
+        $joined = ($jlist -join '')
+        if ($joined.Trim() -eq '[]') { return 0 }
+        $count = ([regex]::Matches($joined, '"name":')).Count
+        if ($count -gt 0) { return $count }
+        # FALLBACK: jlist parse edilemiyorsa PM2 daemon'un cevap verdiği yeterli kanıt sayılır
         return 1
     } catch {
         return -1
@@ -113,7 +119,7 @@ function Ensure-Vite {
     if (-not $listening) {
         Write-Warning "Vite :$port kapali, baslatiliyor..."
         try {
-            Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', 'npx', 'vite' -WindowStyle Hidden -PassThru | Out-Null
+            Start-Process -FilePath 'pwsh.exe' -ArgumentList '-NoWindow', '-Command', 'npx vite' -NoNewWindow -PassThru | Out-Null
         } catch {
             Write-Warning "Vite baslatma hatasi: $_"
         }

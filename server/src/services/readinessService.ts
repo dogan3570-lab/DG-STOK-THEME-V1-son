@@ -22,6 +22,9 @@ export interface ReconcileContext {
  * non-blocking, hatalar yutulur, sonuç idempotent.
  */
 const RECONCILE_CONCURRENCY = 4;
+const MAX_BULK_RECONCILE = 500;
+const QUEUE_SOFT_LIMIT = 1000;
+const QUEUE_DRAIN_TARGET = 400;
 const _reconcileQueue: string[] = [];
 const _reconcileQueued = new Map<string, number>(); // productId → timestamp (TTL cooldown)
 const RECONCILE_COOLDOWN_MS = 30_000; // 30s cooldown before re-queue allowed
@@ -29,6 +32,11 @@ let _reconcileActive = 0;
 
 function pumpReconcileQueue(): void {
   while (_reconcileActive < RECONCILE_CONCURRENCY && _reconcileQueue.length > 0) {
+    if (_reconcileQueue.length > QUEUE_SOFT_LIMIT) {
+      // Queue overflow: drain first, let it shrink before pumping more
+      while (_reconcileQueue.length > QUEUE_DRAIN_TARGET) { _reconcileQueue.shift(); }
+      break;
+    }
     const productId = _reconcileQueue.shift() as string;
     // Cooldown entry is NOT deleted here — it persists for RECONCILE_COOLDOWN_MS
     // to prevent rapid re-queueing. TTL cleanup happens in isReconcileCooldownActive().
@@ -63,8 +71,11 @@ export function queueReconcileProductGates(productId: string): void {
 
 export function queueReconcileProductGatesBulk(productIds: string[]): void {
   if (!productIds || productIds.length === 0) return;
+  // FIX(CRASH): Cap bulk queue to prevent unbounded queue growth and SQLite overload.
+  // Excess products will be reconciled on next trigger or explicit recheck.
+  const capped = productIds.length > MAX_BULK_RECONCILE ? productIds.slice(0, MAX_BULK_RECONCILE) : productIds;
   let hasNew = false;
-  for (const pid of productIds) {
+  for (const pid of capped) {
     if (!pid || isReconcileCooldownActive(pid)) continue;
     _reconcileQueued.set(pid, Date.now());
     _reconcileQueue.push(pid);
@@ -424,7 +435,9 @@ export async function reconcileReadiness(productId: string, ctx: ReconcileContex
   if (product.xmlSourceId && product.xmlSourceId !== ctx.xmlSourceId) return false;
 
   // P1: Variant aile tespiti — NOT_REQUIRED ise kardeş ürünleri kontrol et
-  if (product.variantStatus === 'NOT_REQUIRED' && !product.variantMatch && product.brandId && product.title) {
+  // FIX(CRASH): Under high queue load, skip expensive variant family detection.
+  // Products will be re-evaluated when queue drains (cooldown + re-trigger).
+  if (product.variantStatus === 'NOT_REQUIRED' && !product.variantMatch && product.brandId && product.title && _reconcileQueue.length < QUEUE_DRAIN_TARGET) {
     const family = await detectVariantFamily(product.id, product.brandId, product.title, product.sku ?? null, client);
     if (family.isFamily && family.confidence >= 50) {
       // DB'ye yaz (state change Persist)

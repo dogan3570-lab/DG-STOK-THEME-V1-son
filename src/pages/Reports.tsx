@@ -9,6 +9,7 @@ interface DashboardStats {
  lowStockProducts: number;
  errorProducts: number;
  todayOrders: number;
+ rangeOrders: number;
 }
 
 interface DashboardSummaryItem {
@@ -55,7 +56,7 @@ const typeColors: Record<string, string> = {
  other: 'text-current',
 };
 
-export default function Reports() {
+export default function Reports({ onNavigate }: { onNavigate?: (page: string) => void }) {
  const [activeTab, setActiveTab] = useState<'ozet' | 'finans' | 'urun' | 'pazaryeri'>('ozet');
  const [stats, setStats] = useState<DashboardStats | null>(null);
  const [summary, setSummary] = useState<DashboardSummaryItem[]>([]);
@@ -71,6 +72,10 @@ export default function Reports() {
  }, []);
 
  useEffect(() => {
+ fetchAllData();
+ }, [dateRange]);
+
+ useEffect(() => {
  if (activeTab === 'finans') {
  fetchFinanceData();
  }
@@ -79,9 +84,12 @@ export default function Reports() {
  async function fetchAllData() {
  setLoading(true);
  try {
+ const params = new URLSearchParams();
+ params.append('days', dateRange);
+
  const [statsRes, summaryRes] = await Promise.all([
- fetch('/dashboard/stats', { credentials: 'include' }),
- fetch('/dashboard/summary', { credentials: 'include' }),
+ fetch(`/dashboard/stats?${params}`, { credentials: 'include' }),
+ fetch(`/dashboard/summary?${params}`, { credentials: 'include' }),
  ]);
 
  if (statsRes.ok) setStats(await statsRes.json());
@@ -101,6 +109,7 @@ export default function Reports() {
  try {
  const params = new URLSearchParams();
  if (financeType) params.append('type', financeType);
+ params.append('days', dateRange);
 
  const response = await fetch(`/finance?${params}`, { credentials: 'include' });
  const data = await response.json();
@@ -534,15 +543,21 @@ export default function Reports() {
  <div className="rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 p-4">
  <h4 className="text-sm font-medium text-current mb-2">📋 Kategori Bazlı Rapor</h4>
  <p className="text-sm text-current">Kategorilere göre ürün dağılımını görüntüleyin.</p>
- <button className="mt-3 btn-ghost px-4 py-2 transition-colors">
- Kategori Eşleştirme Sayfasına Git →
+ <button
+  onClick={() => onNavigate?.('urunhazirlama-kategori')}
+  className="mt-3 btn-ghost px-4 py-2 transition-colors"
+ >
+  Kategori Eşleştirme Sayfasına Git →
  </button>
  </div>
  <div className="rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 p-4">
  <h4 className="text-sm font-medium text-current mb-2">🏷️ Marka Bazlı Rapor</h4>
  <p className="text-sm text-current">Markalara göre ürün dağılımını görüntüleyin.</p>
- <button className="mt-3 btn-ghost px-4 py-2 transition-colors">
- Marka Eşleştirme Sayfasına Git →
+ <button
+  onClick={() => onNavigate?.('urunhazirlama-marka')}
+  className="mt-3 btn-ghost px-4 py-2 transition-colors"
+ >
+  Marka Eşleştirme Sayfasına Git →
  </button>
  </div>
  </div>

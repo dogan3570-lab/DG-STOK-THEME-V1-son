@@ -198,6 +198,20 @@ app.get('/api/health', (_req, res) => {
     });
   });
 
+  // FIX(LOGOUT-404): UI (index.html doLogout) POST /auth/logout çağırıyordu ama bu route
+  // hiç yazılmamıştı → 404. httpOnly cookie JS'ten silinemediği için server-side clearCookie zorunlu.
+  // JWT stateless'dır; verilmiş Bearer token süresi dolana kadar geçerli kalır (bilinen sınırlama,
+  // davranış değişikliği yapılmaz — yalnızca tarayıcı oturum çerezi temizlenir).
+  app.post('/auth/logout', authLimiter, async (_req, res) => {
+    res.clearCookie('token', {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+    });
+    return res.json({ ok: true });
+  });
+
   app.get('/auth/me', async (req, res) => {
     let token = req.cookies?.token;
     if (!token) {
@@ -311,7 +325,7 @@ app.get('/api/health', (_req, res) => {
 
   // Frontend (vanilla JS) calls endpoints WITHOUT /api prefix (e.g. /xml-sources, /categories).
   // Rewrite URL internally so POST/PUT/DELETE also work correctly.
-  const frontendPaths = ['/xml-sources', '/categories', '/brands', '/variants', '/listings', '/listing-v2', '/ready-to-ship', '/orders', '/marketplace-manage', '/marketplace-send', '/ai-settings', '/stock-automation', '/dashboard', '/settings', '/marketplaces', '/auth', '/notifications', '/reports', '/category-engine', '/category-core-v2', '/trendyol-mapping'];
+  const frontendPaths = ['/products', '/xml-sources', '/categories', '/brands', '/variants', '/listings', '/listing-v2', '/ready-to-ship', '/orders', '/marketplace-manage', '/marketplace-send', '/ai-settings', '/stock-automation', '/dashboard', '/settings', '/marketplaces', '/auth', '/notifications', '/nav-badges', '/reports', '/category-engine', '/category-core-v2', '/trendyol-mapping', '/finance', '/users', '/audit-logs'];
   app.use((req, res, next) => {
     for (const p of frontendPaths) {
       if (req.path === p || req.path.startsWith(p + '/')) {

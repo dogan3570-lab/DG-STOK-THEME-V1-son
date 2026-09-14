@@ -76,7 +76,7 @@ export default function VariantMatchTab() {
  setLoading(true);
  try {
  const [varRes, xmlRes, statsRes, unmatchedRes] = await Promise.all([
- apiFetch<{ items: VariantRecord[]; total: number }>('/variants/?limit=1000'),
+  apiFetch<{ items: VariantRecord[]; total: number }>('/variants?limit=1000'),
  apiFetch<{ items: XmlVariantItem[] }>('/variants/xml-variants'),
  apiFetch<VariantStats>('/variants/stats'),
  apiFetch<{ items: Array<{ id: string }>; total: number }>('/variants/unmatched-products?limit=500'),

@@ -46,34 +46,34 @@ export default function SettingsPage() {
  finally { setLoading(false); }
  }
 
- async function handleSave() {
- setSaving(true); setMessage('');
- try {
- const res = await fetch('/settings', {
- method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
- body: JSON.stringify(form),
- });
- if (res.ok) { setMessage('✅ Ayarlar kaydedildi'); fetchSettings(); }
- else setMessage('❌ Kaydetme başarısız');
- } catch (err) { setMessage('❌ Ağ hatası'); }
- finally { setSaving(false); setTimeout(() => setMessage(''), 3000); }
- }
+async function handleSave() {
+  setSaving(true); setMessage('');
+  try {
+  const res = await fetch('/settings', {
+  method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+  body: JSON.stringify({ settings: form }),
+  });
+  if (res.ok) { setMessage('✅ Ayarlar kaydedildi'); fetchSettings(); }
+  else setMessage('❌ Kaydetme başarısız');
+  } catch (err) { setMessage('❌ Ağ hatası'); }
+  finally { setSaving(false); setTimeout(() => setMessage(''), 3000); }
+  }
 
- async function handlePasswordChange(e: React.FormEvent) {
- e.preventDefault(); setPasswordMessage('');
- if (passwordForm.newPassword !== passwordForm.confirmPassword) {
- setPasswordMessage('❌ Şifreler eşleşmiyor'); return;
- }
- try {
- const res = await fetch('/admin/change-password', {
- method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
- body: JSON.stringify({ oldPassword: passwordForm.oldPassword, newPassword: passwordForm.newPassword }),
- });
- const data = await res.json();
- if (res.ok) { setPasswordMessage('✅ Şifre güncellendi'); setShowPasswordModal(false); }
- else setPasswordMessage(`❌ ${data.error?.message || 'Hata'}`);
- } catch (err) { setPasswordMessage('❌ Ağ hatası'); }
- }
+async function handlePasswordChange(e: React.FormEvent) {
+  e.preventDefault(); setPasswordMessage('');
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+  setPasswordMessage('❌ Şifreler eşleşmiyor'); return;
+  }
+  try {
+  const res = await fetch('/auth/change-password', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+  body: JSON.stringify({ currentPassword: passwordForm.oldPassword, newPassword: passwordForm.newPassword }),
+  });
+  const data = await res.json();
+  if (res.ok) { setPasswordMessage('✅ Şifre güncellendi'); setShowPasswordModal(false); }
+  else setPasswordMessage(`❌ ${data.error?.message || 'Hata'}`);
+  } catch (err) { setPasswordMessage('❌ Ağ hatası'); }
+  }
 
  async function handleTest(key: string) {
  try {

@@ -1,0 +1,17 @@
+import sqlite3
+path = "C:/PROJE 1/DG-STOK-THEME-V1/server/prisma/dev.db"
+conn = sqlite3.connect(path)
+cur = conn.cursor()
+cur.execute("DELETE FROM user WHERE email = 'admin@dg-stok.local'")
+conn.commit()
+cur.execute("SELECT email FROM user WHERE email = ?", ("admin@dg-stok.local",))
+loc = cur.fetchone()
+cur.execute("SELECT email FROM user WHERE email = ?", ("admin@dgstok.com",))
+com = cur.fetchone()
+cur.execute("SELECT password FROM user WHERE email = ?", ("admin@dgstok.com",))
+pw = cur.fetchone()
+print("admin@dg-stok.local:", "NOT FOUND" if not loc else loc[0])
+print("admin@dgstok.com:", com[0] if com else "NOT FOUND")
+print("Password hash:", pw[0][:20] + "..." if pw else "NULL")
+print("Hash is bcrypt:", pw[0].startswith("$2a$10$") if pw else False)
+conn.close()

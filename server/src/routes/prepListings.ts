@@ -97,14 +97,43 @@ function applyRounding(price: number, rounding: string): number {
 
 // ==================== STATİK ROTALAR (/:id'den ÖNCE) ====================
 
-// 1. ŞABLON LİSTESİ
-router.get('/', requireAuth, async (_req, res) => {
+// 1. ŞABLON LİSTESİ (pagination + search)
+router.get('/', requireAuth, async (req, res) => {
   try {
-    const items = await prisma.listingTemplate.findMany({
-      orderBy: { updatedAt: 'desc' },
-      include: { marketplace: { select: { id: true, name: true, key: true } } },
+    const page = Math.max(1, Number(req.query?.page ?? 1));
+    const limit = Math.min(200, Math.max(10, Number(req.query?.limit ?? 50)));
+    const skip = (page - 1) * limit;
+    const search = String(req.query?.search ?? '').trim();
+
+    const where: Record<string, unknown> = {};
+    if (search) {
+      where.OR = [
+        { name: { contains: search } },
+        { titleFormat: { contains: search } },
+        { description: { contains: search } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.listingTemplate.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        skip,
+        take: limit,
+        include: { marketplace: { select: { id: true, name: true, key: true } } },
+      }),
+      prisma.listingTemplate.count({ where }),
+    ]);
+
+    return res.json({
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     });
-    return res.json({ items });
   } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
 });
 
@@ -212,9 +241,13 @@ router.post('/render-description', requireAuth, async (req, res) => {
 router.post('/', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
   try {
     const data = req.body;
+    const name = String(data?.name ?? '').trim();
+    if (!name) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Şablon adı gerekli' } });
+    }
     const item = await prisma.listingTemplate.create({
       data: {
-        name: data.name || 'Şablon',
+        name,
         marketplaceId: data.marketplaceId || null,
         productId: data.productId || null,
         titleFormat: data.titleFormat || null,
@@ -262,76 +295,6 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, re
     _triggerTemplateSync(data.marketplaceId, data.productId, data.categoryId, null);
     return res.status(201).json({ item });
   } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
-});
-
-// ==================== PARAMETRIK ROTALAR (/:id) ====================
-
-router.get('/:id', requireAuth, async (req, res) => {
-  try {
-    const item = await prisma.listingTemplate.findUnique({
-      where: { id: String(req.params.id) },
-      include: { marketplace: { select: { id: true, name: true, key: true } } },
-    });
-    if (!item) return res.status(404).json({ ok: false, error: 'Şablon bulunamadı' });
-    return res.json({ item });
-  } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
-});
-
-router.put('/:id', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
-  try {
-    const data = req.body;
-    const updateData: Record<string, unknown> = {};
-    const fields = [
-      'name', 'marketplaceId', 'productId', 'titleFormat', 'description', 'priceFormula',
-      'commissionRate', 'vatRate', 'cargoSettings', 'imageSettings', 'variantSettings',
-      'categoryId', 'brandId', 'active',
-      'priceSource', 'vatMode', 'priceMultiplier', 'priceFixedAmount', 'priceRangeRules',
-      'excludeRules', 'titleVariables', 'titleMaxLength', 'titleSeoMaxLength',
-      'descriptionBlocks', 'descriptionMaxLength',
-      'imageMinCount', 'imageMaxCount', 'imageOrder', 'imageWatermark', 'imageBackground',
-      'imageMinSize', 'imageFormat',
-      'stockMultiplier', 'stockMinValue', 'stockMaxValue', 'stockHide', 'stockAutoDeactivate',
-      'barcodePrefix', 'barcodeSuffix', 'barcodeAutoGenerate',
-      'validationRules',
-    ];
-    for (const field of fields) {
-      if (data[field] !== undefined) {
-        const val = data[field];
-        if (['commissionRate', 'vatRate', 'priceMultiplier', 'priceFixedAmount',
-             'titleMaxLength', 'titleSeoMaxLength', 'descriptionMaxLength',
-             'imageMinCount', 'imageMaxCount', 'imageMinSize',
-             'stockMultiplier', 'stockMinValue', 'stockMaxValue'].includes(field)) {
-          updateData[field] = val !== null ? Number(val) : null;
-        } else {
-          updateData[field] = val;
-        }
-      }
-    }
-    const item = await prisma.listingTemplate.update({ where: { id: String(req.params.id) }, data: updateData });
-    // FIX(2M): Template CRUD tetikleyicisi — etkilenen ürünleri background'da sync et
-    invalidateTemplateCache();
-    _triggerTemplateSync(item.marketplaceId, item.productId, item.categoryId, null);
-    return res.json({ item });
-  } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
-});
-
-router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
-  try {
-    const id = String(req.params.id);
-    const existing = await prisma.listingTemplate.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Şablon bulunamadı' } });
-    await prisma.listingTemplate.delete({ where: { id } });
-    // FIX(2M): Template CRUD tetikleyicisi — silinen template'in etkilediği ürünleri sync et
-    invalidateTemplateCache();
-    _triggerTemplateSync(existing.marketplaceId, existing.productId, existing.categoryId, null);
-    return res.json({ ok: true });
-  } catch (error: any) {
-    if (error.code === 'P2025') {
-      return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Şablon bulunamadı' } });
-    }
-    console.error('Error deleting listing template:', error);
-    return res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to delete listing template' } });
-  }
 });
 
 // ==================== ŞABLON İŞLEMLERİ ====================
@@ -516,6 +479,76 @@ router.post('/:id/apply-all', requireAuth, requireRole(['ADMIN', 'OPERATOR']), a
   } catch (error) {
     console.error('[listings] POST apply-all error:', error);
     return res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+// ==================== PARAMETRIK ROTALAR (/:id) - Generic routes at the end ====================
+
+router.get('/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await prisma.listingTemplate.findUnique({
+      where: { id: String(req.params.id) },
+      include: { marketplace: { select: { id: true, name: true, key: true } } },
+    });
+    if (!item) return res.status(404).json({ ok: false, error: 'Şablon bulunamadı' });
+    return res.json({ item });
+  } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
+});
+
+router.put('/:id', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
+  try {
+    const data = req.body;
+    const updateData: Record<string, unknown> = {};
+    const fields = [
+      'name', 'marketplaceId', 'productId', 'titleFormat', 'description', 'priceFormula',
+      'commissionRate', 'vatRate', 'cargoSettings', 'imageSettings', 'variantSettings',
+      'categoryId', 'brandId', 'active',
+      'priceSource', 'vatMode', 'priceMultiplier', 'priceFixedAmount', 'priceRangeRules',
+      'excludeRules', 'titleVariables', 'titleMaxLength', 'titleSeoMaxLength',
+      'descriptionBlocks', 'descriptionMaxLength',
+      'imageMinCount', 'imageMaxCount', 'imageOrder', 'imageWatermark', 'imageBackground',
+      'imageMinSize', 'imageFormat',
+      'stockMultiplier', 'stockMinValue', 'stockMaxValue', 'stockHide', 'stockAutoDeactivate',
+      'barcodePrefix', 'barcodeSuffix', 'barcodeAutoGenerate',
+      'validationRules',
+    ];
+    for (const field of fields) {
+      if (data[field] !== undefined) {
+        const val = data[field];
+        if (['commissionRate', 'vatRate', 'priceMultiplier', 'priceFixedAmount',
+             'titleMaxLength', 'titleSeoMaxLength', 'descriptionMaxLength',
+             'imageMinCount', 'imageMaxCount', 'imageMinSize',
+             'stockMultiplier', 'stockMinValue', 'stockMaxValue'].includes(field)) {
+          updateData[field] = val !== null ? Number(val) : null;
+        } else {
+          updateData[field] = val;
+        }
+      }
+    }
+    const item = await prisma.listingTemplate.update({ where: { id: String(req.params.id) }, data: updateData });
+    // FIX(2M): Template CRUD tetikleyicisi — etkilenen ürünleri background'da sync et
+    invalidateTemplateCache();
+    _triggerTemplateSync(item.marketplaceId, item.productId, item.categoryId, null);
+    return res.json({ item });
+  } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
+});
+
+router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const existing = await prisma.listingTemplate.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Şablon bulunamadı' } });
+    await prisma.listingTemplate.delete({ where: { id } });
+    // FIX(2M): Template CRUD tetikleyicisi — silinen template'in etkilediği ürünleri sync et
+    invalidateTemplateCache();
+    _triggerTemplateSync(existing.marketplaceId, existing.productId, existing.categoryId, null);
+    return res.json({ ok: true });
+  } catch (error: any) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Şablon bulunamadı' } });
+    }
+    console.error('Error deleting listing template:', error);
+    return res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to delete listing template' } });
   }
 });
 

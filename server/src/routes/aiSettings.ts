@@ -78,16 +78,18 @@ function simpleProviderLabel(source: string, modelId: string): string {
 // GET /ai-settings/simple — Yeni sade AI Control Center verisi
 router.get('/simple', requireAuth, async (_req: Request, res: Response) => {
   try {
-    const rows = await prisma.aIProviderConfig.findMany({
-      where: { provider: { in: ['nvidia', 'openrouter', 'opencode', 'deepseek'] } },
+const rows = await prisma.aIProviderConfig.findMany({
+      where: { provider: { in: ['omniroute', 'nvidia', 'openrouter', 'opencode', 'deepseek', 'tokenrouter'] } },
     });
     const byProvider = new Map(rows.map((r) => [r.provider, r]));
 
     const ORDER = [
+      { provider: 'omniroute', label: 'OmniRoute' },
       { provider: 'nvidia', label: 'NVIDIA' },
       { provider: 'openrouter', label: 'OpenRouter' },
       { provider: 'opencode', label: 'OpenCode' },
       { provider: 'deepseek', label: 'DeepSeek' },
+      { provider: 'tokenrouter', label: 'TokenRouter' },
     ];
 
     const providers = ORDER.map(({ provider, label }) => {
@@ -105,19 +107,12 @@ router.get('/simple', requireAuth, async (_req: Request, res: Response) => {
       };
     });
 
-    // Gerçek routing durumu: eligible havuz + son BAŞARILI inference (tahmin YOK)
-    let available = false;
-    let currentAI: { provider: string; model: string; at: string } | null = null;
-    try {
-      const snapshot = await getAvailabilitySnapshot();
-      available = snapshot.level === 'ACTIVE';
-      const cur = snapshot.currentAI;
-      if (cur && cur.source) {
-        currentAI = { provider: simpleProviderLabel(cur.source, cur.modelId), model: cur.modelId, at: cur.at };
-      }
-    } catch {
-      available = providers.some((p) => p.active && p.hasKey);
-    }
+    // Gerçek aktif provider: aktif ve anahtarı olan ilk provider
+    const activeProvider = providers.find((p) => p.active && p.hasKey);
+    const available = !!activeProvider;
+    const currentAI = activeProvider
+      ? { provider: activeProvider.label, model: '', at: new Date().toISOString() }
+      : null;
 
     res.json({
       ok: true,
@@ -600,6 +595,35 @@ router.delete('/:provider', requireAuth, requireRole(['ADMIN']), async (req: Req
   } catch (error) {
     console.error('[ai-settings] DELETE /:provider error:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Sağlayıcı silinemedi' } });
+  }
+});
+
+// POST /ai-settings/:provider/add-test — Key kaydet + test (AI Control Center "Ekle ve Test Et")
+router.post('/:provider/add-test', requireAuth, requireRole(['ADMIN']), async (req: Request, res: Response) => {
+  try {
+    const provider = String(req.params.provider);
+    const { apiKey } = req.body as { apiKey?: string };
+
+    if (apiKey && apiKey.trim()) {
+      const trimmed = apiKey.trim().replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '');
+      const { encryptApiKey } = await import('../services/crypto.ts');
+      const enc = encryptApiKey(trimmed);
+      await prisma.aIProviderConfig.update({
+        where: { provider },
+        data: {
+          apiKeyEncrypted: enc.encrypted,
+          apiKeyIv: enc.iv,
+          apiKeyTag: enc.tag,
+          active: true,
+        },
+      });
+    }
+
+    const { testProvider } = await import('../services/aiGateway.ts');
+    const result = await testProvider(provider);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

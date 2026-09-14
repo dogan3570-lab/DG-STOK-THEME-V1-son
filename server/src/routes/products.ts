@@ -4,7 +4,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth } from '../auth/authMiddleware.ts';
 import { READY_FILTER } from '../services/readiness.ts';
-import { searchByTitle } from '../services/titleSearchIndex.ts';
+import { searchByTitle, invalidateTitleIndex } from '../services/titleSearchIndex.ts';
+import { queueReconcileProductGates } from '../services/readinessService.ts';
+import { productsStatsGet as _psGet, productsStatsSet as _psSet, invalidateProductsStats as _psInvalidate } from '../services/productsStatsCache.ts';
+import { PRODUCT_STATUS_DELETED, createManualOrExcelProduct, softDeleteProduct, type ManualProductInput } from '../services/productLifecycle.ts';
+import { previewImport, commitImportFile } from '../services/excelImport.ts';
 
 const router = Router();
 
@@ -36,7 +40,191 @@ export function computeVatIncludedPurchasePrice(
 
 // ==================== ÜRÜN İSTATİSTİK (Cache'li, context-aware) ====================
 // TASK313-R3: cache services/productsStatsCache.ts'te — reconcile sonrası invalidate edilebilir
-import { productsStatsGet as _psGet, productsStatsSet as _psSet, invalidateProductsStats as _psInvalidate } from '../services/productsStatsCache.ts';
+
+// POST /products/bulk-delete — toplu ürün silme (soft-delete tombstone)
+// FIX(route-order): Bu route /:id'den ÖNCE tanımlanmalı; aksi halde Express
+// POST /bulk-delete isteğini /:id route'una düşürür (:id="bulk-delete") ve
+// silme her zaman 400 "Geçersiz ürün kimliği" dönerdi.
+router.post('/bulk-delete', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { productIds } = req.body ?? {};
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'productIds dizisi zorunlu ve boş olamaz' } });
+    }
+    if (productIds.length > 200) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Tek seferde en fazla 200 ürün silinebilir' } });
+    }
+    const invalidIds = productIds.filter((id: unknown) => typeof id !== 'string' || !/^[0-9a-fA-F-]{10,40}$/.test(id));
+    if (invalidIds.length > 0) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `${invalidIds.length} geçersiz ürün kimliği`, invalidIds } });
+    }
+    const uniqueIds = [...new Set(productIds)];
+    const actorUserId = (req as unknown as { actor?: { userId?: string } }).actor?.userId ?? null;
+
+    const results = await Promise.allSettled(
+      uniqueIds.map((id: string) => softDeleteProduct(id, actorUserId))
+    );
+
+    const succeeded = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
+    const failed = results.length - succeeded;
+    const errors = results
+      .map((r, i) => ({ id: uniqueIds[i], ...(r.status === 'fulfilled' ? r.value : { ok: false, status: 500, body: { error: { code: 'INTERNAL_ERROR', message: 'Internal error' } } }) }))
+      .filter(r => !r.ok)
+      .map(r => {
+        const body = r.body as Record<string, unknown>;
+        const errObj = (body?.error ?? {}) as Record<string, string>;
+        return { id: r.id, code: errObj.code || 'UNKNOWN', message: errObj.message || 'Bilinmeyen hata' };
+      });
+
+    return res.status(200).json({ deleted: succeeded, failed, errors, total: uniqueIds.length });
+  } catch (error) {
+    console.error('Error in bulk delete:', error);
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Toplu silme başarısız' } });
+  }
+});
+
+// POST /products/:id — Tek ürünü güncelle (PUT equivalent, manual+excel both supported)
+router.post('/:id', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id ?? '');
+    if (!/^[0-9a-fA-F-]{10,40}$/.test(id)) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz ürün kimliği' } });
+    }
+
+    const existing = await prisma.product.findUnique({ where: { id }, select: { id: true, xmlSourceId: true, status: true } });
+    if (!existing) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Ürün bulunamadı' } });
+    }
+    if (existing.status === PRODUCT_STATUS_DELETED) {
+      return res.status(409).json({ error: { code: 'PRODUCT_DELETED', message: 'Bu ürün kalıcı olarak silindi; güncellenemez' } });
+    }
+
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const data: Record<string, unknown> = {};
+
+    if (typeof b.title === 'string') {
+      const title = String(b.title).trim();
+      if (title.length === 0) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Ürün adı zorunludur' } });
+      }
+      if (title.length > 500) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Ürün adı çok uzun (maks 500)' } });
+      }
+      data.title = title;
+    }
+
+    if (typeof b.sku === 'string' && b.sku !== '') {
+      const sku = String(b.sku).trim();
+      if (sku) {
+        data.sku = sku;
+      }
+    }
+
+    if (typeof b.barcode === 'string' && b.barcode !== '') {
+      const barcode = String(b.barcode).trim();
+      if (barcode) {
+        data.barcode = barcode;
+      }
+    }
+
+    if (b.stock !== undefined) {
+      const stock = Number(b.stock);
+      if (!Number.isFinite(stock)) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Stok geçersiz' } });
+      }
+      data.stock = Math.trunc(stock);
+    }
+
+    if (b.purchasePrice !== undefined) {
+      const purchasePrice = Number(b.purchasePrice);
+      if (Number.isNaN(purchasePrice) || purchasePrice < 0) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Alış fiyatı geçersiz' } });
+      }
+      data.purchasePrice = purchasePrice === 0 ? null : purchasePrice;
+    }
+
+    if (b.salePrice !== undefined) {
+      const salePrice = Number(b.salePrice);
+      if (Number.isNaN(salePrice) || salePrice < 0) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Satış fiyatı geçersiz' } });
+      }
+      data.salePrice = salePrice === 0 ? null : salePrice;
+    }
+
+    if (b.minStock !== undefined) {
+      const minStock = Number(b.minStock);
+      if (!Number.isFinite(minStock)) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Min stok geçersiz' } });
+      }
+      data.minStock = Math.trunc(minStock);
+    }
+
+    if (b.vatRate !== undefined) {
+      const vatRate = Number(b.vatRate);
+      if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'KDV oranı geçersiz (0-100 arası olmalı)' } });
+      }
+      data.vatRate = vatRate === 0 ? null : vatRate;
+    }
+
+    if (typeof b.description === 'string') {
+      const desc = String(b.description).trim();
+      data.description = desc.length > 0 ? desc : null;
+    }
+
+    if (typeof b.categoryId === 'string' && b.categoryId !== '') {
+      data.categoryId = b.categoryId === 'null' ? null : b.categoryId;
+    }
+
+    if (typeof b.brandId === 'string' && b.brandId !== '') {
+      data.brandId = b.brandId === 'null' ? null : b.brandId;
+    }
+
+    // Status whitelist — Product.status String alanı; yalnız bilinen değerler kabul edilir
+    if (typeof b.status === 'string' && b.status !== '') {
+      const VALID_STATUSES = ['XML', 'READY', 'SENT', 'PASSIVE', 'ERROR', 'DRAFT'];
+      if (!VALID_STATUSES.includes(b.status)) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Geçersiz durum değeri' } });
+      }
+      data.status = b.status;
+    }
+
+    if (b.images !== undefined && typeof b.images === 'string') {
+      data.images = b.images && b.images.trim().length > 0 ? b.images.trim() : null;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Hiçbir değişiklik yapılmadı' } });
+    }
+
+    const updateData = data as unknown as Prisma.ProductUpdateInput;
+    const updated = await prisma.product.update({
+      where: { id: existing.id },
+      data: updateData,
+      select: {
+        id: true, title: true, sku: true, barcode: true, stock: true, minStock: true,
+        purchasePrice: true, salePrice: true, vatRate: true, description: true,
+        categoryId: true, brandId: true, images: true, status: true, updatedAt: true,
+        category: { select: { id: true, name: true } },
+        brand: { select: { id: true, name: true } },
+      },
+    });
+
+    _psInvalidate(); // productsStatsCache invalidate — KPI cache tutarlılığı
+    invalidateTitleIndex().catch(() => null);
+    if (updated.images) {
+      await queueReconcileProductGates(updated.id);
+    }
+
+    return res.json({
+      ok: true,
+      item: updated,
+    });
+  } catch (error) {
+    console.error('Error updating product:', error);
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Ürün güncellenemedi' } });
+  }
+});
 let _productsStatsCache: { get(k: string): { data: unknown; timestamp: number } | undefined; set(k: string, v: { data: unknown; timestamp: number }): void; clear(): void } = {
   get: (k) => _psGet(k),
   set: (k, v) => _psSet(k, v),
@@ -186,9 +374,6 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-import { createManualOrExcelProduct, softDeleteProduct, PRODUCT_STATUS_DELETED, type ManualProductInput } from '../services/productLifecycle.ts';
-import { previewImport, commitImportFile } from '../services/excelImport.ts';
-
 // ==================== ÜRÜN OLUŞTURMA / SİLME / EXCEL IMPORT (TASK314) ====================
 
 // POST /products — Manuel ürün oluştur (canonical pipeline'a girer)
@@ -259,45 +444,6 @@ router.delete('/:id', requireAuth, async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error deleting product:', error);
     return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Ürün silinemedi' } });
-  }
-});
-
-// POST /products/bulk-delete — toplu ürün silme (soft-delete tombstone)
-router.post('/bulk-delete', requireAuth, async (req: Request, res: Response) => {
-  try {
-    const { productIds } = req.body ?? {};
-    if (!Array.isArray(productIds) || productIds.length === 0) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'productIds dizisi zorunlu ve boş olamaz' } });
-    }
-    if (productIds.length > 200) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Tek seferde en fazla 200 ürün silinebilir' } });
-    }
-    const invalidIds = productIds.filter((id: unknown) => typeof id !== 'string' || !/^[0-9a-fA-F-]{10,40}$/.test(id));
-    if (invalidIds.length > 0) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `${invalidIds.length} geçersiz ürün kimliği`, invalidIds } });
-    }
-    const uniqueIds = [...new Set(productIds)];
-    const actorUserId = (req as unknown as { actor?: { userId?: string } }).actor?.userId ?? null;
-
-    const results = await Promise.allSettled(
-      uniqueIds.map((id: string) => softDeleteProduct(id, actorUserId))
-    );
-
-    const succeeded = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
-    const failed = results.length - succeeded;
-    const errors = results
-      .map((r, i) => ({ id: uniqueIds[i], ...(r.status === 'fulfilled' ? r.value : { ok: false, status: 500, body: { error: { code: 'INTERNAL_ERROR', message: 'Internal error' } } }) }))
-      .filter(r => !r.ok)
-      .map(r => {
-        const body = r.body as Record<string, unknown>;
-        const errObj = (body?.error ?? {}) as Record<string, string>;
-        return { id: r.id, code: errObj.code || 'UNKNOWN', message: errObj.message || 'Bilinmeyen hata' };
-      });
-
-    return res.status(200).json({ deleted: succeeded, failed, errors, total: uniqueIds.length });
-  } catch (error) {
-    console.error('Error in bulk delete:', error);
-    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Toplu silme başarısız' } });
   }
 });
 

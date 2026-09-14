@@ -11,9 +11,9 @@ const { chromium } = require('playwright');
     // Login
     await page.goto('http://localhost:4000');
     await page.waitForTimeout(3000);
-    await page.fill('#login-email', 'admin@dgstok.com');
-    await page.fill('#login-password', 'admin123');
-    await page.click('button:has-text("Giri")');
+    await page.fill('#login-email', 'admin@dg-stok.local');
+    await page.fill('#login-password', 'CHANGE_ME_NOW');
+    await page.click('#login-modal button[onclick="doLogin()"]');
     await page.waitForTimeout(3000);
 
     let pass = 0, fail = 0;
@@ -130,7 +130,11 @@ const { chromium } = require('playwright');
     const v2Price = await page.$('#li-v2-price');
     check('V2 price input exists', !!v2Price);
     const v2Vat = await page.$('#li-v2-vat');
-    check('V2 VAT input exists', !!v2Vat);
+    if (v2Vat) {
+      check('V2 VAT input exists', true);
+    } else {
+      check('V2 VAT input exists', false, 'VAT/KDV field absent in V2 calculator — NOT APPLICABLE (V2 has price/margin/fixed/rounding only)');
+    }
     const v2Margin = await page.$('#li-v2-margin');
     check('V2 margin input exists', !!v2Margin);
     const v2Rounding = await page.$('#li-v2-rounding');

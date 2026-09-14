@@ -1,0 +1,2 @@
+console.log('CREDENTIAL_ENCRYPTION_KEY:', process.env.CREDENTIAL_ENCRYPTION_KEY ? 'SET (' + process.env.CREDENTIAL_ENCRYPTION_KEY.length + ' chars)' : 'NOT SET');
+console.log('JWT_SECRET:', process.env.JWT_SECRET ? 'SET' : 'NOT SET');

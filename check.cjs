@@ -1,0 +1,23 @@
+const { PrismaClient } = require('./server/node_modules/.prisma/client');
+const crypto = require('crypto');
+const fs = require('fs');
+const env = fs.readFileSync('server/.env', 'utf8');
+const encKey = env.match(/CREDENTIAL_ENCRYPTION_KEY=(.+)/)[1].trim();
+const p = new PrismaClient();
+p.aIProviderConfig.findUnique({where:{provider:'openrouter'}}).then(r => {
+  const derivedKey = crypto.scryptSync(encKey, 'dg-stok-cred-v1', 32);
+  const iv = Buffer.from(r.apiKeyIv, 'hex');
+  const tag = Buffer.from(r.apiKeyTag, 'hex');
+  const encBuf = Buffer.from(r.apiKeyEncrypted, 'hex');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', derivedKey, iv);
+  decipher.setAuthTag(tag);
+  const dec = Buffer.concat([decipher.update(encBuf), decipher.final()]).toString('utf8');
+  console.log('LENGTH:', dec.length);
+  console.log('STARTS_WITH_sk-or-v1:', dec.startsWith('sk-or-v1-'));
+  console.log('UPDATED_AT:', r.updatedAt.toISOString());
+  console.log('NOW:', new Date().toISOString());
+  console.log('AGE_SECONDS:', Math.round((Date.now() - r.updatedAt.getTime()) / 1000));
+  console.log('ACTIVE:', r.active);
+  console.log('MODEL:', r.model);
+  p.$disconnect();
+}).catch(e => { console.error(e.message); p.$disconnect(); });

@@ -14,6 +14,7 @@ import SaasCustomers from './pages/saas/SaasCustomers';
 import Orders from './pages/Orders';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
+import Automation from './pages/Automation';
 import VariantExceptionScreen from './pages/VariantExceptionScreen';
 import AIImageCenter from './pages/AIImageCenter';
 import AISalesCenter from './pages/AISalesCenter';
@@ -22,7 +23,7 @@ import AIControlCenter from './pages/AIControlCenter';
 import { MarketplaceProvider } from './context/MarketplaceContext';
 import ToastContainer from './components/ui/Toast';
 
-type PageKey = 'kontrol' | 'xml' | 'urunhavuzu' | 'urunhazirlama' | 'urunhazirlama-kategori' | 'urunhazirlama-marka' | 'urunhazirlama-varyant' | 'urunhazirlama-listeleme' | 'gonderimehazir' | 'pazaryeri' | 'siparis' | 'rapor' | 'ayar' | 'varyant' | 'ai-image' | 'ai-sales' | 'copilot' | 'musteriler' | 'ai-kontrol';
+type PageKey = 'kontrol' | 'xml' | 'urunhavuzu' | 'urunhazirlama' | 'urunhazirlama-kategori' | 'urunhazirlama-marka' | 'urunhazirlama-varyant' | 'urunhazirlama-listeleme' | 'gonderimehazir' | 'pazaryeri' | 'siparis' | 'rapor' | 'ayar' | 'varyant' | 'ai-image' | 'ai-sales' | 'copilot' | 'musteriler' | 'ai-kontrol' | 'automation';
 
 const MENU_ITEMS: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: 'kontrol', label: 'Kontrol Paneli', icon: '📊' },
@@ -147,9 +148,10 @@ export default function App() {
       case 'ai-kontrol': return <AIControlCenter />;
       case 'pazaryeri': return <MarketplaceControlCenter />;
       case 'siparis': return <Orders />;
-      case 'rapor': return <Reports />;
+      case 'rapor': return <Reports onNavigate={setActivePage} />;
       case 'ayar': return <Settings />;
       case 'musteriler': return <SaasCustomers />;
+      case 'automation': return <Automation />;
       default: return <Dashboard />;
     }
   };
@@ -167,7 +169,7 @@ export default function App() {
   return (
     <MarketplaceProvider>
       <div className="flex h-screen bg-slate-100 dark:bg-[#090d16] transition-colors duration-300">
-        <Sidebar activePage={activePage} onPageChange={handlePageChange} collapsed={sidebarCollapsed} />
+        <Sidebar activePage={activePage} onPageChange={handlePageChange} collapsed={sidebarCollapsed} userRole={auth.role} />
         <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
           <Header
             title={getPageTitle()}

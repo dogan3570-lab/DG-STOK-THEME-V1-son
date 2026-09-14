@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Control Center - Backup Router</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
+    h1 { color: #38bdf8; margin-bottom: 20px; font-size: 1.5rem; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+    .card { background: #1e293b; border-radius: 8px; padding: 16px; border: 1px solid #334155; }
+    .card h2 { color: #94a3b8; font-size: 0.875rem; text-transform: uppercase; margin-bottom: 12px; }
+    .agent-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #334155; }
+    .agent-row:last-child { border-bottom: none; }
+    .badge { padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge-green { background: #065f46; color: #34d399; }
+    .badge-yellow { background: #713f12; color: #fbbf24; }
+    .badge-red { background: #7f1d1d; color: #f87171; }
+    .badge-gray { background: #374151; color: #9ca3af; }
+    .test-section { margin-top: 20px; }
+    .test-btn { background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 0.875rem; margin: 4px; }
+    .test-btn:hover { background: #1d4ed8; }
+    .test-btn:disabled { background: #475569; cursor: not-allowed; }
+    #test-result { margin-top: 12px; padding: 12px; background: #0f172a; border-radius: 6px; font-family: monospace; font-size: 0.8rem; white-space: pre-wrap; min-height: 100px; }
+    .log-entry { font-size: 0.75rem; padding: 4px 0; border-bottom: 1px solid #1e293b; font-family: monospace; }
+    .log-entry .ok { color: #34d399; }
+    .log-entry .fail { color: #f87171; }
+    .log-entry .fallback { color: #fbbf24; }
+    .full-width { grid-column: 1 / -1; }
+    textarea { width: 100%; height: 80px; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 8px; font-family: monospace; font-size: 0.8rem; resize: vertical; }
+    .refresh-btn { background: #475569; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; float: right; }
+    .refresh-btn:hover { background: #64748b; }
+  </style>
+</head>
+<body>
+  <h1>AI Control Center - Backup Router</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Agent Pool <button class="refresh-btn" onclick="refresh()">Refresh</button></h2>
+      <div id="agent-list">Loading...</div>
+    </div>
+    <div class="card">
+      <h2>Best Agent Selection</h2>
+      <div id="best-agent">-</div>
+    </div>
+    <div class="card full-width">
+      <h2>Request Logs</h2>
+      <div id="logs">No logs yet</div>
+    </div>
+    <div class="card full-width test-section">
+      <h2>Live Test</h2>
+      <textarea id="test-payload" placeholder='{"messages":[{"role":"user","content":"Hello, who are you?"}]}'>{"messages":[{"role":"user","content":"Say: AI Control Center OK"}]}</textarea>
+      <div style="margin-top:8px">
+        <button class="test-btn" onclick="runTest()">Route Request</button>
+        <button class="test-btn" onclick="runHealthCheck()">Health Check All</button>
+      </div>
+      <div id="test-result">Waiting for test...</div>
+    </div>
+  </div>
+
+  <script>
+    async function refresh() {
+      try {
+        const [agentsRes, logsRes, selectRes] = await Promise.all([
+          fetch('/api/agents'),
+          fetch('/api/logs?limit=30'),
+          fetch('/api/select')
+        ]);
+        const agents = await agentsRes.json();
+        const logs = await logsRes.json();
+        const sel = await selectRes.json();
+
+        const agentHtml = agents.agents.map(a => {
+          const statusBadge = a.status === 'ACTIVE' ? 'green' : a.status === 'DRAINING' || a.status === 'COOLDOWN' ? 'yellow' : a.status === 'RATE_LIMITED' ? 'red' : 'gray';
+          const quotaBadge = a.quotaState === 'ACTIVE' ? 'green' : a.quotaState === 'DRAINING' ? 'yellow' : a.quotaState === 'EXHAUSTED' ? 'red' : 'gray';
+          const healthBadge = a.healthState === 'HEALTHY' ? 'green' : a.healthState === 'DEGRADED' ? 'yellow' : a.healthState === 'UNHEALTHY' ? 'red' : 'gray';
+          return `<div class="agent-row">
+            <span><strong>${a.id}</strong> (${a.provider})</span>
+            <span>
+              <span class="badge badge-${statusBadge}">${a.status}</span>
+              <span class="badge badge-${quotaBadge}">Q:${a.quotaPercent}%</span>
+              <span class="badge badge-${healthBadge}">${a.healthState}</span>
+              <span style="color:#94a3b8;font-size:0.75rem">ok=${a.successCount} fail=${a.failCount} avg=${a.avgLatencyMs}ms</span>
+            </span>
+          </div>`;
+        }).join('');
+        document.getElementById('agent-list').innerHTML = agentHtml || 'No agents registered';
+
+        if (sel.selection) {
+          document.getElementById('best-agent').innerHTML = `<strong>${sel.selection.agentId}</strong><br>Model: ${sel.selection.model}<br>Reason: ${sel.selection.reason}`;
+        } else {
+          document.getElementById('best-agent').innerHTML = 'No eligible agent';
+        }
+
+        const logHtml = logs.logs.reverse().map(l => {
+          const cls = l.status === 'SUCCESS' ? 'ok' : l.status === 'FALLBACK' ? 'fallback' : 'fail';
+          return `<div class="log-entry"><span class="${cls}">[${l.status}]</span> ${l.requestId.slice(0,8)} agent=${l.agentId} model=${l.model} quota=${l.quotaState} latency=${l.latencyMs}ms${l.fallbackFrom ? ' from='+l.fallbackFrom : ''}${l.errorCode ? ' err='+l.errorCode : ''}</div>`;
+        }).join('');
+        document.getElementById('logs').innerHTML = logHtml || 'No logs';
+      } catch (e) {
+        document.getElementById('test-result').textContent = 'Error: ' + e.message;
+      }
+    }
+
+    async function runTest() {
+      const resultEl = document.getElementById('test-result');
+      resultEl.textContent = 'Routing request...';
+      try {
+        const payload = JSON.parse(document.getElementById('test-payload').value);
+        const res = await fetch('/api/route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        resultEl.textContent = JSON.stringify(data, null, 2);
+        refresh();
+      } catch (e) {
+        resultEl.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    async function runHealthCheck() {
+      const resultEl = document.getElementById('test-result');
+      resultEl.textContent = 'Running health checks...';
+      try {
+        const res = await fetch('/api/health');
+        const data = await res.json();
+        resultEl.textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        resultEl.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 10000);
+  </script>
+</body>
+</html>

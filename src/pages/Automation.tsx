@@ -69,101 +69,101 @@ export default function Automation() {
  setTimeout(() => setToast(null), 3000);
  };
 
- const fetchRules = async () => {
- try {
- setLoading(true);
- const res = await fetch('/api/automation');
- const data = await res.json();
- setRules(data.items || []);
- } catch (err) {
- console.error('Failed to fetch automation rules:', err);
- } finally {
- setLoading(false);
- }
- };
+const fetchRules = async () => {
+  try {
+  setLoading(true);
+  const res = await fetch('/stock-automation');
+  const data = await res.json();
+  setRules(data.items || []);
+  } catch (err) {
+  console.error('Failed to fetch automation rules:', err);
+  } finally {
+  setLoading(false);
+  }
+  };
 
- const fetchLogs = async (ruleId?: string) => {
- try {
- setLogsLoading(true);
- const url = ruleId ? `/api/automation/logs?ruleId=${ruleId}` : '/api/automation/logs';
- const res = await fetch(url);
- const data = await res.json();
- setLogs(data.items || []);
- } catch (err) {
- console.error('Failed to fetch logs:', err);
- } finally {
- setLogsLoading(false);
- }
- };
+const fetchLogs = async (ruleId?: string) => {
+  try {
+  setLogsLoading(true);
+  const url = ruleId ? `/stock-automation/logs?ruleId=${ruleId}` : '/stock-automation/logs';
+  const res = await fetch(url);
+  const data = await res.json();
+  setLogs(data.items || []);
+  } catch (err) {
+  console.error('Failed to fetch logs:', err);
+  } finally {
+  setLogsLoading(false);
+  }
+  };
 
  useEffect(() => {
  fetchRules();
  }, []);
 
- const handleSubmit = async (e: React.FormEvent) => {
- e.preventDefault();
- try {
- const body = {
- ...form,
- triggerConfig: form.triggerConfig ? JSON.parse(form.triggerConfig) : {},
- actionConfig: form.actionConfig ? JSON.parse(form.actionConfig) : {},
- marketplaceId: form.marketplaceId || null,
- };
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  try {
+  const body = {
+  ...form,
+  triggerConfig: form.triggerConfig ? JSON.parse(form.triggerConfig) : {},
+  actionConfig: form.actionConfig ? JSON.parse(form.actionConfig) : {},
+  marketplaceId: form.marketplaceId || null,
+  };
 
- const url = editingRule ? `/api/automation/${editingRule.id}` : '/api/automation';
- const method = editingRule ? 'PUT' : 'POST';
+  const url = editingRule ? `/stock-automation/${editingRule.id}` : '/stock-automation';
+  const method = editingRule ? 'PUT' : 'POST';
 
- const res = await fetch(url, {
- method,
- headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify(body),
- });
+  const res = await fetch(url, {
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+  });
 
- if (!res.ok) throw new Error('İşlem başarısız');
+  if (!res.ok) throw new Error('İşlem başarısız');
 
- showToast('success', editingRule ? 'Kural güncellendi' : 'Kural oluşturuldu');
- setShowModal(false);
- setEditingRule(null);
- resetForm();
- fetchRules();
- } catch (err) {
- showToast('error', err instanceof Error ? err.message : 'Bir hata oluştu');
- }
- };
+  showToast('success', editingRule ? 'Kural güncellendi' : 'Kural oluşturuldu');
+  setShowModal(false);
+  setEditingRule(null);
+  resetForm();
+  fetchRules();
+  } catch (err) {
+  showToast('error', err instanceof Error ? err.message : 'Bir hata oluştu');
+  }
+  };
 
- const handleToggle = async (rule: AutomationRule) => {
- try {
- const res = await fetch(`/api/automation/${rule.id}/toggle`, { method: 'POST' });
- if (!res.ok) throw new Error('Durum değiştirilemedi');
- showToast('success', `${rule.name} ${rule.active ? 'durduruldu' : 'başlatıldı'}`);
- fetchRules();
- } catch (err) {
- showToast('error', err instanceof Error ? err.message : 'Bir hata oluştu');
- }
- };
+const handleToggle = async (rule: AutomationRule) => {
+  try {
+  const res = await fetch(`/stock-automation/${rule.id}/toggle`, { method: 'POST' });
+  if (!res.ok) throw new Error('Durum değiştirilemedi');
+  showToast('success', `${rule.name} ${rule.active ? 'durduruldu' : 'başlatıldı'}`);
+  fetchRules();
+  } catch (err) {
+  showToast('error', err instanceof Error ? err.message : 'Bir hata oluştu');
+  }
+  };
 
- const handleRun = async (rule: AutomationRule) => {
- try {
- const res = await fetch(`/api/automation/${rule.id}/run`, { method: 'POST' });
- if (!res.ok) throw new Error('Çalıştırılamadı');
- showToast('success', `"${rule.name}" manuel olarak çalıştırıldı`);
- fetchRules();
- } catch (err) {
- showToast('error', err instanceof Error ? err.message : 'Bir hata oluştu');
- }
- };
+const handleRun = async (rule: AutomationRule) => {
+  try {
+  const res = await fetch(`/stock-automation/${rule.id}/run`, { method: 'POST' });
+  if (!res.ok) throw new Error('Çalıştırılamadı');
+  showToast('success', `"${rule.name}" manuel olarak çalıştırıldı`);
+  fetchRules();
+  } catch (err) {
+  showToast('error', err instanceof Error ? err.message : 'Bir hata oluştu');
+  }
+  };
 
- const handleDelete = async (rule: AutomationRule) => {
- if (!window.confirm(`"${rule.name}" kuralını silmek istediğinize emin misiniz?`)) return;
- try {
- const res = await fetch(`/api/automation/${rule.id}`, { method: 'DELETE' });
- if (!res.ok) throw new Error('Silinemedi');
- showToast('success', 'Kural silindi');
- fetchRules();
- } catch (err) {
- showToast('error', err instanceof Error ? err.message : 'Bir hata oluştu');
- }
- };
+const handleDelete = async (rule: AutomationRule) => {
+  if (!window.confirm(`"${rule.name}" kuralını silmek istediğinize emin misiniz?`)) return;
+  try {
+  const res = await fetch(`/stock-automation/${rule.id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Silinemedi');
+  showToast('success', 'Kural silindi');
+  fetchRules();
+  } catch (err) {
+  showToast('error', err instanceof Error ? err.message : 'Bir hata oluştu');
+  }
+  };
 
  const openEdit = (rule: AutomationRule) => {
  setEditingRule(rule);

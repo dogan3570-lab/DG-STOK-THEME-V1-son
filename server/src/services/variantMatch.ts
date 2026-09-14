@@ -286,6 +286,7 @@ export async function runVariantMatchFlow(input: {
   limit?: number;
   useAI?: boolean;
   productIds?: string[];
+  onProgress?: (processed: number, total: number, summary: { autoMatched: number; aiMatched: number; manualReview: number; notRequired: number; failed: number }) => void;
 }): Promise<VariantFlowSummary> {
   const marketplace = await prisma.marketplace.findUnique({ where: { id: input.marketplaceId }, select: { id: true, key: true, name: true } });
   if (!marketplace) return emptySummary('MARKETPLACE_NOT_FOUND');
@@ -298,13 +299,37 @@ export async function runVariantMatchFlow(input: {
     variantMatch: false,
     variantStatus: selected ? { in: ['WAITING_AI', 'MANUAL_REVIEW'] } : 'WAITING_AI',
   };
-  if (selected) where.id = { in: selected };
-  const products = await prisma.product.findMany({
-    where,
-    take: selected ? selected.length : limit,
-    orderBy: { updatedAt: 'desc' },
-    select: { id: true, title: true, xmlKey: true, sku: true, description: true, categoryId: true },
-  });
+  // FIX(M10/CRASH): id.in(≥1000) + orderBy birlikte Prisma 5.22 SQLite engine'de
+  // 'record.rs:69 no entry found for key' Rust panic üretiyordu (kanıt: M10 kök neden
+  // araştırması — 999 OK / 1000+ panic; orderBy'sız OK). Sorguyu ≤500 ID'lik chunk'lara
+  // bölüyorum; her chunk aynı orderBy (updatedAt desc) ile çalışır, sonra client'ta
+  // updatedAt desc ile birleştirilir — davranış birebir korunur.
+  const SAFE_IN_CHUNK = 500;
+  let products: Array<{ id: string; title: string | null; xmlKey: string; sku: string | null; description: string | null; categoryId: string | null; updatedAt: Date }>;
+  if (selected && selected.length > SAFE_IN_CHUNK) {
+    const chunks: string[][] = [];
+    for (let i = 0; i < selected.length; i += SAFE_IN_CHUNK) chunks.push(selected.slice(i, i + SAFE_IN_CHUNK));
+    const parts = await Promise.all(
+      chunks.map((chunk) =>
+        prisma.product.findMany({
+          where: { ...where, id: { in: chunk } },
+          take: chunk.length,
+          orderBy: { updatedAt: 'desc' },
+          select: { id: true, title: true, xmlKey: true, sku: true, description: true, categoryId: true, updatedAt: true },
+        }),
+      ),
+    );
+    products = parts
+      .flat()
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  } else {
+    products = await prisma.product.findMany({
+      where,
+      take: selected ? selected.length : limit,
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, title: true, xmlKey: true, sku: true, description: true, categoryId: true, updatedAt: true },
+    });
+  };
 
   const summary: VariantFlowSummary = {
     ok: true,
@@ -321,8 +346,13 @@ export async function runVariantMatchFlow(input: {
 
   const categoryMappingCache = new Map<string, number | null>();
   const categoryAttrCache = new Map<number, CategoryAttrCache | null>();
+  let processed = 0;
 
   for (const p of products) {
+    processed++;
+    if (input.onProgress) {
+      try { input.onProgress(processed, products.length, { autoMatched: summary.autoMatched, aiMatched: summary.aiMatched, manualReview: summary.manualReview, notRequired: summary.notRequired, failed: summary.failed }); } catch { /* progress hatası is akisini bozmaz */ }
+    }
     const attrs = extractCleanVariants(p);
 
     // 1) XML'de gerçek varyant yok → NOT_REQUIRED (kullanıcıya iş çıkmaz)

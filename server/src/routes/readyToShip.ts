@@ -16,6 +16,9 @@ import { getOperationalMarketplaceIds, isMarketplaceOperational } from '../servi
 import { requestTemplateSync, getTemplateSyncStatus } from '../services/templateSyncService.ts';
 import { computeVatIncludedPurchasePrice } from './products.ts';
 import { getPrepStockRange, isWithinPrepRange } from '../services/stockAutomation.ts';
+import { fetchTrendyolCategoryAttributes } from '../services/trendyolCatalog.ts';
+import { resolveTrendyolAttributes } from '../services/trendyolVariantResolver.ts';
+import { normalizeName } from '../services/categoryBrandMapper.ts';
 
 // SEND-CENTER: insan-okur kural açıklaması (değerler DB MarketplacePricingRule'dan gelir, hardcode YOK).
 function describePricingRule(r?: { minPrice: number; maxPrice: number; profitMargin: number; fixedAmount: number } | null): string {
@@ -275,7 +278,9 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
 
     // FIX(2M): syncTemplateMatch request path'ten çıkarıldı → background'a taşındı.
     // Response artık DB'deki mevcut templateMatch değerlerini kullanır.
-    requestTemplateSync({ xmlSourceIds, marketplaceIds });
+    // FIX(M9/BULGU-2): GET /stats salt-okunur — background sync (state-mutating reconcile)
+    // tetikleyemez. Write yalnız açık uçlardan (template CRUD, POST /recheck) gelir.
+    requestTemplateSync({ xmlSourceIds, marketplaceIds }, { fromReadPath: true });
 
     const universeCount = await prisma.product.count({
       where: { ...(xmlSourceIds.length ? { xmlSourceId: { in: xmlSourceIds } } : {}), status: { not: 'DELETED' } },
@@ -384,11 +389,8 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     const marketplaceIds = req.query?.marketplaceIds ? String(req.query.marketplaceIds).split(',').filter(Boolean) : [];
 
     // FIX(2M): syncTemplateMatch request path'ten çıkarıldı → background'a taşındı.
-    requestTemplateSync({ xmlSourceIds, marketplaceIds });
-
-    // NOTE: syncReconcileStatus removed from page-load — lifecycle reconcile now happens
-    // at each gate-write point (category, brand, variant, template, PMS, price).
-    // For one-time backfill of existing stuck products, run: npx tsx src/scripts/backfill-reconcile.ts
+    // FIX(M9/BULGU-2): GET / (liste) salt-okunur — background sync tetikleyemez (no-op).
+    requestTemplateSync({ xmlSourceIds, marketplaceIds }, { fromReadPath: true });
 
     const primaryMarketplaceId = marketplaceIds[0] || null;
     const missingReason = req.query?.missingReason ? String(req.query.missingReason) : null;
@@ -602,9 +604,13 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
       const authoritativeTemplateMatch = templateReady;
       const hasPms = pmsSet.has(item.id);
 
-      // UNIFIED READINESS: status=READY + 4/4 gate + PMS + salePrice
+      // UNIFIED READINESS: status=READY + 4/4 gate + PMS + salePrice + categoryMapping
       // All conditions must pass for isReady=true.
-      // This is consistent with reconcileReadiness() which requires hasPms && allGates.
+      // FIX(BULGU-2): categoryMapping check eklendi — send endpoint gate'iyle birebir aynı.
+      // Pazar yeri bağlamı varsa mapping zorunlu; yoksa mapping kontrolü atlanır.
+      const hasCatMapping = (marketplaceIds.length > 0 && item.category?.id)
+        ? marketplaceIds.some(mp => listActiveMappingSet.has(`${item.category!.id}|${mp}`))
+        : true; // bağlam yoksa mapping kontrolü atla (tutarlı)
       const ready = isReady({
         status: item.status,
         categoryMatch: item.categoryMatch,
@@ -612,13 +618,17 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
         templateMatch: authoritativeTemplateMatch,
         variantMatch: item.variantMatch,
         variantStatus: item.variantStatus,
-      }) && hasPms && item.salePrice != null;
+      }) && hasPms && item.salePrice != null && hasCatMapping;
 
       const missingReasons: string[] = [];
       if (!item.categoryMatch) missingReasons.push('Kategori');
       else {
-        const listCatId = item.category?.id ?? null;
-        if (!listCatId || !marketplaceIds.some(mp => listActiveMappingSet.has(`${listCatId}|${mp}`))) missingReasons.push('Kategori eşlemesi');
+        // FIX(BULGU-2): Pazar yeri bağlamı yokken mapping kontrolü yapılmaz (tutarlı).
+        // Sadece bağlam varsa ve mapping eksikse "Kategori eşlemesi" gösterilir.
+        if (marketplaceIds.length > 0) {
+          const listCatId = item.category?.id ?? null;
+          if (!listCatId || !marketplaceIds.some(mp => listActiveMappingSet.has(`${listCatId}|${mp}`))) missingReasons.push('Kategori eşlemesi');
+        }
       }
       if (!item.brandMatch) missingReasons.push('Marka');
       if (!isVariantComplete({ variantMatch: item.variantMatch, variantStatus: item.variantStatus })) missingReasons.push('Varyant');
@@ -707,7 +717,8 @@ router.get('/graph', requireAuth, async (req: Request, res: Response) => {
     }
 
     // FIX(2M): syncTemplateMatch request path'ten çıkarıldı → background'a taşındı.
-    requestTemplateSync({ xmlSourceIds, marketplaceIds });
+    // FIX(M9/BULGU-2): GET /graph salt-okunur — background sync tetikleyemez (no-op).
+    requestTemplateSync({ xmlSourceIds, marketplaceIds }, { fromReadPath: true });
 
     const graphData = await Promise.all(marketplaceIds.map(async (mpId) => {
       const mp = await prisma.marketplace.findUnique({ where: { id: mpId }, select: { id: true, name: true, key: true } });
@@ -783,188 +794,6 @@ router.get('/marketplace-health', requireAuth, async (req: Request, res: Respons
   }
 });
 
-// ==================== PRODUCT DETAIL ====================
-
-router.get('/:id', requireAuth, async (req: Request, res: Response) => {
-  try {
-    const id = String(req.params.id ?? '');
-    const product = await prisma.product.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        title: true,
-        sku: true,
-        barcode: true,
-        xmlKey: true,
-        salePrice: true,
-        purchasePrice: true,
-        stock: true,
-        status: true,
-        images: true,
-        description: true,
-        seoTitle: true,
-        seoDescription: true,
-        categoryMatch: true,
-        brandMatch: true,
-        variantMatch: true,
-        variantStatus: true,
-        templateMatch: true,
-        xmlSourceId: true,
-        supplierCategory: true,
-        createdAt: true,
-        updatedAt: true,
-        category: { select: { id: true, name: true } },
-        brand: { select: { id: true, name: true } },
-        xmlSource: { select: { id: true, name: true, company: true, vatRate: true, purchasePriceVatStatus: true } },
-        variants: { select: { id: true, name: true, value: true } },
-        marketplaceStates: {
-          select: {
-            id: true,
-            status: true,
-            price: true,
-            stock: true,
-            listingUrl: true,
-            marketplaceId: true,
-            marketplace: { select: { id: true, name: true, key: true } },
-          },
-        },
-      },
-    });
-
-    if (!product) {
-      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Ürün bulunamadı' } });
-    }
-
-    // Resolve template authoritatively
-    const primaryMarketplaceId = (product.marketplaceStates[0] as any)?.marketplaceId || null;
-
-    // Ensure status is reconciled before computing readiness
-    if (product.xmlSourceId && primaryMarketplaceId) {
-      const promoted = await reconcileReadiness(product.id, { xmlSourceId: product.xmlSourceId, marketplaceId: primaryMarketplaceId });
-      if (promoted) {
-        const refreshed = await prisma.product.findUnique({ where: { id }, select: { status: true } });
-        if (refreshed) product.status = refreshed.status;
-      }
-    }
-    let templateReady = false;
-    let templateId = null;
-    let templateName = null;
-    let templateScope = null;
-    let templateSource = null;
-    let templateReason = null;
-
-    if (primaryMarketplaceId) {
-      const resolved = await resolveListingTemplate({
-        productId: product.id,
-        categoryId: product.category?.id ?? null,
-        marketplaceId: primaryMarketplaceId,
-      });
-      if (hasListingTemplate(resolved)) {
-        templateReady = true;
-        templateId = resolved.id;
-        templateName = resolved.name;
-        templateScope = resolved.source;
-        templateSource = resolved.source;
-        templateReason = null;
-      } else {
-        templateReady = false;
-        templateReason = 'TEMPLATE_NOT_FOUND';
-      }
-    } else {
-      // Pazaryeri baglami yok: kayitli templateMatch alanina guven (liste endpoint'i ile tutarli).
-      templateReady = product.templateMatch === true;
-      templateReason = 'NO_MARKETPLACE';
-    }
-
-    const authoritativeTemplateMatch = templateReady;
-    const hasPms = product.marketplaceStates.length > 0;
-
-    // UNIFIED READINESS: status=READY + 4/4 gate + PMS + salePrice
-    const ready = isReady({
-      status: product.status,
-      categoryMatch: product.categoryMatch,
-      brandMatch: product.brandMatch,
-      templateMatch: authoritativeTemplateMatch,
-      variantMatch: product.variantMatch,
-      variantStatus: product.variantStatus,
-    }) && hasPms && product.salePrice != null;
-
-    const missingReasons: string[] = [];
-    if (!product.categoryMatch) missingReasons.push('Kategori eşleştirilmemiş');
-    if (!product.brandMatch) missingReasons.push('Marka eşleştirilmemiş');
-    if (!isVariantComplete({ variantMatch: product.variantMatch, variantStatus: product.variantStatus })) missingReasons.push('Varyant eşleştirilmemiş');
-    if (!authoritativeTemplateMatch) missingReasons.push('Şablon eşleştirilmemiş');
-    if (!hasPms) missingReasons.push('Pazaryeri');
-    if (!product.images) missingReasons.push('Görsel eksik');
-    if (!product.barcode) missingReasons.push('Barkod eksik');
-    if (product.salePrice == null) missingReasons.push('Fiyat belirlenmemiş');
-    if (product.stock <= 0) missingReasons.push('Stokta ürün yok');
-    if (product.status === 'ERROR') missingReasons.push('Üründe hata var');
-
-    // SEND-CENTER detay: liste endpoint'iyle AYNI canonical fiyat zinciri (double-VAT yok,
-    // resolveListingPrice == send gate motoru). Yeni hesaplama motoru YAZILMADI.
-    const activeMpsDetail = await prisma.marketplace.findMany({
-      where: { active: true },
-      select: { id: true, key: true, name: true, active: true, apiKey: true, apiSecret: true, apiUrl: true, apiStatus: true },
-      orderBy: { createdAt: 'asc' },
-    });
-    const rulesDetail = activeMpsDetail.length > 0 ? await prisma.marketplacePricingRule.findMany({
-      where: { active: true, marketplaceId: { in: activeMpsDetail.map(m => m.id) } },
-      orderBy: { minPrice: 'asc' },
-    }) : [];
-    const vatIncludedDetail = computeVatIncludedPurchasePrice(
-      { purchasePrice: product.purchasePrice, salePrice: product.salePrice, vatRate: null },
-      { vatRate: product.xmlSource?.vatRate ?? null, purchasePriceVatStatus: product.xmlSource?.purchasePriceVatStatus ?? 'dahil' },
-    );
-    const marketplacePricesDetail = activeMpsDetail.map((m) => {
-      const rulesForMp = rulesDetail
-        .filter(r => r.marketplaceId === m.id && (!r.xmlSourceId || r.xmlSourceId === product.xmlSourceId))
-        .map(r => ({ minPrice: r.minPrice, maxPrice: r.maxPrice, profitMargin: r.profitMargin, fixedAmount: r.fixedAmount, rounding: r.rounding ?? undefined }));
-      const ruleUsed = rulesForMp.find(r => !r.maxPrice || (product.salePrice != null && product.salePrice >= r.minPrice && product.salePrice <= r.maxPrice)) ?? rulesForMp[0] ?? null;
-      const res = resolveListingPrice(product.salePrice, rulesForMp);
-      const pmsRow = product.marketplaceStates.find(s => s.marketplaceId === m.id);
-      return {
-        marketplaceId: m.id,
-        key: m.key,
-        name: m.name,
-        operational: isMarketplaceOperational(m),
-        apiStatus: m.apiStatus,
-        price: res.status === 'OK' ? res.listingPrice : null,
-        status: res.status,
-        ruleDesc: describePricingRule(ruleUsed),
-        eligibility: pmsRow ? pmsRow.status : 'NO_STATE',
-        blockedReason: !isMarketplaceOperational(m) ? 'API bağlantısı yapılandırılmamış'
-          : (res.status !== 'OK' ? res.status
-            : (!product.categoryMatch ? 'Kategori eksik'
-              : (!product.brandMatch ? 'Marka eksik'
-                : (!isVariantComplete({ variantMatch: product.variantMatch, variantStatus: product.variantStatus }) ? 'Varyant eksik'
-                  : (pmsRow ? null : 'Pazaryeri state yok'))))),
-      };
-    });
-
-    res.json({
-      ...product,
-      isReady: ready,
-      hasPms,
-      missingReasons,
-      // PARITY FIX: Product Pool ile birebir aynı canonical değer (fallback dahil).
-      purchasePriceVatIncluded: vatIncludedDetail,
-      sourceVatRate: product.xmlSource?.vatRate ?? null,
-      sourceVatStatus: product.xmlSource?.purchasePriceVatStatus ?? null,
-      marketplacePrices: marketplacePricesDetail,
-      templateReady,
-      templateId,
-      templateName,
-      templateScope,
-      templateSource,
-      templateReason,
-    });
-  } catch (error) {
-    console.error('Error fetching product detail:', error);
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch product' } });
-  }
-});
-
 // ==================== SEND (DISPATCH) ====================
 
 router.post('/send', requireAuth, async (req: Request, res: Response) => {
@@ -1020,6 +849,7 @@ router.post('/send', requireAuth, async (req: Request, res: Response) => {
         variantMatch: true,
         variantStatus: true,
         templateMatch: true,
+        variants: { select: { name: true, value: true } },
       },
     });
 
@@ -1102,15 +932,50 @@ router.post('/send', requireAuth, async (req: Request, res: Response) => {
       const missingGates = Object.entries(gateStatus)
         .filter(([_, v]) => !v)
         .map(([k]) => k.toUpperCase());
+
+      // FIX(INV10): Trendyol-specific required attribute validation (send endpoint).
+      if (gateStatus.variant && product.categoryId) {
+        const ttMarketplace = marketplaces.find((m: { key: string }) => m.key === 'tt');
+        if (ttMarketplace && marketplaceIds.includes(ttMarketplace.id)) {
+          try {
+            const mapping = await prisma.categoryMapping.findFirst({
+              where: { categoryId: product.categoryId, marketplaceId: ttMarketplace.id, active: true },
+              select: { externalId: true },
+              orderBy: { createdAt: 'desc' },
+            });
+            const categoryExternalId = parseInt(String(mapping?.externalId ?? ''), 10);
+            if (Number.isFinite(categoryExternalId) && categoryExternalId > 0) {
+              const attrDefs = await fetchTrendyolCategoryAttributes(categoryExternalId);
+              if (Array.isArray(attrDefs) && attrDefs.length > 0) {
+                const requiredVarianter = attrDefs.filter((a: { varianter?: boolean; slicer?: boolean; required?: boolean }) => a.varianter && (a.required || a.slicer));
+                if (requiredVarianter.length > 0) {
+                  const productVariants = (product as { variants?: Array<{ name: string; value: string }> }).variants || [];
+                  const valuesByAttribute = new Map();
+                  const resolution = resolveTrendyolAttributes(attrDefs, valuesByAttribute, productVariants.map((v: { name: string; value: string }) => ({ name: v.name, value: v.value })));
+                  if (resolution.status === 'REQUIRED_ATTRIBUTE_MISSING') {
+                    missingGates.push('REQUIRED_ATTRIBUTE_MISSING');
+                    gateStatus.variant = false;
+                  }
+                }
+              }
+            }
+          } catch {
+            missingGates.push('ATTRIBUTE_CHECK_FAILED');
+            gateStatus.variant = false;
+          }
+        }
+      }
+
       if (!marketplaceEligible) missingGates.push('MARKETPLACE_ELIGIBLE');
       if (alreadySent) missingGates.push('ALREADY_ACTIVE');
       if (alreadySending) missingGates.push('ALREADY_SENDING');
       if (!priceValid) missingGates.push('PRICE_INVALID');
       if (!stockValid) missingGates.push('STOCK_INVALID');
 
+      const attributeGatesPass = !missingGates.includes('REQUIRED_ATTRIBUTE_MISSING') && !missingGates.includes('ATTRIBUTE_CHECK_FAILED');
       return {
         productId,
-        ok: allGatesPass && marketplaceEligible && !alreadySent && !alreadySending && priceValid && stockValid,
+        ok: allGatesPass && attributeGatesPass && marketplaceEligible && !alreadySent && !alreadySending && priceValid && stockValid,
         missingGates: missingGates.length > 0 ? missingGates : undefined,
       };
     }));
@@ -1216,6 +1081,7 @@ router.post('/send/validate', requireAuth, async (req: Request, res: Response) =
         templateMatch: true,
         images: true,
         categoryId: true,
+        variants: { select: { name: true, value: true } },
       },
     });
 
@@ -1333,6 +1199,43 @@ router.post('/send/validate', requireAuth, async (req: Request, res: Response) =
         .map(([k]) => k.toUpperCase());
       if (product.categoryMatch === true && !valHasMapping) missingGates.push('MAPPING');
 
+      // FIX(INV10): Trendyol-specific required attribute validation.
+      // variantStatus='NOT_REQUIRED' yalnızca XML perspektifiyledir;
+      // Trendyol kategorisi Renk/Beden gibi required attribute gerektirebilir.
+      if (gateStatus.variant && product.categoryId) {
+        const ttMarketplace = marketplaces.find((m: { key: string }) => m.key === 'tt');
+        if (ttMarketplace && marketplaceIds.includes(ttMarketplace.id)) {
+          try {
+            const mapping = await prisma.categoryMapping.findFirst({
+              where: { categoryId: product.categoryId, marketplaceId: ttMarketplace.id, active: true },
+              select: { externalId: true },
+              orderBy: { createdAt: 'desc' },
+            });
+            const categoryExternalId = parseInt(String(mapping?.externalId ?? ''), 10);
+            if (Number.isFinite(categoryExternalId) && categoryExternalId > 0) {
+              const attrDefs = await fetchTrendyolCategoryAttributes(categoryExternalId);
+              if (Array.isArray(attrDefs) && attrDefs.length > 0) {
+                const requiredVarianter = attrDefs.filter((a: { varianter?: boolean; slicer?: boolean; required?: boolean }) => a.varianter && (a.required || a.slicer));
+                if (requiredVarianter.length > 0) {
+                  const productVariants = (product as { variants?: Array<{ name: string; value: string }> }).variants || [];
+                  const valuesByAttribute = new Map();
+                  const resolution = resolveTrendyolAttributes(attrDefs, valuesByAttribute, productVariants.map((v: { name: string; value: string }) => ({ name: v.name, value: v.value })));
+                  if (resolution.status === 'REQUIRED_ATTRIBUTE_MISSING') {
+                    const names = resolution.requiredMissing.map((m: { attributeName: string }) => m.attributeName).join(', ');
+                    missingGates.push('REQUIRED_ATTRIBUTE_MISSING');
+                    gateStatus.variant = false;
+                  }
+                }
+              }
+            }
+          } catch {
+            // Trendyol API hatası: fail-closed, ürünü blokla
+            missingGates.push('ATTRIBUTE_CHECK_FAILED');
+            gateStatus.variant = false;
+          }
+        }
+      }
+
       if (!marketplaceEligible) missingGates.push('MARKETPLACE_ELIGIBLE');
       if (alreadySent) missingGates.push('ALREADY_ACTIVE');
       if (duplicate) missingGates.push('ALREADY_SENDING');
@@ -1349,7 +1252,8 @@ router.post('/send/validate', requireAuth, async (req: Request, res: Response) =
 
       // FIX(MIN-STOCK): eligible hesabı prep-range (minimum stok) gate'ini DAHİL eder.
       const stockEligible = product.stock != null && isWithinPrepRange(product.stock, prepRange.min, prepRange.max);
-      const eligible = allGatesPass && marketplaceEligible && !alreadySent && !duplicate && product.salePrice != null && product.salePrice > 0 && stockEligible;
+      const attributeGatesPass = !missingGates.includes('REQUIRED_ATTRIBUTE_MISSING') && !missingGates.includes('ATTRIBUTE_CHECK_FAILED');
+      const eligible = allGatesPass && attributeGatesPass && marketplaceEligible && !alreadySent && !duplicate && product.salePrice != null && product.salePrice > 0 && stockEligible;
 
       return {
         productId,
@@ -1785,6 +1689,243 @@ router.post('/recheck', requireAuth, async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error rechecking products:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to recheck products' } });
+  }
+});
+
+// ==================== BACKGROUND RECONCILE ====================
+// BULGU-4 FIX: syncReconcileStatus sadece backfill script'inde çağrılıyordu.
+// 6.832 ürün tüm READY koşullarını sağlıyor ama status=XML kalıyordu.
+// Bu timer, sunucu başladığında arka planda çalışır ve stuck ürünleri promote eder.
+// GET endpointlerine write eklemez, mevcut per-product reconcile'u bozmaz.
+
+const RECONCILE_INTERVAL_MS = 60_000; // 60 saniye aralıkla
+const RECONCILE_BATCH_LIMIT = 500; // her turda en fazla 500 ürün
+let _reconcileTimerActive = false;
+let _reconcileLastRun = 0;
+let _reconcileTotalPromoted = 0;
+
+async function _backgroundReconcileTick(): Promise<void> {
+  if (_reconcileTimerActive) return; // zaten çalışıyor
+  _reconcileTimerActive = true;
+  try {
+    // Boş context = tüm operational marketplace'ler için çalıştır
+    const promoted = await syncReconcileStatus({ xmlSourceIds: [], marketplaceIds: [] });
+    if (promoted > 0) {
+      _reconcileTotalPromoted += promoted;
+      console.log(`[background-reconcile] ${promoted} ürün READY'e promote edildi (toplam: ${_reconcileTotalPromoted})`);
+      invalidateProductsStatsCache();
+    }
+    _reconcileLastRun = Date.now();
+  } catch (err) {
+    console.error('[background-reconcile] Hata:', err);
+  } finally {
+    _reconcileTimerActive = false;
+  }
+}
+
+// Sunucu başladığında ilk reconcile'ı başlat ve periyodik timer kur
+function startBackgroundReconcile(): void {
+  // İlk çalıştırma: 10 saniye gecikme (sunucu start'ını engellememek için)
+  setTimeout(() => {
+    _backgroundReconcileTick().catch(() => null);
+    // Periyodik timer
+    setInterval(() => {
+      _backgroundReconcileTick().catch(() => null);
+    }, RECONCILE_INTERVAL_MS);
+  }, 10_000);
+  console.log(`[background-reconcile] Timer başlatıldı (ilk çalıştırma: 10s, aralık: ${RECONCILE_INTERVAL_MS / 1000}s)`);
+}
+
+// Router yüklendiğinde timer'ı başlat
+startBackgroundReconcile();
+
+// Export: durum bilgisi için
+export function getReconcileStatus() {
+  return {
+    lastRun: _reconcileLastRun,
+    totalPromoted: _reconcileTotalPromoted,
+    running: _reconcileTimerActive,
+  };
+}
+
+// ==================== PRODUCT DETAIL (GENERIC - MUST BE LAST) ====================
+// Bu route spesifik route'lardan (/jobs, /progress/:id, vb.) SONRA gelmelidir
+// yoksa /jobs, /progress/:id gibi yollar yakalanır.
+
+router.get('/:id', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id ?? '');
+    const product = await prisma.product.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        title: true,
+        sku: true,
+        barcode: true,
+        xmlKey: true,
+        salePrice: true,
+        purchasePrice: true,
+        stock: true,
+        status: true,
+        images: true,
+        description: true,
+        seoTitle: true,
+        seoDescription: true,
+        categoryMatch: true,
+        brandMatch: true,
+        variantMatch: true,
+        variantStatus: true,
+        templateMatch: true,
+        xmlSourceId: true,
+        supplierCategory: true,
+        createdAt: true,
+        updatedAt: true,
+        category: { select: { id: true, name: true } },
+        brand: { select: { id: true, name: true } },
+        xmlSource: { select: { id: true, name: true, company: true, vatRate: true, purchasePriceVatStatus: true } },
+        variants: { select: { id: true, name: true, value: true } },
+        marketplaceStates: {
+          select: {
+            id: true,
+            status: true,
+            price: true,
+            stock: true,
+            listingUrl: true,
+            marketplaceId: true,
+            marketplace: { select: { id: true, name: true, key: true } },
+          },
+        },
+      },
+    });
+
+    if (!product) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Ürün bulunamadı' } });
+    }
+
+    // Resolve template authoritatively
+    const primaryMarketplaceId = (product.marketplaceStates[0] as any)?.marketplaceId || null;
+
+    // FIX(M9/BULGU-2): GET /:id salt-okunurdur — "read önce reconcile" kalıbı
+    // (reconcileReadiness) variant aile tespiti üzerinden variantStatus/status yazıp
+    // GET'le DB mutation üretiyordu. Detay artık DB'deki mevcut değerleri olduğu gibi
+    // döndürür; promote/demote yalnız WRITE uçlarında (recheck POST, gate CRUD) olur.
+    // (Not: product.status zaten yukarıdaki taze findUnique okumasından gelir.)
+    let templateReady = false;
+    let templateId = null;
+    let templateName = null;
+    let templateScope = null;
+    let templateSource = null;
+    let templateReason = null;
+
+    if (primaryMarketplaceId) {
+      const resolved = await resolveListingTemplate({
+        productId: product.id,
+        categoryId: product.category?.id ?? null,
+        marketplaceId: primaryMarketplaceId,
+      });
+      if (hasListingTemplate(resolved)) {
+        templateReady = true;
+        templateId = resolved.id;
+        templateName = resolved.name;
+        templateScope = resolved.source;
+        templateSource = resolved.source;
+        templateReason = null;
+      } else {
+        templateReady = false;
+        templateReason = 'TEMPLATE_NOT_FOUND';
+      }
+    } else {
+      // Pazaryeri baglami yok: kayitli templateMatch alanina guven (liste endpoint'i ile tutarli).
+      templateReady = product.templateMatch === true;
+      templateReason = 'NO_MARKETPLACE';
+    }
+
+    const authoritativeTemplateMatch = templateReady;
+    const hasPms = product.marketplaceStates.length > 0;
+
+    // UNIFIED READINESS: status=READY + 4/4 gate + PMS + salePrice
+    const ready = isReady({
+      status: product.status,
+      categoryMatch: product.categoryMatch,
+      brandMatch: product.brandMatch,
+      templateMatch: authoritativeTemplateMatch,
+      variantMatch: product.variantMatch,
+      variantStatus: product.variantStatus,
+    }) && hasPms && product.salePrice != null;
+
+    const missingReasons: string[] = [];
+    if (!product.categoryMatch) missingReasons.push('Kategori eşleştirilmemiş');
+    if (!product.brandMatch) missingReasons.push('Marka eşleştirilmemiş');
+    if (!isVariantComplete({ variantMatch: product.variantMatch, variantStatus: product.variantStatus })) missingReasons.push('Varyant eşleştirilmemiş');
+    if (!authoritativeTemplateMatch) missingReasons.push('Şablon eşleştirilmemiş');
+    if (!hasPms) missingReasons.push('Pazaryeri');
+    if (!product.images) missingReasons.push('Görsel eksik');
+    if (!product.barcode) missingReasons.push('Barkod eksik');
+    if (product.salePrice == null) missingReasons.push('Fiyat belirlenmemiş');
+    if (product.stock <= 0) missingReasons.push('Stokta ürün yok');
+    if (product.status === 'ERROR') missingReasons.push('Ürününde hata var');
+
+    // SEND-CENTER detay: liste endpoint'iyle AYNI canonical fiyat zinciri (double-VAT yok,
+    // resolveListingPrice == send gate motoru). Yeni hesaplama motoru YAZILMADI.
+    const activeMpsDetail = await prisma.marketplace.findMany({
+      where: { active: true },
+      select: { id: true, key: true, name: true, active: true, apiKey: true, apiSecret: true, apiUrl: true, apiStatus: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const rulesDetail = activeMpsDetail.length > 0 ? await prisma.marketplacePricingRule.findMany({
+      where: { active: true, marketplaceId: { in: activeMpsDetail.map(m => m.id) } },
+      orderBy: { minPrice: 'asc' },
+    }) : [];
+    const vatIncludedDetail = computeVatIncludedPurchasePrice(
+      { purchasePrice: product.purchasePrice, salePrice: product.salePrice, vatRate: null },
+      { vatRate: product.xmlSource?.vatRate ?? null, purchasePriceVatStatus: product.xmlSource?.purchasePriceVatStatus ?? 'dahil' },
+    );
+    const marketplacePricesDetail = activeMpsDetail.map((m) => {
+      const rulesForMp = rulesDetail
+        .filter(r => r.marketplaceId === m.id && (!r.xmlSourceId || r.xmlSourceId === product.xmlSourceId))
+        .map(r => ({ minPrice: r.minPrice, maxPrice: r.maxPrice, profitMargin: r.profitMargin, fixedAmount: r.fixedAmount, rounding: r.rounding ?? undefined }));
+      const ruleUsed = rulesForMp.find(r => !r.maxPrice || (product.salePrice != null && product.salePrice >= r.minPrice && product.salePrice <= r.maxPrice)) ?? rulesForMp[0] ?? null;
+      const res = resolveListingPrice(product.salePrice, rulesForMp);
+      const pmsRow = product.marketplaceStates.find(s => s.marketplaceId === m.id);
+      return {
+        marketplaceId: m.id,
+        key: m.key,
+        name: m.name,
+        operational: isMarketplaceOperational(m),
+        apiStatus: m.apiStatus,
+        price: res.status === 'OK' ? res.listingPrice : null,
+        status: res.status,
+        ruleDesc: describePricingRule(ruleUsed),
+        eligibility: pmsRow ? pmsRow.status : 'NO_STATE',
+        blockedReason: !isMarketplaceOperational(m) ? 'API bağlantısı yapılandırılmamış'
+          : (res.status !== 'OK' ? res.status
+            : (!product.categoryMatch ? 'Kategori eksik'
+              : (!product.brandMatch ? 'Marka eksik'
+                : (!isVariantComplete({ variantMatch: product.variantMatch, variantStatus: product.variantStatus }) ? 'Varyant eksik'
+                  : (pmsRow ? null : 'Pazaryeri state yok'))))),
+      };
+    });
+
+    res.json({
+      ...product,
+      isReady: ready,
+      hasPms,
+      missingReasons,
+      // PARITY FIX: Product Pool ile birebir aynı canonical değer (fallback dahil).
+      purchasePriceVatIncluded: vatIncludedDetail,
+      sourceVatRate: product.xmlSource?.vatRate ?? null,
+      sourceVatStatus: product.xmlSource?.purchasePriceVatStatus ?? null,
+      marketplacePrices: marketplacePricesDetail,
+      templateReady,
+      templateId,
+      templateName,
+      templateScope,
+      templateSource,
+      templateReason,
+    });
+  } catch (error) {
+    console.error('Error fetching product detail:', error);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch product' } });
   }
 });
 

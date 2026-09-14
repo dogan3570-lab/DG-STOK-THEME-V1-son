@@ -1,0 +1,17 @@
+[server] Serving frontend from: C:\PROJE 1\DG-STOK-THEME-V1\dist
+[server] listening on :4001
+[server] Web UI: http://localhost:4001
+[Prisma] Database connected successfully
+[server] admin user ready
+[Prisma] SQLite pragmas applied: WAL, busy_timeout=5000, synchronous=NORMAL
+[server] default marketplaces seeded
+[server] default listing templates ensured
+[server] default AI providers seeded
+[server] marketplace credentials migrated
+[server] AI provider keys migrated
+[server] OpenRouter model registry seeded
+[server] OpenRouter background refresh started
+[server] OmniRoute background refresh started
+[omniRouteOrchestrator] Availability supervisor: stub (not started)
+[server] AI Availability Supervisor started
+[server] Bootstrap completed, server should stay alive

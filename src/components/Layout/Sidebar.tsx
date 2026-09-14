@@ -4,6 +4,7 @@ interface Props {
   activePage: string;
   onPageChange: (key: string) => void;
   collapsed: boolean;
+  userRole: string;
 }
 
 const MENU_ITEMS = [
@@ -23,7 +24,15 @@ const MENU_ITEMS = [
   { key: 'ayar', label: 'Ayarlar', icon: '⚙️' },
 ];
 
-export default function Sidebar({ activePage, onPageChange, collapsed }: Props) {
+const ADMIN_ONLY_ITEMS = [
+  { key: 'musteriler', label: 'Müşteriler', icon: '👥' },
+  { key: 'automation', label: 'Stok Otomasyonu', icon: '⚙️' },
+];
+
+export default function Sidebar({ activePage, onPageChange, collapsed, userRole }: Props) {
+  const isAdminOrOperator = userRole === 'ADMIN' || userRole === 'OPERATOR';
+  const visibleItems = isAdminOrOperator ? [...MENU_ITEMS, ...ADMIN_ONLY_ITEMS] : MENU_ITEMS;
+
   return (
     <aside className={`${collapsed ? 'w-16' : 'w-60'} bg-white dark:bg-[#0f1520] border-r border-slate-200 dark:border-slate-800 flex flex-col transition-all duration-300`}>
       <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3">
@@ -33,7 +42,7 @@ export default function Sidebar({ activePage, onPageChange, collapsed }: Props) 
         </button>
       </div>
       <nav className="flex-1 overflow-y-auto p-2 space-y-1">
-        {MENU_ITEMS.map((item) => (
+        {visibleItems.map((item) => (
           <button
             key={item.key}
             onClick={() => onPageChange(item.key)}

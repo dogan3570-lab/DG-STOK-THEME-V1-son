@@ -65,6 +65,8 @@ export interface MatchDecision {
   candidates: Candidate[];
   mappingExists: boolean;
   isLeaf: boolean;
+  verified?: boolean;              // verifyHighConfidence sonucu
+  verifiedConfidence?: number;     // verifyHighConfidence confidence
 }
 
 // ==================== AĞAÇ YÜKLEME ====================
@@ -888,28 +890,23 @@ export async function classifyByAi(
   if (highDecisions.length > 0) {
     const verifyItems: VerifyItem[] = highDecisions.map((d) => ({
       productId: d.productId,
-      title: d.title,
-      supplierCategory: d.supplierCategory,
-      categoryName: d.categoryName as string,
-      fullPath: d.fullPath as string,
+      title: d.title || '',
+      supplierCategory: d.supplierCategory || '',
+      categoryName: d.categoryName || '',
+      fullPath: d.fullPath || '',
     }));
-    const verdicts = await verifyHighConfidence(verifyItems);
-    for (const d of highDecisions) {
-      const v = verdicts.get(d.productId);
-      const pass = v && v.verdict === true && v.confidence >= 0.9;
-      if (!pass) {
-        decisions.set(d.productId, {
-          ...d,
-          method: 'manual',
-          confidence: v ? Math.min(v.confidence, 0.84) : 0,
-          categoryId: null,
-          reason: `AI ikinci doğrulama reddetti: ${v?.reason || 'doğrulanamadı'}`,
-        });
-      } else {
-        decisions.set(d.productId, {
-          ...d,
-          reason: `${d.reason} · Doğrulama: ${v.reason}`,
-        });
+    const verified = await verifyHighConfidence(verifyItems);
+    for (const [pid, v] of verified) {
+      const dec = decisions.get(pid);
+      if (dec) {
+        dec.verified = v.verdict;
+        dec.verifiedConfidence = v.confidence;
+        if (!v.verdict) {
+          dec.categoryId = null;
+          dec.categoryName = null;
+          dec.fullPath = null;
+          dec.reason = `Verify red: ${v.reason}`;
+        }
       }
     }
   }

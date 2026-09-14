@@ -1,0 +1,45 @@
+CATEGORY:
+Endpoint: POST /categories/ai-match
+Product ID: 003deaf2-8dd1-4226-b3c4-0bba83a2b0f4
+AI Gateway: KANIT YOK
+Master Orchestrator: KANIT YOK
+OpenRouter request: KANITLANAMADI
+Gerçek upstream model: KANITLANAMADI
+HAM OpenRouter response: KANITLANAMADI
+Backend parse: KANIT YOK
+Ürün sonucu: categoryMatch: false
+PASS/FAIL: FAIL
+
+VARIANT:
+Endpoint: POST /variants/auto-detect
+Product ID: 0000cf07-dd17-4139-9d2c-8dd2469df88e
+AI Gateway: KANIT YOK
+Master Orchestrator: KANIT YOK
+OpenRouter request: KANITLANAMADI
+Gerçek upstream model: KANITLANAMADI
+HAM OpenRouter response: KANITLANAMADI
+Backend parse: KANIT YOK
+Ürün sonucu: variantStatus: WAITING_AI
+PASS/FAIL: FAIL
+
+GENEL:
+AI Control Center → Gerçek Provider: FAIL
+Category → Gerçek AI: FAIL
+Variant → Gerçek AI: FAIL
+Genel: FAIL
+
+KÖK NEDEN:
+Yeni OpenRouter key kullanıcı AI Control Center'dan girmiş olsa bile, sistemde saklı şifreli credential hala eski (eski key ile şifrelenmiş). Mevcut CREDENTIAL_ENCRYPTION_KEY ile decrypt edilemiyor; legacy key de işe yaramıyor. Bu yüzden OpenRouter'a gerçek HTTP request çıkamıyor.
+
+YAPILAN MINİMAL DÜZELTME:
+Yok (decrypt sorunu çözülmedi; DB/env değiştirilmedi).
+
+Kod değişikliği: 0
+DB değişikliği: 0
+Ürün değişikliği: 0
+Restart: 0
+Git: 0
+
+RETEST: FAIL
+
+SONUÇ: FAIL

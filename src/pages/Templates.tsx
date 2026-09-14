@@ -443,10 +443,10 @@ export default function TemplatesPage() {
 
  const activeCount = useMemo(() => templates.filter(t => t.active).length, [templates]);
  const mpCounts = useMemo(() => {
- const counts: Record<string, number> = {};
- for (const t of templates) { const k = t.marketplaceId || 'genel'; counts[k] = (counts[k] || 0) + 1; }
- return counts;
- }, [templates]);
+  const counts: Record<string, number> = {};
+  for (const t of templates) { const k = t.marketplace?.key || 'genel'; counts[k] = (counts[k] || 0) + 1; }
+  return counts;
+  }, [templates]);
 
  const editorTabs = [
  { key: 'temel', label: '📋 Temel' },
@@ -524,31 +524,57 @@ export default function TemplatesPage() {
  <div>Henüz şablon oluşturulmamış</div>
  <button onClick={() => openEditor(null)} className="mt-4 btn-ghost px-4 py-2">+ İlk V3 Şablonu Oluştur</button>
  </div>
- ) : (
- <div className="divide-y divide-">
- {templates.map(tpl => (
- <div key={tpl.id} className="flex items-center gap-4 p-4 hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
- <div className="text-2xl">{getMarketplaceIcon(tpl.marketplace?.key || null)}</div>
- <div className="flex-1 min-w-0">
- <div className="flex items-center gap-2">
- <span className="font-medium text-current">{tpl.name}</span>
- <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ tpl.active ? 'bg-primary/10 text-primary' : 'bg-primary/10 text-primary' }`}>{tpl.active ? 'Aktif' : 'Pasif'}</span>
- <span className="rounded bg-transparent px-1.5 py-0.5 text-xs text-current">V3</span>
- </div>
- <div className="text-xs text-current mt-0.5">
- {marketplaceNames[tpl.marketplaceId || ''] || 'Genel'} · Fiyat: {PRICE_SOURCES.find(p => p.value === tpl.priceSource)?.label || tpl.priceSource} · KDV: {VAT_MODES.find(v => v.value === tpl.vatMode)?.label || tpl.vatMode}
- </div>
- </div>
- <div className="flex gap-1 shrink-0">
- <button onClick={() => openEditor(tpl)} className="btn-ghost px-2.5 py-1.5" title="Düzenle">✏️</button>
- <button onClick={() => handleDuplicate(tpl.id)} className="btn-ghost px-2.5 py-1.5" title="Kopyala">📋</button>
- <button onClick={() => handleToggleActive(tpl.id, tpl.active)} className="btn-ghost px-2.5 py-1.5" title={tpl.active ? 'Pasif Yap' : 'Aktif Yap'}>
- {tpl.active ? '⏸️' : '▶️'}
- </button>
- <button onClick={() => handleDelete(tpl.id)} className="btn-ghost px-2.5 py-1.5" title="Sil">🗑️</button>
- </div>
- </div>
- ))}
+  ) : (
+ <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+  {templates.map(tpl => (
+   <div key={tpl.id} className={`rounded-xl border p-4 transition-all hover:shadow-md ${ tpl.active ? 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50' : 'border-slate-200/50 dark:border-slate-800/30 bg-slate-50/50 dark:bg-slate-900/30 opacity-60' }`}>
+    {/* ÜST: İsim + Durum */}
+    <div className="flex items-start justify-between mb-2">
+     <div className="flex items-center gap-2">
+      <span className="text-lg">{getMarketplaceIcon(tpl.marketplace?.key || null)}</span>
+      <div>
+       <div className="text-sm font-semibold text-current">{tpl.name}</div>
+       <span className="text-xs text-slate-500 dark:text-slate-400">{tpl.marketplace?.name || 'Genel'}</span>
+      </div>
+     </div>
+     <div className="flex items-center gap-1.5">
+      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary font-semibold">V3</span>
+      {tpl.active
+       ? <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">Aktif</span>
+       : <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">Pasif</span>
+      }
+     </div>
+    </div>
+
+    {/* DETAYLAR */}
+    <div className="space-y-1 mb-3">
+     <div className="flex items-center gap-2 text-xs">
+      <span className="text-slate-500 dark:text-slate-400 w-14 shrink-0">Fiyat</span>
+      <span className="text-current font-medium">{PRICE_SOURCES.find(p => p.value === tpl.priceSource)?.label || tpl.priceSource}</span>
+     </div>
+     <div className="flex items-center gap-2 text-xs">
+      <span className="text-slate-500 dark:text-slate-400 w-14 shrink-0">KDV</span>
+      <span className="text-current font-medium">{VAT_MODES.find(v => v.value === tpl.vatMode)?.label || tpl.vatMode}</span>
+     </div>
+     {tpl.commissionRate != null && (
+      <div className="flex items-center gap-2 text-xs">
+       <span className="text-slate-500 dark:text-slate-400 w-14 shrink-0">Komisyon</span>
+       <span className="text-current font-medium">%{tpl.commissionRate}</span>
+      </div>
+     )}
+    </div>
+
+    {/* İŞLEMLER */}
+    <div className="flex gap-1 border-t border-slate-100 dark:border-slate-800/50 pt-2">
+     <button onClick={() => openEditor(tpl)} className="flex-1 rounded-lg px-3 py-1.5 text-xs font-medium text-current hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">Düzenle</button>
+     <button onClick={() => handleDuplicate(tpl.id)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-current hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">Kopyala</button>
+     <button onClick={() => handleToggleActive(tpl.id, tpl.active)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-current hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" title={tpl.active ? 'Pasif Yap' : 'Aktif Yap'}>
+      {tpl.active ? '⏸' : '▶'}
+     </button>
+     <button onClick={() => handleDelete(tpl.id)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">Sil</button>
+    </div>
+   </div>
+  ))}
  </div>
  )}
  </div>
@@ -581,13 +607,22 @@ export default function TemplatesPage() {
  className="w-full select-theme px-3 py-2" required />
  </div>
  <div>
- <label className="block text-xs text-current mb-1">Pazaryeri</label>
- <select value={form.marketplaceId} onChange={(e) => setForm({ ...form, marketplaceId: e.target.value })}
- className="w-full select-theme px-3 py-2">
- <option value="">Genel (Tümü)</option>
- {MARKETPLACES.map(mp => <option key={mp.key} value={mp.key}>{mp.name}</option>)}
- </select>
- </div>
+      <label className="block text-xs text-current mb-1">Pazaryeri</label>
+      <select value={form.marketplaceId} onChange={(e) => setForm({ ...form, marketplaceId: e.target.value })}
+       className="w-full select-theme px-3 py-2">
+       <option value="">Genel (Tümü)</option>
+       {templates.length > 0 && templates[0]?.marketplace ? (
+        // DB'den gelen marketplace listesini kullan
+        Array.from(new Set(templates.map(t => t.marketplaceId).filter(Boolean))).map(mpId => {
+         const mp = templates.find(t => t.marketplaceId === mpId)?.marketplace;
+         return mp ? <option key={mp.id} value={mp.id}>{getMarketplaceIcon(mp.key)} {mp.name}</option> : null;
+        })
+       ) : (
+        // Fallback: hardcoded list
+        MARKETPLACES.map(mp => <option key={mp.key} value={mp.key}>{mp.name}</option>)
+       )}
+      </select>
+     </div>
  <div>
  <label className="block text-xs text-current mb-1">Kategori (opsiyonel)</label>
  <select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}

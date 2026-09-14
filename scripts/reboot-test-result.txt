@@ -1,23 +1,27 @@
 ﻿=========================================
 DG-STOK POST-REBOOT VERIFICATION
-Timestamp: 2026-09-10 12:55:23
+Timestamp: 2026-09-13 09:38:33
 =========================================
 
-PM2 daemon running : FAIL
-dg-stok ONLINE in PM2 : FAIL
-  PM2 output: 
-Backend :4000 LISTEN : FAIL
-Task Scheduler: DG-STOK Watchdog exists : PASS
-  State: Running
-  StartWhenAvailable: True
-  DisallowStartIfOnBatteries: False
-  ExecutionTimeLimit: PT0S
-Watchdog PS1 process running : FAIL
-OpenCode PowerShell still alive : FAIL
-Vite :5175 LISTEN : FAIL
-dgstok-autostart.vbs exists : PASS
+PM2 daemon running : PASS (PID: 10248)
+dg-stok ONLINE in PM2 : PASS 
+  Ôöé 0  Ôöé dg-stok    Ôöé default     Ôöé 1.0.0   Ôöé fork    Ôöé 7592     Ôöé 61s    Ôöé 0    Ôöé online    Ôöé 15.7%    Ôöé 57.4mb   Ôöé Dogan    Ôöé disabled Ôöé
+Backend :4000 LISTEN : FAIL 
+  PID: 7592
+Vite :5175 LISTEN : FAIL 
+Task Scheduler: DG-STOK Watchdog exists : PASS 
+  State: Ready
+  StartWhenAvailable=True : PASS 
+  DisallowStartIfOnBatteries=False : PASS 
+  StopIfGoingOnBatteries=False : PASS 
+  ExecutionTimeLimit=PT0S : PASS 
+Watchdog PS1 process running : FAIL 
+Startup: DG-STOK-Services.lnk exists : PASS 
+Autostart: dgstok-autostart.vbs exists : PASS 
+PM2 dump: dg-stok saved : PASS 
+Backend :4000 yanit : PASS (HTTP 200)
 
 =========================================
-TOTAL: 8 checks | PASS: 2 | FAIL: 6
-RESULT: 6 FAILURES
+TOTAL: 14 checks | PASS: 11 | FAIL: 3
+RESULT: 3 FAILURES
 =========================================

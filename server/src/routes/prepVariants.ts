@@ -78,12 +78,12 @@ router.get('/stats', requireAuth, async (req, res) => {
 });
 
 // ==================== 1B. DASHBOARD (XML + PAZARYERİ kapsamlı GERÇEK sayaçlar) ====================
-router.get('/dashboard', requireAuth, async (req, res) => {
+const handleDashboard = async (req: any, res: any) => {
   try {
-    const xmlSourceId = String(req.query?.xmlSourceId ?? '');
-    if (!xmlSourceId) return res.status(400).json({ ok: false, error: 'xmlSourceId zorunludur' });
+    const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : undefined;
     const marketplaceId = String(req.query?.marketplaceId ?? '');
-    const where: Record<string, unknown> = { xmlSourceId };
+    const where: Record<string, unknown> = { status: { not: 'DELETED' } };
+    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
 
     const [totalProducts, notRequired, autoMatched, waitingAi, manualReview, completed, hasVariant, analysisFailed] = await Promise.all([
       prisma.product.count({ where }),
@@ -100,7 +100,7 @@ router.get('/dashboard', requireAuth, async (req, res) => {
     const aiValidatedRows = await prisma.variantAnalysis.findMany({ where: { validationPassed: true, source: 'ai' }, select: { productId: true } });
     const aiValidatedIds = aiValidatedRows.map((a) => a.productId);
     const aiMatched = aiValidatedIds.length > 0
-      ? await prisma.product.count({ where: { id: { in: aiValidatedIds }, xmlSourceId } })
+      ? await prisma.product.count({ where: { id: { in: aiValidatedIds }, ...where } })
       : 0;
 
     // Manuel = GERÇEK MANUAL_REVIEW kaydı (kalan hesabı DEĞİL).
@@ -118,7 +118,10 @@ router.get('/dashboard', requireAuth, async (req, res) => {
     console.error('[variants] GET dashboard error:', error);
     res.status(500).json({ error: { code: 'DB_ERROR', message: 'Dashboard alınamadı' } });
   }
-});
+};
+
+router.get('/dashboard', requireAuth, handleDashboard);
+router.get('/stats/dashboard', requireAuth, handleDashboard);
 
 // ==================== 1C. PRODUCTS (ürün bazlı, gerçek varyant + durum + neden) ====================
 const REASON_TEXT: Record<string, string> = {
@@ -536,6 +539,7 @@ router.get('/screen', requireAuth, async (req, res) => {
   try {
     const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : undefined;
     const search = req.query?.search ? String(req.query.search) : undefined;
+    const status = req.query?.status ? String(req.query.status) : undefined;
     const page = Math.max(1, Number(req.query?.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query?.limit) || 50));
 
@@ -548,6 +552,9 @@ router.get('/screen', requireAuth, async (req, res) => {
         { sku: { contains: search } },
         { barcode: { contains: search } },
       ];
+    }
+    if (status) {
+      where.variantStatus = status;
     }
 
     const [items, total] = await Promise.all([
@@ -619,7 +626,8 @@ router.get('/screen', requireAuth, async (req, res) => {
       };
     });
 
-    return res.json({ ok: true, items: screenProducts, total });
+    const totalPages = Math.ceil(total / limit);
+    return res.json({ ok: true, items: screenProducts, total, page, limit, totalPages });
   } catch (error) {
     console.error('[variants] GET screen error:', error);
     return res.status(500).json({ ok: false, error: 'Istisna ekrani verileri alinamadi' });
@@ -972,6 +980,13 @@ router.post('/unmatch', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (
     const { productId } = req.body;
     if (!productId) return res.status(400).json({ ok: false, error: 'productId gerekli' });
 
+    const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true, variantMatch: true } });
+    if (!product) return res.status(404).json({ ok: false, error: 'Urun bulunamadi' });
+
+    if (!product.variantMatch) {
+      return res.json({ ok: true, message: 'Urun zaten eslesmemis durumda' });
+    }
+
     await prisma.$transaction(async (tx) => {
       await tx.product.update({ where: { id: productId }, data: { variantMatch: false, variantStatus: 'WAITING_AI' } });
       await tx.variant.deleteMany({ where: { productId } });
@@ -993,12 +1008,13 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, re
   try {
     const { name, value, productId } = req.body;
     if (!name || !value) return res.status(400).json({ ok: false, error: 'name ve value gerekli' });
-    const item = await prisma.variant.create({ data: { name, value, productId: productId || undefined } });
-    if (productId) {
-      await prisma.product.update({ where: { id: productId }, data: { variantMatch: true } });
-      queueReconcileProductGates(productId);
-    }
-    await prisma.auditLog.create({ data: { action: 'VARIANT_CREATE', entity: 'variant', details: `Varyant olusturuldu: ${name}:${value} ${productId ? `(urun: ${productId})` : ''}`, actorUserId: (req as any).actor?.userId || null } });
+    if (!productId || typeof productId !== 'string') return res.status(400).json({ ok: false, error: 'productId gerekli' });
+    const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true } });
+    if (!product) return res.status(404).json({ ok: false, error: 'Urun bulunamadi' });
+    const item = await prisma.variant.create({ data: { name, value, productId } });
+    await prisma.product.update({ where: { id: productId }, data: { variantMatch: true } });
+    queueReconcileProductGates(productId);
+    await prisma.auditLog.create({ data: { action: 'VARIANT_CREATE', entity: 'variant', details: `Varyant olusturuldu: ${name}:${value} (urun: ${productId})`, actorUserId: (req as any).actor?.userId || null } });
     return res.status(201).json({ item });
   } catch (error: any) {
     if (error?.code === 'P2002') return res.status(409).json({ ok: false, error: 'Bu varyant zaten mevcut' });
@@ -1214,7 +1230,8 @@ router.put('/:id', requireAuth, async (req, res) => {
     const item = await prisma.variant.update({ where: { id: String(req.params.id) }, data });
     await prisma.auditLog.create({ data: { action: 'VARIANT_UPDATE', entity: 'variant', details: `Varyant guncellendi: ${item.name}:${item.value}`, actorUserId: (req as any).actor?.userId || null } });
     return res.json({ item });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === 'P2025') return res.status(404).json({ ok: false, error: 'Varyant bulunamadi' });
     console.error('[variants] PUT /:id error:', error);
     return res.status(500).json({ error: { code: 'DB_ERROR', message: 'Varyant guncellenemedi' } });
   }

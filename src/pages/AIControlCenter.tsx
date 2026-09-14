@@ -1,6 +1,6 @@
-﻿// ==================== AI KONTROL MERKEZI V2.0 ====================
+// ==================== AI KONTROL MERKEZI V2.0 ====================
 // DG STOK V5.0 - Tum AI saglayicilarini tek noktadan yonet
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, Fragment } from 'react';
 import { apiFetch } from '../lib/api';
 import { showToast } from '../components/ui/Toast';
 
@@ -44,9 +44,9 @@ const PROVIDER_MODELS: Record<string, string[]> = {
 };
 
 const PROVIDER_LOGOS: Record<string, string> = {
- groq: '⚡', github: '🐙', gemini: '💎', openrouter: '🔀',
- deepseek: '🐋', openai: '🧠', mistral: '🌬️',
- together: '🤝', cerebras: '⚙️', fireworks: '🎆', mock: '🔧',
+ groq: '', github: '', gemini: '', openrouter: '',
+ deepseek: '', openai: '', mistral: '',
+ together: '', cerebras: '', fireworks: '', mock: '',
 };
 
 const PROVIDER_PAID: Record<string, boolean> = {
@@ -55,7 +55,7 @@ const PROVIDER_PAID: Record<string, boolean> = {
  together: true, cerebras: true, fireworks: true, mock: false,
 };
 
-function getLogo(name: string) { return PROVIDER_LOGOS[name] || '🤖'; }
+function getLogo(name: string) { return PROVIDER_LOGOS[name] || ''; }
 function isPaid(name: string) { return PROVIDER_PAID[name] ?? false; }
 function getModels(name: string) { return PROVIDER_MODELS[name] || []; }
 
@@ -106,7 +106,7 @@ export default function AIControlCenter() {
  if (editForm.model) body.model = editForm.model;
  if (editForm.apiKey.trim()) body.apiKey = editForm.apiKey.trim();
  const r = await apiFetch('/ai/providers', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
- if (r.ok) { showToast('success', `✅ ${providerName} ayarlari kaydedildi`); setEditProviderId(null); fetchAll(); }
+ if (r.ok) { showToast('success', ` ${providerName} ayarlari kaydedildi`); setEditProviderId(null); fetchAll(); }
  else showToast('error', r.error?.message || 'Kaydetme basarisiz');
  } finally { setSaving(false); }
  };
@@ -115,7 +115,7 @@ export default function AIControlCenter() {
  if (!confirm(`${name} provider'ini silmek istediginize emin misiniz?`)) return;
  try {
  const r = await apiFetch(`/ai/providers/${name}`, { method: 'DELETE' });
- if (r.ok) { showToast('success', `🗑️ ${name} silindi`); fetchAll(); }
+ if (r.ok) { showToast('success', ` ${name} silindi`); fetchAll(); }
  else showToast('error', r.error?.message || 'Silme basarisiz');
  } catch { showToast('error', 'Silme basarisiz'); }
  };
@@ -133,7 +133,7 @@ export default function AIControlCenter() {
  setTestResults(prev => ({ ...prev, [name]: null }));
  try {
  const r = await apiFetch('/ai/provider/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
- if (r.ok && r.data) { setTestResults(prev => ({ ...prev, [name]: r.data })); showToast('success', `✅ ${name} baglantisi basarili`); }
+ if (r.ok && r.data) { setTestResults(prev => ({ ...prev, [name]: r.data })); showToast('success', ` ${name} baglantisi basarili`); }
  else { setTestResults(prev => ({ ...prev, [name]: { error: r.error?.message || 'Test basarisiz' } })); showToast('error', r.error?.message || 'Test basarisiz'); }
  } catch { setTestResults(prev => ({ ...prev, [name]: { error: 'Test sirasinda hata olustu' } })); }
  finally { setTesting(null); fetchAll(); }
@@ -142,7 +142,7 @@ export default function AIControlCenter() {
  const handleSeedProviders = async () => {
  try {
  const r = await apiFetch('/ai/providers/seed', { method: 'POST' });
- if (r.ok) { showToast('success', '✅ Provider\'lar basariyla olusturuldu'); fetchAll(); }
+ if (r.ok) { showToast('success', ' Provider\'lar basariyla olusturuldu'); fetchAll(); }
  else showToast('error', r.error?.message || 'Seed basarisiz');
  } catch { showToast('error', 'Seed basarisiz'); }
  };
@@ -178,9 +178,9 @@ export default function AIControlCenter() {
  return (
  <div className="mx-auto max-w-7xl px-4 py-6">
  <div className="mb-6 flex items-center justify-between">
- <h1 className="text-[26px] font-extrabold tracking-tight" >🤖 AI Kontrol Merkezi V2</h1>
+ <h1 className="text-[26px] font-extrabold tracking-tight" > AI Kontrol Merkezi V2</h1>
  <button onClick={handleSeedProviders} className="btn-ghost px-4 py-2 text-sm font-bold transition-all shadow-md">
- 🔄 Seed Default Providers
+  Seed Default Providers
  </button>
  </div>
 
@@ -188,7 +188,7 @@ export default function AIControlCenter() {
  {(['providers', 'logs', 'stats'] as const).map(tab => (
  <button key={tab} onClick={() => setActiveTab(tab)}
  className={`rounded-xl px-6 py-2.5 text-sm font-bold transition-all ${activeTab === tab ? 'bg-primary text-white shadow-lg shadow-primary/25 ' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 '}`}>
- {tab === 'providers' && '🔌 Providerlar'}{tab === 'logs' && '📋 AI Loglari'}{tab === 'stats' && '📊 Istatistikler'}
+ {tab === 'providers' && ' Providerlar'}{tab === 'logs' && ' AI Loglari'}{tab === 'stats' && ' Istatistikler'}
  </button>
  ))}
  </div>
@@ -201,9 +201,9 @@ export default function AIControlCenter() {
  <div className="space-y-3">
  {providers.length === 0 ? (
  <div className="py-16 text-center rounded-2xl border bg-transparent" >
- <div className="text-4xl mb-3">🔌</div>
+ <div className="text-4xl mb-3"></div>
  <div className="text-sm font-semibold text-current mb-2">Henuz provider bulunamadi</div>
- <button onClick={handleSeedProviders} className="rounded-xl bg-transparent px-5 py-2 text-sm font-bold text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-all">🔄 Otomatik Olustur</button>
+ <button onClick={handleSeedProviders} className="rounded-xl bg-transparent px-5 py-2 text-sm font-bold text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-all"> Otomatik Olustur</button>
  </div>
  ) : (
  providers.map((p) => {
@@ -220,15 +220,15 @@ export default function AIControlCenter() {
  <div className="min-w-0">
  <div className="truncate font-bold text-sm flex items-center gap-1" >
  {p.name}
- {isPaid(p.name) && <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">💳</span>}
+ {isPaid(p.name) && <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full"></span>}
  </div>
  {p.lastCheck && <div className="text-[10px] text-current">Son kontrol: {new Date(p.lastCheck).toLocaleString('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>}
  </div>
  </div>
  <div className="w-20 text-center">
- {hasApiKey(p) ? <span className="text-[10px] font-bold text-current bg-transparent px-2 py-0.5 rounded-full">🔑 Var</span> : <span className="text-[10px] font-bold text-current bg-transparent px-2 py-0.5 rounded-full">🔒 Yok</span>}
+ {hasApiKey(p) ? <span className="text-[10px] font-bold text-current bg-transparent px-2 py-0.5 rounded-full"> Var</span> : <span className="text-[10px] font-bold text-current bg-transparent px-2 py-0.5 rounded-full"> Yok</span>}
  </div>
- <div className="w-40 min-w-0"><span className="text-xs font-medium text-current truncate block">{p.model || '—'}</span></div>
+ <div className="w-40 min-w-0"><span className="text-xs font-medium text-current truncate block">{p.model || ''}</span></div>
  <div className="w-14 text-center"><span className="text-xs font-bold text-current bg-transparent px-2 py-0.5 rounded-full">#{p.priority}</span></div>
  <div className="w-20 flex justify-center">
  <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold">
@@ -236,25 +236,25 @@ export default function AIControlCenter() {
  </span>
  </div>
  <div className="w-28 min-w-0">
- <div className="mb-0.5 flex justify-between text-[10px]"><span className="text-slate-700 dark:text-slate-300">{p.usedTokens.toLocaleString('tr-TR')}</span><span className="text-slate-700 dark:text-slate-300">{p.dailyTokenLimit > 0 ? `${quotaPercent(p)}%` : '∞'}</span></div>
+ <div className="mb-0.5 flex justify-between text-[10px]"><span className="text-slate-700 dark:text-slate-300">{p.usedTokens.toLocaleString('tr-TR')}</span><span className="text-slate-700 dark:text-slate-300">{p.dailyTokenLimit > 0 ? `${quotaPercent(p)}%` : ''}</span></div>
  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, quotaPercent(p))}%` }} /></div>
  </div>
  <div className="flex-1" />
  <div className="flex items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
- <button onClick={() => handleTestProvider(p.name)} disabled={isTesting || !hasApiKey(p)} title={hasApiKey(p) ? 'Baglantiyi Test Et' : 'Once API Key girin'} className="rounded-lg px-2.5 py-1.5 text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 transition-all">{isTesting ? '⏳' : '🔍 Test'}</button>
+ <button onClick={() => handleTestProvider(p.name)} disabled={isTesting || !hasApiKey(p)} title={hasApiKey(p) ? 'Baglantiyi Test Et' : 'Once API Key girin'} className="rounded-lg px-2.5 py-1.5 text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 transition-all">{isTesting ? '' : ' Test'}</button>
  <button onClick={() => handleToggleProvider(p.name)} className={`rounded-lg px-2.5 py-1.5 text-[11px] font-bold transition-all ${p.enabled ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 ' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 '}`}>{p.enabled ? 'Pasif' : 'Aktif'}</button>
- {p.name !== 'mock' && <button onClick={() => handleDeleteProvider(p.name)} className="rounded-lg px-2 py-1.5 text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all">🗑️</button>}
+ {p.name !== 'mock' && <button onClick={() => handleDeleteProvider(p.name)} className="rounded-lg px-2 py-1.5 text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"></button>}
  </div>
  </div>
 
  {testResult && (
  <div className={`mx-5 mb-1 p-3 rounded-lg text-xs ${testResult.error ? 'bg-transparent border border-slate-200 dark:border-slate-800/60 ' : 'bg-transparent border border-slate-200 dark:border-slate-800/60 '}`}>
- {testResult.error ? <span className="text-slate-700 dark:text-slate-300">❌ {testResult.error}</span> : (
+ {testResult.error ? <span className="text-slate-700 dark:text-slate-300"> {testResult.error}</span> : (
  <div className="flex flex-wrap gap-4">
- <span className="text-current font-bold">✅ {testResult.data?.message || 'API OK'}</span>
- {testResult.data?.latency && <span className="text-slate-700 dark:text-slate-300">⚡ {testResult.data.latency}</span>}
- {testResult.data?.model && <span className="text-slate-700 dark:text-slate-300">🤖 Model: {testResult.data.model}</span>}
- {testResult.data?.tokens !== undefined && <span className="text-slate-700 dark:text-slate-300">🔢 {testResult.data.tokens} tokens</span>}
+ <span className="text-current font-bold"> {testResult.data?.message || 'API OK'}</span>
+ {testResult.data?.latency && <span className="text-slate-700 dark:text-slate-300"> {testResult.data.latency}</span>}
+ {testResult.data?.model && <span className="text-slate-700 dark:text-slate-300"> Model: {testResult.data.model}</span>}
+ {testResult.data?.tokens !== undefined && <span className="text-slate-700 dark:text-slate-300"> {testResult.data.tokens} tokens</span>}
  </div>
  )}
  </div>
@@ -268,7 +268,7 @@ export default function AIControlCenter() {
  <div className="relative">
  <input type={showKey[p.name] ? 'text' : 'password'} value={editForm.apiKey} onChange={e => setEditForm(f => ({ ...f, apiKey: e.target.value }))} placeholder={p.name === 'mock' ? '(dahili)' : `${p.name.toUpperCase()}_API_KEY...`} disabled={p.name === 'mock'}
  className="w-full rounded-lg border bg-transparent px-3 py-2 pr-10 text-sm outline-none focus:border-current" />
- <button type="button" onClick={() => setShowKey(s => ({ ...s, [p.name]: !s[p.name] }))} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-current hover:text-text">👁</button>
+ <button type="button" onClick={() => setShowKey(s => ({ ...s, [p.name]: !s[p.name] }))} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-current hover:text-text"></button>
  </div>
  </div>
  <div>
@@ -288,7 +288,7 @@ export default function AIControlCenter() {
  <label className="mb-1 block text-[10px] font-bold text-current uppercase">Durum</label>
  <select value={editForm.enabled ? 'true' : 'false'} onChange={e => setEditForm(f => ({ ...f, enabled: e.target.value === 'true' }))}
  className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm outline-none focus:border-current" >
- <option value="true">✅ Aktif</option><option value="false">❌ Pasif</option>
+ <option value="true"> Aktif</option><option value="false"> Pasif</option>
  </select>
  </div>
  </div>
@@ -296,7 +296,7 @@ export default function AIControlCenter() {
  <span className="text-[10px] text-current">{p.updatedAt && `Son guncelleme: ${new Date(p.updatedAt).toLocaleString('tr-TR')}`}</span>
  <div className="flex items-center gap-2">
  <button type="button" onClick={() => setEditProviderId(null)} className="rounded-lg px-4 py-2 text-xs font-semibold text-current hover:bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">Vazgec</button>
- <button type="button" onClick={() => handleSaveProvider(p.name)} disabled={saving} className="rounded-lg bg-transparent px-5 py-2 text-xs font-bold text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 disabled:opacity-50 transition-colors">{saving ? '⏳ Kaydediliyor...' : '💾 Kaydet'}</button>
+ <button type="button" onClick={() => handleSaveProvider(p.name)} disabled={saving} className="rounded-lg bg-transparent px-5 py-2 text-xs font-bold text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 disabled:opacity-50 transition-colors">{saving ? ' Kaydediliyor...' : ' Kaydet'}</button>
  </div>
  </div>
  </div>
@@ -318,10 +318,10 @@ export default function AIControlCenter() {
  <span className="text-slate-700 dark:text-slate-300">{new Date(log.createdAt).toLocaleString('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
  <span className="truncate font-semibold" >{getLogo(log.provider)} {log.provider}</span>
  <span className="truncate text-current font-medium">{log.module}</span>
- <span className="truncate text-current text-[10px]">{log.error || '—'}</span>
+ <span className="truncate text-current text-[10px]">{log.error || ''}</span>
  <span className="text-center text-current">{log.duration}ms</span>
  <span className="text-center text-current">{log.totalTokens}</span>
- <span className="flex justify-center"><span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${log.success ? 'bg-primary/10 text-primary ' : 'bg-primary/10 text-primary '}`}>{log.success ? '✅' : '❌'}</span></span>
+ <span className="flex justify-center"><span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${log.success ? 'bg-primary/10 text-primary ' : 'bg-primary/10 text-primary '}`}>{log.success ? '' : ''}</span></span>
  </div>
  ))}
  {logs.length === 0 && <div className="py-16 text-center text-sm text-current">Henuz AI cagri log'u bulunamadi.</div>}
@@ -329,8 +329,8 @@ export default function AIControlCenter() {
  <div className="flex items-center justify-between border-t px-5 py-3" >
  <span className="text-xs text-current">Toplam: {logTotal} kayit | Sayfa {logPage}/{Math.max(1, Math.ceil(logTotal / 20))}</span>
  <div className="flex gap-1">
- <button onClick={() => setLogPage(p => Math.max(1, p - 1))} disabled={logPage <= 1} className="rounded-md px-3 py-1 text-xs font-bold text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 disabled:opacity-30">◀ Onceki</button>
- <button onClick={() => setLogPage(p => p + 1)} disabled={logPage >= Math.ceil(logTotal / 20)} className="rounded-md px-3 py-1 text-xs font-bold text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 disabled:opacity-30">Sonraki ▶</button>
+ <button onClick={() => setLogPage(p => Math.max(1, p - 1))} disabled={logPage <= 1} className="rounded-md px-3 py-1 text-xs font-bold text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 disabled:opacity-30"> Onceki</button>
+ <button onClick={() => setLogPage(p => p + 1)} disabled={logPage >= Math.ceil(logTotal / 20)} className="rounded-md px-3 py-1 text-xs font-bold text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 disabled:opacity-30">Sonraki </button>
  </div>
  </div>
  )}
@@ -342,7 +342,7 @@ export default function AIControlCenter() {
  <div className="flex justify-center gap-2">
  {(['daily', 'weekly', 'monthly'] as const).map(period => (
  <button key={period} onClick={() => setStatsPeriod(period)} className={`rounded-xl px-4 py-1.5 text-xs font-bold transition-all ${statsPeriod === period ? 'bg-primary/10 text-primary' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 '}`}>
- {period === 'daily' && '📅 Gunluk'}{period === 'weekly' && '📊 Haftalik'}{period === 'monthly' && '🗓️ Aylik'}
+ {period === 'daily' && ' Gunluk'}{period === 'weekly' && ' Haftalik'}{period === 'monthly' && ' Aylik'}
  </button>
  ))}
  </div>
@@ -376,7 +376,7 @@ export default function AIControlCenter() {
  <div className="flex items-center gap-3">
  <span className="w-24 truncate text-xs font-semibold" >{getLogo(name)} {name}</span>
  <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className="h-full rounded-full bg-transparent" style={{ width: `${Math.round((data.requests / maxReq) * 100)}%` }} /></div>
- <span className="w-32 text-right text-xs text-current">{data.requests} istek | {data.success} ✅ | {data.error} ❌ | {data.avgDuration}ms</span>
+ <span className="w-32 text-right text-xs text-current">{data.requests} istek | {data.success}  | {data.error}  | {data.avgDuration}ms</span>
  </div>
  </div>
  );
@@ -384,12 +384,13 @@ export default function AIControlCenter() {
  </div>
  </div>
  )}
- </>
- ) : <div className="py-16 text-center text-sm text-current">Istatistikler yukleniyor...</div>}
- </div>
- )}
- </>
- )}
- </div>
- );
+  </>
+   ) : <div className="py-16 text-center text-sm text-current">Istatistikler yukleniyor...</div>}
+   </div>
+  )}
+   </>
+    )}
+   </div>
+   )
 }
+

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { apiFetch } from '../lib/api';
 
 // ==================== TYPES ====================
@@ -163,8 +163,25 @@ export default function XmlSources() {
  const [productPagination, setProductPagination] = useState<Pagination>({ page: 1, limit: 50, total: 0, totalPages: 0 });
  const [selectedProduct, setSelectedProduct] = useState<ProductItem | null>(null);
  const [showDetailModal, setShowDetailModal] = useState(false);
- const [selectedSourceHistory, setSelectedSourceHistory] = useState<XmlImportRun[]>([]);
- const [showHistory, setShowHistory] = useState(false);
+  const [selectedSourceHistory, setSelectedSourceHistory] = useState<XmlImportRun[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Ürün düzenleme state (detay modalı düzenleme moduna dönüştürüldü)
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [editForm, setEditForm] = useState({
+    title: '',
+    sku: '',
+    barcode: '',
+    stock: 0,
+    minStock: 0,
+    purchasePrice: null as number | null,
+    salePrice: null as number | null,
+    vatRate: null as number | null,
+    description: '',
+    categoryId: '',
+    brandId: '',
+    status: 'XML',
+  });
 
  // Field mapping state
  const [xmlFields, setXmlFields] = useState<string[]>([]);
@@ -564,20 +581,118 @@ export default function XmlSources() {
  return product.images.split(',').filter(img => img.trim().length > 0);
  }
 
- async function openProductDetail(product: ProductItem) {
- try {
- const response = await apiFetch(`/products/${product.id}`);
- if (response.ok) {
- const data = await response.json();
- setSelectedProduct(data);
- } else {
- setSelectedProduct(product);
- }
- } catch {
- setSelectedProduct(product);
- }
- setShowDetailModal(true);
- }
+  function fillEditForm(p: ProductItem) {
+    setEditForm({
+      title: p.title || '',
+      sku: p.sku || '',
+      barcode: p.barcode || '',
+      stock: p.stock ?? 0,
+      minStock: p.minStock ?? 0,
+      purchasePrice: p.purchasePrice ?? null,
+      salePrice: p.salePrice ?? null,
+      vatRate: p.vatRate ?? null,
+      description: (p as any).description || '',
+      categoryId: p.categoryId || '',
+      brandId: p.brandId || '',
+      status: p.status || 'XML',
+    });
+  }
+
+  async function openProductDetail(product: ProductItem) {
+  try {
+  const response = await apiFetch(`/products/${product.id}`);
+  if (response.ok) {
+  const data = await response.json();
+  setSelectedProduct(data);
+  fillEditForm(data);
+  } else {
+  setSelectedProduct(product);
+  fillEditForm(product);
+  }
+  } catch {
+  setSelectedProduct(product);
+  fillEditForm(product);
+  }
+  setShowDetailModal(true);
+  }
+
+  async function handleSaveProduct() {
+    if (!selectedProduct) return;
+    if (!editForm.title.trim()) {
+      setMessage('❌ Ürün adı zorunludur');
+      return;
+    }
+    setSavingProduct(true);
+    try {
+      const payload: Record<string, unknown> = {
+        title: editForm.title,
+        stock: editForm.stock,
+        minStock: editForm.minStock,
+      };
+      if (editForm.sku) payload.sku = editForm.sku;
+      if (editForm.barcode) payload.barcode = editForm.barcode;
+      if (editForm.purchasePrice !== null) payload.purchasePrice = editForm.purchasePrice;
+      if (editForm.salePrice !== null) payload.salePrice = editForm.salePrice;
+      if (editForm.vatRate !== null) payload.vatRate = editForm.vatRate;
+      if (editForm.description) payload.description = editForm.description;
+      if (editForm.categoryId) payload.categoryId = editForm.categoryId;
+      if (editForm.brandId) payload.brandId = editForm.brandId;
+      if (editForm.status) payload.status = editForm.status;
+
+      const response = await apiFetch(`/products/${selectedProduct.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setSelectedProduct(data.item);
+        setSourceProducts(prev => prev.map(p => p.id === data.item.id ? { ...p, ...data.item } : p));
+        setMessage('✅ Ürün başarıyla güncellendi');
+        setTimeout(() => setMessage(''), 3000);
+      } else {
+        const err = await response.json().catch(() => null);
+        setMessage(`❌ ${err?.error?.message || 'Güncelleme başarısız'}`);
+      }
+    } catch (error) {
+      console.error('Ürün güncelleme hatası:', error);
+      setMessage('❌ Ağ hatası');
+    } finally {
+      setSavingProduct(false);
+    }
+  }
+
+  async function handleRemoveImage(imageUrl: string) {
+    if (!selectedProduct) return;
+    if (!confirm('Bu görseli silmek istediğinizden emin misiniz?')) return;
+    setSavingProduct(true);
+    try {
+      const currentImages = getImageList(selectedProduct);
+      const updatedImages = currentImages.filter(img => img !== imageUrl);
+      const response = await apiFetch(`/products/${selectedProduct.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ images: updatedImages.join(',') }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setSelectedProduct(data.item);
+        setSourceProducts(prev => prev.map(p => p.id === data.item.id ? { ...p, images: data.item.images } : p));
+        setMessage('✅ Görsel başarıyla silindi');
+        setTimeout(() => setMessage(''), 3000);
+      } else {
+        const err = await response.json().catch(() => null);
+        setMessage(`❌ ${err?.error?.message || 'Görsel silme başarısız'}`);
+      }
+    } catch (error) {
+      console.error('Görsel silme hatası:', error);
+      setMessage('❌ Ağ hatası');
+    } finally {
+      setSavingProduct(false);
+    }
+  }
 
  // ==================== RENDER ====================
  return (
@@ -881,9 +996,7 @@ export default function XmlSources() {
  </>
  )}
 
- {/* ==================== ALAN EŞLEŞTİRME VE FİYATLANDIRMA KALDIRILDI ==================== */}
-
- {/* ==================== MODALS ==================== */}
+  {/* ==================== MODALS ==================== */}
 
  {/* Add/Edit Source Modal */}
  {showModal && (
@@ -994,124 +1107,243 @@ export default function XmlSources() {
  </div>
  )}
 
- {/* Product Detail Modal */}
- {showDetailModal && selectedProduct && (
- <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowDetailModal(false)}>
- <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
- <div className="mb-4 flex items-center justify-between">
- <h3 className="text-lg font-semibold text-current">{selectedProduct.title || selectedProduct.xmlKey}</h3>
- <button type="button" onClick={() => setShowDetailModal(false)} className="rounded-lg p-2 text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 hover:text-current transition-colors">✕</button>
- </div>
+  {/* Product Detail/Edit Modal */}
+  {showDetailModal && selectedProduct && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowDetailModal(false)}>
+  <div className="w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+  <div className="mb-4 flex items-center justify-between">
+  <h3 className="text-lg font-semibold text-current">Ürün Düzenle — {selectedProduct.title || selectedProduct.xmlKey}</h3>
+  <button type="button" onClick={() => setShowDetailModal(false)} className="rounded-lg p-2 text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 hover:text-current transition-colors">✕</button>
+  </div>
 
- <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
- {/* Images */}
- <div>
- <h4 className="text-sm font-medium text-current mb-2">Görseller</h4>
- <div className="grid grid-cols-2 gap-2">
- {getImageList(selectedProduct).length > 0 ? (
- getImageList(selectedProduct).map((img, i) => (
- <img key={i} src={img} alt={`Görsel ${i + 1}`} className="rounded-lg border border-slate-200 dark:border-slate-800/60 object-cover h-40 w-full" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
- ))
- ) : (
- <div className="col-span-2 flex items-center justify-center h-40 rounded-lg bg-primary/10 text-primary">Görsel Yok</div>
- )}
- </div>
- </div>
+  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+  {/* Images Section */}
+  <div>
+  <h4 className="text-sm font-medium text-current mb-2">Görseller ({getImageList(selectedProduct).length})</h4>
+  <div className="grid grid-cols-1 gap-2">
+  {getImageList(selectedProduct).length > 0 ? (
+  getImageList(selectedProduct).map((img, i) => (
+  <div key={i} className="relative group">
+  <img src={img} alt={`Görsel ${i + 1}`} className="rounded-lg border border-slate-200 dark:border-slate-800/60 object-cover h-32 w-full" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+  <button
+  type="button"
+  onClick={() => handleRemoveImage(img)}
+  disabled={savingProduct}
+  className="absolute top-1 right-1 bg-red-500 text-white rounded-full px-2 py-0.5 text-xs opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+  title="Görseli Sil"
+  >
+  ✕
+  </button>
+  </div>
+  ))
+  ) : (
+  <div className="flex items-center justify-center h-32 rounded-lg bg-primary/10 text-primary text-sm">Görsel Yok</div>
+  )}
+  </div>
+  <div className="mt-3">
+  <button
+  type="button"
+  disabled
+  className="w-full rounded-lg border border-dashed border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-current opacity-50 cursor-not-allowed"
+  title="Bu özellik hazırlanıyor"
+  >
+  + Görsel Ekle (hazırlanıyor)
+  </button>
+  </div>
+  </div>
 
- {/* Details */}
- <div className="space-y-4">
- <div className="grid grid-cols-2 gap-3">
- <div>
- <div className="text-xs text-current">XML Key</div>
- <div className="text-sm text-current font-mono">{selectedProduct.xmlKey}</div>
- </div>
- <div>
- <div className="text-xs text-current">SKU</div>
- <div className="text-sm text-current">{selectedProduct.sku || '-'}</div>
- </div>
- <div>
- <div className="text-xs text-current">Barkod</div>
- <div className="text-sm text-current">{selectedProduct.barcode || '-'}</div>
- </div>
- <div>
- <div className="text-xs text-current">Durum</div>
- <div className="text-sm">{getStatusBadge(selectedProduct.status)}</div>
- </div>
- <div>
- <div className="text-xs text-current">Stok</div>
- <div className="text-sm text-current">{selectedProduct.stock}</div>
- </div>
- <div>
- <div className="text-xs text-current">Min. Stok</div>
- <div className="text-sm text-current">{selectedProduct.minStock}</div>
- </div>
- <div>
- <div className="text-xs text-current">Alış Fiyatı</div>
- <div className="text-sm text-current">{formatPrice(selectedProduct.purchasePrice)}</div>
- </div>
- <div>
- <div className="text-xs text-current">Satış Fiyatı</div>
- <div className="text-sm text-current">{formatPrice(selectedProduct.salePrice)}</div>
- </div>
- <div>
- <div className="text-xs text-current">KDV Oranı</div>
- <div className="text-sm text-current">%{selectedProduct.vatRate ?? '-'}</div>
- </div>
- <div>
- <div className="text-xs text-current">Kategori</div>
- <div className="text-sm text-current">{selectedProduct.category?.name || '-'}</div>
- </div>
- <div>
- <div className="text-xs text-current">Marka</div>
- <div className="text-sm text-current">{selectedProduct.brand?.name || '-'}</div>
- </div>
- <div>
- <div className="text-xs text-current">Oluşturma</div>
- <div className="text-sm text-current">{new Date(selectedProduct.createdAt).toLocaleString('tr-TR')}</div>
- </div>
- </div>
+  {/* Editable Fields */}
+  <div className="md:col-span-2 space-y-4">
+  <div className="grid grid-cols-2 gap-3">
+  <div className="col-span-2">
+  <label className="block text-xs font-medium text-current mb-1">Ürün Adı *</label>
+  <input
+  type="text"
+  value={editForm.title}
+  onChange={(e) => setEditForm({...editForm, title: e.target.value})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none"
+  placeholder="Ürün adı"
+  />
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">XML Key (değiştirilemez)</label>
+  <div className="text-sm text-current font-mono bg-slate-50 dark:bg-slate-800/60 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800/60 truncate" title={selectedProduct.xmlKey}>
+  {selectedProduct.xmlKey}
+  </div>
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">SKU</label>
+  <input
+  type="text"
+  value={editForm.sku}
+  onChange={(e) => setEditForm({...editForm, sku: e.target.value})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none"
+  placeholder="SKU"
+  />
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">Barkod</label>
+  <input
+  type="text"
+  value={editForm.barcode}
+  onChange={(e) => setEditForm({...editForm, barcode: e.target.value})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none"
+  placeholder="Barkod"
+  />
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">Durum</label>
+  <select
+  value={editForm.status}
+  onChange={(e) => setEditForm({...editForm, status: e.target.value})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none"
+  >
+  <option value="XML">XML</option>
+  <option value="READY">Hazır</option>
+  <option value="PASSIVE">Pasif</option>
+  <option value="ERROR">Hata</option>
+  <option value="DRAFT">Taslak</option>
+  <option value="SENT">Gönderildi</option>
+  </select>
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">Stok</label>
+  <input
+  type="number"
+  value={editForm.stock}
+  onChange={(e) => setEditForm({...editForm, stock: parseInt(e.target.value) || 0})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none"
+  placeholder="Stok"
+  />
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">Min. Stok</label>
+  <input
+  type="number"
+  value={editForm.minStock}
+  onChange={(e) => setEditForm({...editForm, minStock: parseInt(e.target.value) || 0})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none"
+  placeholder="Min stok"
+  />
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">Alış Fiyatı</label>
+  <input
+  type="number"
+  step="0.01"
+  value={editForm.purchasePrice ?? ''}
+  onChange={(e) => setEditForm({...editForm, purchasePrice: e.target.value === '' ? null : parseFloat(e.target.value)})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none"
+  placeholder="Alış fiyatı"
+  />
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">Satış Fiyatı</label>
+  <input
+  type="number"
+  step="0.01"
+  value={editForm.salePrice ?? ''}
+  onChange={(e) => setEditForm({...editForm, salePrice: e.target.value === '' ? null : parseFloat(e.target.value)})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none"
+  placeholder="Satış fiyatı"
+  />
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">KDV Oranı (%)</label>
+  <input
+  type="number"
+  step="0.1"
+  value={editForm.vatRate ?? ''}
+  onChange={(e) => setEditForm({...editForm, vatRate: e.target.value === '' ? null : parseFloat(e.target.value)})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none"
+  placeholder="KDV oranı"
+  />
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">Kategori (mevcut: {selectedProduct.category?.name || 'yok'})</label>
+  <input
+  type="text"
+  value={editForm.categoryId}
+  onChange={(e) => setEditForm({...editForm, categoryId: e.target.value})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none font-mono text-xs"
+  placeholder="Kategori ID (opsiyonel)"
+  />
+  </div>
+  <div>
+  <label className="block text-xs font-medium text-current mb-1">Marka (mevcut: {selectedProduct.brand?.name || 'yok'})</label>
+  <input
+  type="text"
+  value={editForm.brandId}
+  onChange={(e) => setEditForm({...editForm, brandId: e.target.value})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none font-mono text-xs"
+  placeholder="Marka ID (opsiyonel)"
+  />
+  </div>
+  <div className="col-span-2">
+  <label className="block text-xs font-medium text-current mb-1">Açıklama</label>
+  <textarea
+  value={editForm.description}
+  onChange={(e) => setEditForm({...editForm, description: e.target.value})}
+  className="w-full rounded-lg border border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40 px-3 py-2 text-sm text-current focus:outline-none h-20"
+  placeholder="Açıklama"
+  />
+  </div>
+  </div>
 
- {/* Eşleştirme Durumları */}
- <div className="flex flex-wrap gap-2">
- <span className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProduct.categoryMatch ? 'bg-primary/10 text-primary' : 'bg-primary/10 text-primary'}`}>
- {selectedProduct.categoryMatch ? '✅ Kategori Eşleşti' : '❌ Kategori Eşleşmedi'}
- </span>
- <span className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProduct.brandMatch ? 'bg-primary/10 text-primary' : 'bg-primary/10 text-primary'}`}>
- {selectedProduct.brandMatch ? '✅ Marka Eşleşti' : '❌ Marka Eşleşmedi'}
- </span>
- <span className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProduct.variantMatch ? 'bg-primary/10 text-primary' : 'bg-primary/10 text-primary'}`}>
- {selectedProduct.variantMatch ? '✅ Varyant Eşleşti' : '❌ Varyant Eşleşmedi'}
- </span>
- <span className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProduct.templateMatch ? 'bg-primary/10 text-primary' : 'bg-primary/10 text-primary'}`}>
- {selectedProduct.templateMatch ? '✅ Şablon Eşleşti' : '❌ Şablon Eşleşmedi'}
- </span>
- </div>
+  {/* Eşleştirme Durumları (salt-okunur) */}
+  <div className="flex flex-wrap gap-2">
+  <span className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProduct.categoryMatch ? 'bg-primary/10 text-primary' : 'bg-primary/10 text-primary'}`}>
+  {selectedProduct.categoryMatch ? '✅ Kategori Eşleşti' : '❌ Kategori Eşleşmedi'}
+  </span>
+  <span className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProduct.brandMatch ? 'bg-primary/10 text-primary' : 'bg-primary/10 text-primary'}`}>
+  {selectedProduct.brandMatch ? '✅ Marka Eşleşti' : '❌ Marka Eşleşmedi'}
+  </span>
+  <span className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProduct.variantMatch ? 'bg-primary/10 text-primary' : 'bg-primary/10 text-primary'}`}>
+  {selectedProduct.variantMatch ? '✅ Varyant Eşleşti' : '❌ Varyant Eşleşmedi'}
+  </span>
+  <span className={`rounded-full px-2 py-1 text-xs font-medium ${selectedProduct.templateMatch ? 'bg-primary/10 text-primary' : 'bg-primary/10 text-primary'}`}>
+  {selectedProduct.templateMatch ? '✅ Şablon Eşleşti' : '❌ Şablon Eşleşmedi'}
+  </span>
+  </div>
 
- {/* Varyantlar */}
- {selectedProduct.variants && selectedProduct.variants.length > 0 && (
- <div>
- <div className="text-xs text-current mb-1">Varyantlar</div>
- <div className="flex flex-wrap gap-2">
- {selectedProduct.variants.map((v) => (
- <span key={v.id} className="rounded-lg bg-transparent px-2 py-1 text-xs text-current">
- {v.name}: {v.value}
- </span>
- ))}
- </div>
- </div>
- )}
+  {/* Varyantlar (salt-okunur) */}
+  {selectedProduct.variants && selectedProduct.variants.length > 0 && (
+  <div>
+  <div className="text-xs text-current mb-1">Varyantlar</div>
+  <div className="flex flex-wrap gap-2">
+  {selectedProduct.variants.map((v) => (
+  <span key={v.id} className="rounded-lg bg-transparent px-2 py-1 text-xs text-current">
+  {v.name}: {v.value}
+  </span>
+  ))}
+  </div>
+  </div>
+  )}
 
- {/* Hata Mesajı */}
- {selectedProduct.errorMessage && (
- <div className="rounded-lg bg-transparent p-3 text-sm text-current">
- {selectedProduct.errorMessage}
- </div>
- )}
- </div>
- </div>
- </div>
- </div>
- )}
+  {/* Kaydet / İptal */}
+  <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200 dark:border-slate-800/60">
+  <button
+  type="button"
+  onClick={() => setShowDetailModal(false)}
+  disabled={savingProduct}
+  className="rounded-lg border border-slate-200 dark:border-slate-800/60 px-4 py-2 text-sm text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors disabled:opacity-50"
+  >
+  İptal
+  </button>
+  <button
+  type="button"
+  onClick={handleSaveProduct}
+  disabled={savingProduct}
+  className="btn-ghost px-6 py-2 transition-colors disabled:opacity-50"
+  >
+  {savingProduct ? '⏳ Kaydediliyor...' : 'Kaydet'}
+  </button>
+  </div>
+  </div>
+  </div>
+  </div>
+  </div>
+  )}
 
  {/* History Modal */}
  {showHistory && (

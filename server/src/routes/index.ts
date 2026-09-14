@@ -22,6 +22,10 @@ import trendyolMappingRoutes from './trendyolMapping.ts';
 import stockAutomationRoutes from './stockAutomation.ts';
 import categoryMatchEngineRoutes from './categoryMatchEngine.ts';
 import categoryCoreV2Routes from './categoryCoreV2.ts';
+import financeRoutes from './finance.ts';
+import usersRoutes from './users.ts';
+import auditLogsRoutes from './auditLogs.ts';
+import notificationsRoutes from './notifications.ts';
 import { fetchXmlFromUrl, importXmlProducts } from '../services/xmlImport.ts';
 
 export const router = Router();
@@ -61,6 +65,10 @@ router.use('/trendyol-mapping', trendyolMappingRoutes);
 router.use('/stock-automation', stockAutomationRoutes);
 router.use('/category-engine', categoryMatchEngineRoutes);
 router.use('/category-core-v2', categoryCoreV2Routes);
+router.use('/finance', financeRoutes);
+router.use('/users', usersRoutes);
+router.use('/audit-logs', auditLogsRoutes);
+router.use('/notifications', notificationsRoutes);
 
 // ==================== MARKETPLACES ====================
 // Auth + ADMIN rolü gerekli; credential alanları (apiKey, apiSecret, merchantId, storeId) ASLA döndürülmez

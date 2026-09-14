@@ -20,7 +20,11 @@ function levenshtein(a: string, b: string): number {
 }
 
 function normalizeBrandName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+  const map: Record<string, string> = {
+    'ç': 'c', 'ğ': 'g', 'ı': 'i', 'ö': 'o', 'ş': 's', 'ü': 'u',
+    'Ç': 'c', 'Ğ': 'g', 'İ': 'i', 'I': 'i', 'Ö': 'o', 'Ş': 's', 'Ü': 'u',
+  };
+  return (name || '').split('').map(ch => map[ch] ?? ch).join('').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
 }
 
 async function createBrandLog(params: {
@@ -90,6 +94,10 @@ router.get('/products', requireAuth, async (req: Request, res: Response) => {
     const xmlBrandNameParam = req.query?.xmlBrandName ? String(req.query.xmlBrandName) : null;
 
     const where: any = {};
+    // FIX(M8/BULGU-1): DELETED (tombstone) urunler marka listesine sizmasin — Product Pool sozlesmesiyle
+    // ayni filtre (products.ts GET /). Boylece liste/KPI count uyusmazligi ve tombstone uzerinden
+    // yanlislikla kalici silme tetiklenmesi engellenir.
+    where.status = { not: 'DELETED' };
     if (unbranded) where.brandMatch = false;
     if (brandIdParam === 'not_null') where.brandId = { not: null };
     else if (brandIdParam) where.brandId = brandIdParam;
@@ -222,10 +230,9 @@ router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req: Request, 
 router.post('/preview', requireAuth, async (req: Request, res: Response) => {
   try {
     const { xmlBrandName, dgBrandId, xmlSourceId, marketplaceKey, brandSource } = req.body;
-    if (!xmlSourceId) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'xmlSourceId zorunludur' } });
-    if (!marketplaceKey) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'marketplaceKey zorunludur' } });
     if (!dgBrandId && !xmlBrandName) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'XML marka veya Müşteri markası seçilmeli' } });
     if (xmlBrandName && dgBrandId && !brandSource) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'İki marka seçildiyse brandSource zorunludur' } });
+    if (brandSource && !['CUSTOMER', 'SYSTEM', 'XML'].includes(brandSource)) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'brandSource CUSTOMER, SYSTEM veya XML olmalıdır' } });
     let resolvedDgBrandId = dgBrandId;
     let source = brandSource || (xmlBrandName && !dgBrandId ? 'XML' : dgBrandId && !xmlBrandName ? 'CUSTOMER' : null);
     if (source === 'XML') {
@@ -285,17 +292,16 @@ router.post('/backfill-xml-brand', requireAuth, requireRole(['ADMIN']), async (_
 router.post('/match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req: Request, res: Response) => {
   try {
     const { xmlBrandName, dgBrandId, xmlSourceId, marketplaceKey, brandSource } = req.body;
-    if (!xmlSourceId) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'xmlSourceId zorunludur' } });
-    if (!marketplaceKey) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'marketplaceKey zorunludur' } });
     if (!dgBrandId && !xmlBrandName) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'XML marka veya Müşteri markası seçilmeli' } });
     if (xmlBrandName && dgBrandId && !brandSource) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'İki marka seçildiyse brandSource zorunludur' } });
+    if (brandSource && !['CUSTOMER', 'SYSTEM', 'XML'].includes(brandSource)) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'brandSource CUSTOMER, SYSTEM veya XML olmalıdır' } });
     let resolvedDgBrandId = dgBrandId;
     let source = brandSource || (xmlBrandName && !dgBrandId ? 'XML' : dgBrandId && !xmlBrandName ? 'CUSTOMER' : null);
     if (source === 'XML') {
       if (!xmlBrandName) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'XML kaynağı seçildiğinde xmlBrandName gerekli' } });
       const mapping = await prisma.brandMapping.findFirst({ 
         where: { 
-          xmlBrandName: { equals: xmlBrandName.toLowerCase() },
+          xmlBrandName,
           marketplaceKey: marketplaceKey || null 
         } 
       });
@@ -307,7 +313,7 @@ router.post('/match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (re
       if (!resolvedDgBrandId && xmlBrandName) {
         const mapping = await prisma.brandMapping.findFirst({ 
           where: { 
-            xmlBrandName: { equals: xmlBrandName.toLowerCase() },
+            xmlBrandName,
             marketplaceKey: marketplaceKey || null 
           } 
         });
@@ -322,14 +328,14 @@ router.post('/match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (re
     }
     // SCOPE: all products in this XML source (and optionally xmlBrandName)
     const scopeWhere: any = {};
-    if (xmlBrandName) scopeWhere.xmlBrandName = xmlBrandName.toLowerCase();
+    if (xmlBrandName) scopeWhere.xmlBrandName = xmlBrandName;
     if (xmlSourceId) scopeWhere.xmlSourceId = xmlSourceId;
     // Count total products in scope
     const targetCount = await prisma.product.count({ where: scopeWhere });
     // Count already correct (same brand)
     const alreadyCorrect = await prisma.product.count({ where: { ...scopeWhere, brandId: resolvedDgBrandId } });
     // UPDATE WHERE: products that do NOT already have the target brand
-    const where = { ...scopeWhere, brandId: { not: resolvedDgBrandId } };
+    const where = { ...scopeWhere, OR: [{ brandId: { not: resolvedDgBrandId } }, { brandId: null }] };
     const format = dgBrand.prefixFormat || 'MARKA \u00ae {title}';
     const prefixLabel = dgBrand.name + ' \u00ae ';
     // fetch affected products before update for title prefixing
@@ -339,8 +345,8 @@ router.post('/match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (re
     for (const p of products) {
       const rawTitle = p.originalTitle || p.title || '';
       let cleanTitle = rawTitle;
-      const match = cleanTitle.match(/^[A-Za-z\u00c0-\u024f\u0130\u0131\s]+ ?\u00ae /);
-      if (match) cleanTitle = cleanTitle.substring(match[0].length);
+      const prefixMatch = cleanTitle.match(/^.+? ® /);
+      if (prefixMatch) cleanTitle = cleanTitle.substring(prefixMatch[0].length);
       const newTitle = applyPrefixFormat(format, dgBrand.name, cleanTitle);
       updates.push({ id: p.id, newTitle, origTitle: p.originalTitle || p.title || '' });
     }
@@ -356,7 +362,7 @@ router.post('/match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (re
       const productCount = await prisma.product.count({ where: { xmlBrandName } });
       await prisma.brandMapping.update({ where: { xmlBrandName }, data: { productCount } }).catch(() => null);
     }
-    await createBrandLog({ action: 'BRAND_MATCH', xmlBrandName: xmlBrandName || null, dgBrandId, dgBrandName: dgBrand.name, productCount: updates.length, actorUserId: (req as AuthedRequest).actor?.userId, details: JSON.stringify({ xmlSourceId: xmlSourceId || null, marketplaceKey: marketplaceKey || null }) });
+    await createBrandLog({ action: 'BRAND_MATCH', xmlBrandName: xmlBrandName || null, dgBrandId, dgBrandName: dgBrand.name, productCount: updates.length, actorUserId: (req as AuthedRequest).actor?.userId, details: JSON.stringify({ xmlSourceId: xmlSourceId || null, marketplaceKey: marketplaceKey || null, productIds: affectedIds }) });
     res.json({ matchedCount: updates.length, targetCount, skippedCount: alreadyCorrect, updatedCount: updates.length, message: updates.length + ' yeni ürün "' + dgBrand.name + '" markasına eşleştirildi (hedef ' + targetCount + ' ürün, ' + alreadyCorrect + ' zaten doğru)' });
   } catch (error) { console.error('[brands] POST match error:', error); res.status(500).json({ error: { code: 'DB_ERROR', message: 'Eşleştirme başarısız' } }); }
 });
@@ -380,6 +386,7 @@ router.post('/bulk-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), asyn
     if (!Array.isArray(matches) || matches.length === 0) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'matches array required' } });
     let totalMatched = 0;
     const results: Array<{ xmlBrandName: string; dgBrandName: string; count: number }> = [];
+    const allAffectedIds: string[] = [];
     for (const match of matches) {
       let { xmlBrandName, dgBrandId } = match;
       // normalize empty/whitespace to null
@@ -404,8 +411,9 @@ router.post('/bulk-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), asyn
         await prisma.brandMapping.update({ where: { xmlBrandName }, data: { productCount } }).catch(() => null);
       }
       totalMatched += result.count; results.push({ xmlBrandName: xmlBrandName || '', dgBrandName: dgBrand.name, count: result.count });
+      allAffectedIds.push(...affectedIds);
     }
-    await createBrandLog({ action: 'BULK_CHANGE', productCount: totalMatched, details: JSON.stringify(results), actorUserId: (req as AuthedRequest).actor?.userId });
+    await createBrandLog({ action: 'BULK_CHANGE', productCount: totalMatched, details: JSON.stringify({ results, productIds: allAffectedIds }), actorUserId: (req as AuthedRequest).actor?.userId });
 
     res.json({ matchedCount: totalMatched, results, message: `${totalMatched} \u00fcr\u00fcn toplu e\u015fle\u015ftirildi` });
   } catch (error) { console.error('[brands] POST bulk-match error:', error); res.status(500).json({ error: { code: 'DB_ERROR', message: 'Toplu e\u015fle\u015ftirme ba\u015far\u0131s\u0131z' } }); }
@@ -467,6 +475,7 @@ router.post('/ai-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async 
     }
 
     // Toplu uygula: her XML marka için updateMany (bir kez)
+    const aiAffectedIds: string[] = [];
     for (const m of toUpdate) {
       await prisma.brandMapping.upsert({ where: { xmlBrandName: m.xmlBrandName }, update: { dgBrandId: m.brandId, confidence: m.score || null, isAuto: true }, create: { xmlBrandName: m.xmlBrandName, dgBrandId: m.brandId, confidence: m.score || null, isAuto: true } }).catch(() => null);
       const productWhere: any = { xmlBrandName: m.xmlBrandName, brandMatch: false };
@@ -476,10 +485,11 @@ const affected = await prisma.product.findMany({ where: productWhere, select: { 
       await prisma.product.updateMany({ where: productWhere, data: { brandId: m.brandId, brandMatch: true, lastMatchDate: new Date(), brandUsageType: 'DG_BRAND' } });
       // Lifecycle reconcile: brand gate just completed
       if (affectedIds.length) queueReconcileProductGatesBulk(affectedIds);
+      aiAffectedIds.push(...affectedIds);
       await prisma.brandMapping.update({ where: { xmlBrandName: m.xmlBrandName }, data: { productCount: m.count } }).catch(() => null);
     }
 
-    await createBrandLog({ action: 'AI_MATCH', productCount: matchedCount, details: JSON.stringify({ matchedCount, suggestedCount, manualCount, totalScanned: distinctBrands.length }), actorUserId: (req as AuthedRequest).actor?.userId });
+    await createBrandLog({ action: 'AI_MATCH', productCount: matchedCount, details: JSON.stringify({ matchedCount, suggestedCount, manualCount, totalScanned: distinctBrands.length, productIds: aiAffectedIds }), actorUserId: (req as AuthedRequest).actor?.userId });
 
     res.json({ matchedCount, suggestedCount, manualCount, totalProducts: distinctBrands.length, message: `${matchedCount} ürün otomatik eşleştirildi, ${suggestedCount} öneri, ${manualCount} manuel inceleme`, results });
   } catch (error) {
@@ -514,7 +524,10 @@ router.post('/prefix/apply', requireAuth, requireRole(['ADMIN', 'OPERATOR']), as
     let updatedCount = 0;
     for (const p of products) {
       const orig = p.originalTitle || p.title || '';
-      await prisma.product.update({ where: { id: p.id }, data: { originalTitle: orig, computedTitle: applyPrefixFormat(format, brandName, orig), prefixEnabled: true, title: applyPrefixFormat(format, brandName, orig) } });
+      let cleanTitle = orig;
+      const prefixMatch = cleanTitle.match(/^.+? ® /);
+      if (prefixMatch) cleanTitle = cleanTitle.substring(prefixMatch[0].length);
+      await prisma.product.update({ where: { id: p.id }, data: { originalTitle: cleanTitle, computedTitle: applyPrefixFormat(format, brandName, cleanTitle), prefixEnabled: true, title: applyPrefixFormat(format, brandName, cleanTitle) } });
       updatedCount++;
     }
     await createBrandLog({ action: 'PREFIX_APPLY', dgBrandId: brandId, dgBrandName: brandName, prefixChanged: true, productCount: updatedCount, details: JSON.stringify({ format, allProducts: !!allProducts }), actorUserId: (req as AuthedRequest).actor?.userId });
@@ -583,13 +596,41 @@ router.post('/undo/:logId', requireAuth, requireRole(['ADMIN']), async (req: Req
     if (!log) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Log bulunamad\u0131' } });
     let undoneCount = 0;
     switch (log.action) {
-      case 'BRAND_MATCH': case 'BULK_CHANGE':
-        if (log.dgBrandId) { const result = await prisma.product.updateMany({ where: { brandId: log.dgBrandId }, data: { brandId: null, brandMatch: false, brandUsageType: 'XML_BRAND' } }); undoneCount = result.count; } break;
+      case 'BRAND_MATCH': case 'BULK_CHANGE': {
+        let parsedDetails: any = {};
+        try { parsedDetails = log.details ? JSON.parse(log.details) : {}; } catch { /* noop */ }
+        const ids: string[] | undefined = parsedDetails.productIds;
+        if (Array.isArray(ids) && ids.length > 0) {
+          const result = await prisma.product.updateMany({ where: { id: { in: ids } }, data: { brandId: null, brandMatch: false, brandUsageType: 'XML_BRAND' } });
+          undoneCount = result.count;
+        } else if (log.dgBrandId) {
+          const undoWhere: any = { brandId: log.dgBrandId };
+          if (log.xmlBrandName) undoWhere.xmlBrandName = log.xmlBrandName;
+          const result = await prisma.product.updateMany({ where: undoWhere, data: { brandId: null, brandMatch: false, brandUsageType: 'XML_BRAND' } });
+          undoneCount = result.count;
+        } break; }
       case 'PREFIX_APPLY':
-        await prisma.product.updateMany({ where: { prefixEnabled: true }, data: { computedTitle: null, prefixEnabled: false } });
-        const products = await prisma.product.findMany({ where: { originalTitle: { not: null } }, select: { id: true, originalTitle: true } });
-        for (const p of products) { if (p.originalTitle) await prisma.product.update({ where: { id: p.id }, data: { title: p.originalTitle } }); } undoneCount = products.length; break;
-      case 'AI_MATCH': const result = await prisma.product.updateMany({ where: { matchedBy: 'ai' }, data: { brandId: null, brandMatch: false, matchedBy: null } }); undoneCount = result.count; break;
+        if (log.dgBrandId) {
+          const prefixProducts = await prisma.product.findMany({ where: { brandId: log.dgBrandId, prefixEnabled: true }, select: { id: true, originalTitle: true } });
+          for (const p of prefixProducts) { if (p.originalTitle) await prisma.product.update({ where: { id: p.id }, data: { title: p.originalTitle, computedTitle: null, prefixEnabled: false } }); }
+          undoneCount = prefixProducts.length;
+        } else {
+          await prisma.product.updateMany({ where: { prefixEnabled: true }, data: { computedTitle: null, prefixEnabled: false } });
+          const products = await prisma.product.findMany({ where: { originalTitle: { not: null } }, select: { id: true, originalTitle: true } });
+          for (const p of products) { if (p.originalTitle) await prisma.product.update({ where: { id: p.id }, data: { title: p.originalTitle } }); }
+          undoneCount = products.length;
+        } break;
+      case 'AI_MATCH': {
+        let parsedDetails: any = {};
+        try { parsedDetails = log.details ? JSON.parse(log.details) : {}; } catch { /* noop */ }
+        const ids: string[] | undefined = parsedDetails.productIds;
+        if (Array.isArray(ids) && ids.length > 0) {
+          const result = await prisma.product.updateMany({ where: { id: { in: ids } }, data: { brandId: null, brandMatch: false, matchedBy: null } });
+          undoneCount = result.count;
+        } else {
+          const aiResult = await prisma.product.updateMany({ where: { matchedBy: 'ai' }, data: { brandId: null, brandMatch: false, matchedBy: null } });
+          undoneCount = aiResult.count;
+        } break; }
     }
     await createBrandLog({ action: 'UNDO', details: JSON.stringify({ originalLogId: logId, originalAction: log.action }), productCount: undoneCount, actorUserId: (req as AuthedRequest).actor?.userId });
     res.json({ undoneCount, message: `Geri alma i\u015flemi tamamland\u0131: ${undoneCount} kay\u0131t etkilendi` });

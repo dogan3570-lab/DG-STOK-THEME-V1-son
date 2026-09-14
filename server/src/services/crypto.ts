@@ -57,13 +57,29 @@ export function encryptApiKey(plaintext: string): { encrypted: string; iv: strin
   return encryptWithKey(plaintext, currentKey());
 }
 
-/** AI provider api key alanları için (mevcut imza korunur) — önce yeni key, sonra legacy. */
+/** AI provider api key alanları için (mevcut imza korunur) — önce yeni key, sonra legacy, ardından cross-salt kombinasyonlar. */
 export function decryptApiKey(encrypted: string, ivHex: string, tagHex: string): string {
+  // 1. current key (CREDENTIAL_ENCRYPTION_KEY + CREDENTIAL_SALT)
   try {
     return decryptWithKey(encrypted, ivHex, tagHex, currentKey());
-  } catch {
+  } catch {}
+  // 2. legacy key (JWT_SECRET + LEGACY_SALT)
+  try {
     return decryptWithKey(encrypted, ivHex, tagHex, legacyKey());
-  }
+  } catch {}
+  // 3. current secret with legacy salt
+  try {
+    const key = crypto.scryptSync(env.CREDENTIAL_ENCRYPTION_KEY, LEGACY_SALT, KEY_LENGTH);
+    return decryptWithKey(encrypted, ivHex, tagHex, key);
+  } catch {}
+  // 4. legacy secret with current salt
+  try {
+    const key = crypto.scryptSync(env.JWT_SECRET, CREDENTIAL_SALT, KEY_LENGTH);
+    return decryptWithKey(encrypted, ivHex, tagHex, key);
+  } catch {}
+  // 5. legacy secret with legacy salt (same as legacyKey) already tried
+  // If all fail, throw last error
+  throw new Error('Unable to decrypt API key with any known key derivation');
 }
 
 /** Tek string alanda saklanabilir, AES-256-GCM şifreli credential formatı (enc:v1:<iv>:<tag>:<cipher>). */

@@ -78,6 +78,10 @@ const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
     baseUrl: process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128',
     model: '',
   },
+  tokenrouter: {
+    baseUrl: 'https://api.tokenrouter.ai/v1',
+    model: 'z-ai/glm-5.3-free',
+  },
 };
 
 export async function getActiveProvidersByPriority(): Promise<ProviderConfig[]> {
@@ -302,6 +306,61 @@ async function callOpenRouterApi(
       else if (res.status === 403) errorCode = 'FORBIDDEN';
       else if (res.status === 404) errorCode = 'MODEL_NOT_FOUND';
       else if (res.status >= 500) errorCode = 'SERVER_ERROR';
+      throw new Error(`${errorCode} ${errorBody}`.slice(0, 500));
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content ?? null;
+    return { content, usage: data.usage };
+  } catch (err: any) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('TIMEOUT');
+    throw err;
+  }
+}
+
+async function callTokenRouterApi(
+  apiKey: string,
+  model: string,
+  request: ChatCompletionRequest,
+  timeoutMs: number = 120000
+): Promise<{ content: string; usage?: any }> {
+  const baseUrl = PROVIDER_DEFAULTS.tokenrouter.baseUrl;
+  const url = `${baseUrl}/chat/completions`;
+
+  const body = {
+    model,
+    messages: request.messages,
+    temperature: request.temperature ?? 0.1,
+    max_tokens: request.max_tokens ?? 1024,
+    ...(request.response_format ? { response_format: request.response_format } : {}),
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => '');
+      let errorCode = `HTTP_${res.status}`;
+      if (res.status === 429) errorCode = 'RATE_LIMIT';
+      else if (res.status === 401) errorCode = 'INVALID_KEY';
+      else if (res.status === 403) errorCode = 'FORBIDDEN';
+      else if (res.status === 404) errorCode = 'MODEL_NOT_FOUND';
+      else if (res.status >= 500) errorCode = 'SERVER_ERROR';
+
       throw new Error(`${errorCode} ${errorBody}`.slice(0, 500));
     }
 
@@ -907,6 +966,32 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
       };
     }
 
+    if (provider === 'tokenrouter') {
+      const config = await getProvider('tokenrouter');
+      const apiKey = await getDecryptedApiKey('tokenrouter');
+      if (!apiKey) {
+        return { ok: false, provider: 'tokenrouter', model: 'z-ai/glm-5.3-free', latencyMs: 0, error: 'API key yapılandırılmamış', errorCode: 'NO_KEY' };
+      }
+      const modelName = config?.model || 'z-ai/glm-5.3-free';
+      const modelTest = await callTokenRouterApi(apiKey, modelName, {
+        messages: [{ role: 'user', content: 'Return exactly: GLM53_FREE_TEST_OK' }],
+        max_tokens: 20,
+      }, 120000);
+
+      const latencyMs = Date.now() - startTime;
+      const testOk = !!modelTest.content && String(modelTest.content).toUpperCase().includes('GLM53_FREE_TEST_OK');
+      await incrementRequestCount(provider, testOk, testOk ? undefined : 'TokenRouter testi başarısız');
+
+      return {
+        ok: testOk,
+        provider: 'tokenrouter',
+        model: 'z-ai/glm-5.3-free',
+        latencyMs,
+        error: testOk ? undefined : `TokenRouter testi başarısız: ${String(modelTest.content ?? '').slice(0, 200)}`,
+        errorCode: testOk ? undefined : 'MODEL_TEST_FAILED',
+      };
+    }
+
     if (provider === 'omniroute') {
       const { testModel, getRegistry } = await import('./omniRouteManager.ts');
       // FIX(RC4): config.model boşken PROVIDER_DEFAULTS zinciri 'default'
@@ -1107,4 +1192,5 @@ For each candidate, determine if the product REALLY belongs there. Return ONLY t
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
+
 

@@ -51,6 +51,7 @@ export default function ListingTemplateTab() {
  const [step, setStep] = useState<StepKey>('genel');
  const [editMode, setEditMode] = useState(false);
 
+
  const [productSearch, setProductSearch] = useState('');
  const [productResults, setProductResults] = useState<Array<{ id: string; title: string; xmlKey: string; barcode: string | null; sku: string | null; purchasePrice: number | null }>>([]);
  const [selectedProduct, setSelectedProduct] = useState<{ id: string; title: string; xmlKey: string; purchasePrice: number | null } | null>(null);
@@ -93,25 +94,23 @@ export default function ListingTemplateTab() {
  const authHeaders = (): Record<string, string> => { const t = getToken(); const h: Record<string, string> = {}; if (t) h['x-auth-token'] = t; return h; };
 
  const loadTemplates = useCallback(async () => {
- try { const r = await fetch('/listings', { headers: authHeaders() }); const d = await r.json(); if (d?.items) setSavedTemplates(d.items); } catch { /* sessiz */ }
- }, []);
+  try { const r = await apiFetch<{ items: SavedTemplate[] }>('/listings'); if (r.ok && r.data?.items) setSavedTemplates(r.data.items); } catch { /* sessiz */ }
+  }, []);
 
  useEffect(() => {
- const ah = authHeaders();
- fetch('/categories/tree', { headers: ah }).then((r) => r.json()).then((d) => { if (d?.items) setSystemTree(d.items); }).catch(() => {});
- loadTemplates();
- }, []);
+  apiFetch<{ items: SystemCategory[] }>('/categories/tree').then((r) => { if (r.ok && r.data?.items) setSystemTree(r.data.items); }).catch(() => {});
+  loadTemplates();
+  }, []);
 
  useEffect(() => {
  if (!productSearch || productSearch.length < 2) { setProductResults([]); return; }
  const timer = setTimeout(async () => {
  setSearchingProduct(true);
- try {
- const params = new URLSearchParams({ search: productSearch, limit: '20' });
- const res = await fetch(`/categories/products?${params}`, { headers: authHeaders() });
- const data = await res.json();
- if (data?.items) setProductResults(data.items.map((p: any) => ({ id: p.id, title: p.title || p.xmlKey, xmlKey: p.xmlKey, barcode: p.barcode, sku: p.sku, purchasePrice: p.purchasePrice })));
- } catch { /* sessiz */ }
+  try {
+  const params = new URLSearchParams({ search: productSearch, limit: '20' });
+  const res = await apiFetch<{ items: Array<{ id: string; title: string; xmlKey: string; barcode: string | null; sku: string | null; purchasePrice: number | null }> }>(`/categories/products?${params}`);
+  if (res.ok && res.data?.items) setProductResults(res.data.items.map((p) => ({ id: p.id, title: p.title || p.xmlKey, xmlKey: p.xmlKey, barcode: p.barcode, sku: p.sku, purchasePrice: p.purchasePrice })));
+  } catch { /* sessiz */ }
  setSearchingProduct(false);
  }, 300);
  return () => clearTimeout(timer);
@@ -210,21 +209,19 @@ export default function ListingTemplateTab() {
  else if (step === 'kategori' && selectedCatId) name = `Kategori: ${getCatName(selectedCatId)}`;
 
  const body = { name, marketplaceId, xmlSupplierId, productId: step === 'urun' && selectedProduct ? selectedProduct.id : null, categoryId: step === 'kategori' && selectedCatId ? selectedCatId : null, priceRangeRules, priceSource: 'XML_PURCHASE', vatMode: 'INCLUDED', active: true };
- const headers: Record<string, string> = { 'Content-Type': 'application/json', ...authHeaders() };
- const url = selectedTemplateId ? `/listings/${selectedTemplateId}` : '/listings';
- const method = selectedTemplateId ? 'PUT' : 'POST';
- const response = await fetch(url, { method, headers, body: JSON.stringify(body) });
- const data = await response.json();
+  const url = selectedTemplateId ? `/listings/${selectedTemplateId}` : '/listings';
+  const method = selectedTemplateId ? 'PUT' : 'POST';
+  const response = await apiFetch<{ item?: { id: string } }>(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
- if (response.ok) {
- const savedId = data?.item?.id || selectedTemplateId;
+  if (response.ok) {
+  const savedId = response.data?.item?.id || selectedTemplateId;
  setSelectedTemplateId(savedId);
  showToast('success', '✅ Şablon başarıyla kaydedildi!');
  setEditMode(false);
  loadTemplates();
  } else {
- showToast('error', `❌ ${data?.error?.message || 'Kaydetme başarısız'}`);
- }
+  showToast('error', `❌ ${response.error || 'Kaydetme başarısız'}`);
+  }
  } catch (e: any) {
  showToast('error', `❌ Hata: ${e?.message || 'Bilinmeyen hata'}`);
  } finally { setSaving(false); }
@@ -236,10 +233,10 @@ export default function ListingTemplateTab() {
  if (!window.confirm('Seçili şablon silinsin mi? Bu işlem geri alınamaz.')) return;
  setDeleting(true);
  try {
- const r = await fetch(`/listings/${selectedTemplateId}`, { method: 'DELETE', headers: authHeaders() });
- if (r.ok || r.status === 204) { showToast('success', '🗑️ Şablon silindi'); newTemplate(); loadTemplates(); }
- else { const d = await r.json().catch(() => null); showToast('error', `❌ ${d?.error?.message || 'Silme başarısız'}`); }
- } finally { setDeleting(false); }
+  const r = await apiFetch(`/listings/${selectedTemplateId}`, { method: 'DELETE' });
+  if (r.ok) { showToast('success', '🗑️ Şablon silindi'); newTemplate(); loadTemplates(); }
+  else { showToast('error', `❌ ${r.error || 'Silme başarısız'}`); }
+  } finally { setDeleting(false); }
  };
 
  const loadTemplate = (tpl: SavedTemplate) => {
@@ -265,23 +262,37 @@ export default function ListingTemplateTab() {
  ];
 
  return (
- <div className="relative">
- <h1 className="mb-6 pt-1 text-center text-[26px] font-extrabold tracking-tight" >Listeleme Şablonu</h1>
+ <div className="relative space-y-5">
 
- {/* ====== TEDARIKCI XML + PAZARYERI SECIM BAR ====== */}
- <div className="mb-4 flex flex-wrap items-center justify-center gap-3">
- <select value={xmlSupplierId} onChange={e => setXmlSupplierId(e.target.value)}
- className="rounded-xl border border-current bg-secondary/5 px-4 py-2 text-sm font-medium text-current min-w-[200px]">
- <option value="">📦 Tedarikci / XML Seciniz...</option>
- {xmlSources.map(xs => <option key={xs.id} value={xs.id}>{xs.name}</option>)}
- </select>
- <select value={marketplaceId} onChange={e => selectMarketplace(e.target.value)}
- className="rounded-xl border border-current bg-secondary/5 px-4 py-2 text-sm font-medium text-current min-w-[200px]">
- <option value="">🛒 Pazaryeri Seciniz...</option>
- {ctxMarketplaces.map(mp => <option key={mp.id} value={mp.id}>{mp.name}</option>)}
- </select>
+ {/* ====== ÜST AKIŞ GÖSTERİMİ ====== */}
+ <div className="flex items-center justify-center gap-1.5 flex-wrap">
+  {['Tedarikçi / XML', 'Pazaryeri', 'Fiyat Kuralları', 'Kaydet'].map((stepLabel, i) => (
+   <React.Fragment key={stepLabel}>
+    <div className="flex items-center gap-1.5">
+     <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${ i < 2 ? 'bg-primary text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300' }`}>{i + 1}</div>
+     <span className={`text-xs font-medium hidden sm:inline ${ i < 2 ? 'text-current' : 'text-slate-400 dark:text-slate-500' }`}>{stepLabel}</span>
+    </div>
+    {i < 3 && <div className="text-slate-300 dark:text-slate-600">→</div>}
+   </React.Fragment>
+  ))}
  </div>
 
+ {/* ====== TEDARIKCI XML + PAZARYERI SECIM BAR ====== */}
+ <div className="flex flex-wrap items-center justify-center gap-3">
+  <select value={xmlSupplierId} onChange={e => setXmlSupplierId(e.target.value)}
+   className="rounded-xl border border-current bg-secondary/5 px-4 py-2.5 text-sm font-medium text-current min-w-[200px] focus:outline-none focus:ring-2 focus:ring-primary/30">
+   <option value="">📦 Tedarikçi / XML Kaynağı Seçin</option>
+   {xmlSources.map(xs => <option key={xs.id} value={xs.id}>{xs.name}</option>)}
+  </select>
+  <div className="text-slate-300 dark:text-slate-600">→</div>
+  <select value={marketplaceId} onChange={e => selectMarketplace(e.target.value)}
+   className="rounded-xl border border-current bg-secondary/5 px-4 py-2.5 text-sm font-medium text-current min-w-[200px] focus:outline-none focus:ring-2 focus:ring-primary/30">
+   <option value="">🛒 Pazaryeri Seçin</option>
+   {ctxMarketplaces.map(mp => <option key={mp.id} value={mp.id}>{mp.name}</option>)}
+  </select>
+ </div>
+
+ {/* ====== KAYITLI ŞABLONLAR KART GRİD ====== */}
  <div className="rounded-[28px] border p-5 shadow-card backdrop-blur-xl sm:p-7 bg-transparent border-current">
  {(!xmlSupplierId || !marketplaceId) && (
  <div className="flex items-center gap-3 p-3 my-4 bg-transparent border border-current rounded-xl text-current text-sm">
@@ -289,47 +300,48 @@ export default function ListingTemplateTab() {
  <span className="font-medium">İşleme devam etmek için lütfen yukarıdan <b>Tedarikçi (XML)</b> ve <b>Pazaryeri</b> seçiniz.</span>
  </div>
  )}
- <div className="mb-2 flex items-stretch justify-center">
- {steps.map((s, i) => {
- const active = step === s.key;
- return (
- <button key={s.key} type="button" onClick={() => setStep(s.key)}
- className={`relative px-7 py-3 text-sm font-bold transition-all duration-200 ${ active ? 'bg-gradient-to-br from-[transparent] to-[transparent] text-current' : 'bg-[transparent] text-[transparent] ' }`}
- style={{
- minWidth: '180px',
- clipPath: i === 0 ? 'polygon(12px 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 12px 100%, 0 100%, 0 0)' : 'polygon(16px 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 16px 100%, 0 50%)',
- boxShadow: active ? '0 6px 18px -4px transparent' : 'none',
- marginLeft: i === 0 ? 0 : '-10px', zIndex: active ? 2 : 1}}>
- {s.label}
- </button>
- );
- })}
+
+ {/* ŞABLON SEKMELERİ + BUTONLAR */}
+ <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
+  <div className="flex gap-1 rounded-xl border border-current bg-secondary/3 p-1">
+   {steps.map((s) => {
+    const active = step === s.key;
+    return (
+     <button key={s.key} type="button" onClick={() => setStep(s.key)}
+      className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${ active ? 'bg-primary text-white shadow-lg shadow-primary/25' : 'text-current hover:text-primary' }`}>
+      {s.key === 'genel' ? '📋' : s.key === 'urun' ? '📦' : '🗂️'} {s.label}
+     </button>
+    );
+   })}
+  </div>
+  <div className="flex items-center gap-2">
+   <button type="button" onClick={newTemplate} className="rounded-lg bg-primary/10 px-3 py-2 text-[11px] font-semibold text-primary transition-all hover:bg-primary/20">+ Yeni Şablon</button>
+   <button type="button" onClick={() => setShowTemplates(!showTemplates)}
+    className={`rounded-lg px-3 py-2 text-[11px] font-semibold transition-all ${ showTemplates ? 'bg-primary/10 text-primary' : 'bg-secondary/5 text-current hover:bg-secondary/10' }`}>
+    📂 Kayıtlı ({savedTemplates.length})
+   </button>
+  </div>
  </div>
 
- <div className="mb-5 flex items-center justify-center gap-2">
- <button type="button" onClick={newTemplate} className="rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-all hover:shadow-soft" style={{}}>🆕 Yeni Şablon</button>
- <div className="relative">
- <button type="button" onClick={() => setShowTemplates(!showTemplates)} className="rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-all hover:shadow-soft" style={{}}>
- 📂 Kayıtlı Şablonlar ({savedTemplates.length})
- </button>
+ {/* KAYITLI ŞABLONLAR GRID */}
  {showTemplates && (
- <>
- <div className="fixed inset-0 z-30" onClick={() => setShowTemplates(false)} />
- <div className="absolute left-1/2 top-full z-40 mt-1.5 max-h-56 w-72 -translate-x-1/2 overflow-y-auto rounded-xl border bg-transparent p-1.5 shadow-card" >
- {savedTemplates.length === 0 ? <div className="p-3 text-center text-xs text-current">Henüz şablon yok</div> : savedTemplates.map((t) => (
- <button key={t.id} type="button" onClick={() => loadTemplate(t)}
- className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium transition-colors"
- 
- onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'currentColor'; }}
- onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = selectedTemplateId === t.id ? 'currentColor' : 'transparent'; }}>
- {t.productId ? '📦' : t.categoryId ? '🗂️' : '📋'} {t.name}
- </button>
- ))}
- </div>
- </>
+  <div className="mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+   <div className="fixed inset-0 z-30" onClick={() => setShowTemplates(false)} />
+   {savedTemplates.length === 0 ? (
+    <div className="col-span-full p-6 text-center text-xs text-current border border-dashed border-current/20 rounded-xl">Henüz şablon yok</div>
+   ) : savedTemplates.map((t) => (
+    <button key={t.id} type="button" onClick={() => { loadTemplate(t); setShowTemplates(false); }}
+     className={`relative z-40 flex items-center gap-3 rounded-xl border p-3 text-left text-xs font-medium transition-all hover:shadow-md ${ selectedTemplateId === t.id ? 'border-primary bg-primary/5' : 'border-current/20 bg-transparent hover:border-primary/30' }`}>
+     <span className="text-lg">{t.productId ? '📦' : t.categoryId ? '🗂️' : '📋'}</span>
+     <div className="flex-1 min-w-0">
+      <div className="font-semibold text-current truncate">{t.name}</div>
+      <div className="text-[10px] text-slate-400">{t.marketplaceId ? 'Pazaryeri' : 'Genel'}</div>
+     </div>
+     {selectedTemplateId === t.id && <span className="text-primary text-xs">✓</span>}
+    </button>
+   ))}
+  </div>
  )}
- </div>
- </div>
 
  {step === 'urun' && (
  <div className="mb-5 rounded-2xl border bg-transparent p-4 shadow-inner" >
@@ -369,59 +381,189 @@ export default function ListingTemplateTab() {
  </div>
  )}
 
- <div className="flex flex-col gap-4 xl:flex-row">
- <div className="min-w-0 flex-1 overflow-hidden rounded-2xl border bg-transparent shadow-soft" >
- <div className="grid grid-cols-[minmax(0,4fr)_minmax(0,4fr)_minmax(0,4fr)] px-6 py-4 bg-gradient-to-b from-[transparent] to-[transparent]">
- <div className="text-sm font-bold" style={{}}>Fiyat Aralığı</div>
- <div className="text-sm font-bold" style={{}}>Yüzde Çarpanı</div>
- <div className="text-sm font-bold" style={{}}>Ek Tutar</div>
+              <div className="flex flex-col gap-4 xl:flex-row">
+              <div className="min-w-0 flex-1 overflow-hidden rounded-2xl border bg-transparent shadow-soft" >
+
+ {/* FİYAT KURALI BAŞLIĞI */}
+ <div className="px-6 pt-5 pb-3">
+  <div className="flex items-center gap-2 mb-1">
+   <span className="text-sm font-bold text-current">Fiyat Kuralları</span>
+   <span className="text-[10px] rounded-full bg-primary/10 px-2 py-0.5 text-primary font-medium">{rules.length} kural</span>
+  </div>
+  {xmlSupplierId && marketplaceId && (
+   <div className="flex items-center gap-3 text-[11px] text-slate-400 dark:text-slate-500">
+    <span className="inline-flex items-center gap-1">
+     <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
+     Tedarikçi: {xmlSources.find(x => x.id === xmlSupplierId)?.name || '-'}
+    </span>
+    <span>→</span>
+    <span className="inline-flex items-center gap-1">
+     <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+     Pazaryeri: {ctxMarketplaces.find(m => m.id === marketplaceId)?.name || '-'}
+    </span>
+   </div>
+  )}
  </div>
 
+ {/* TABLO BAŞLIKLARI */}
+ <div className="grid grid-cols-12 gap-2 px-6 py-3 border-b border-current/10">
+  <div className="col-span-4 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Fiyat Aralığı</div>
+  <div className="col-span-3 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Kâr Oranı</div>
+  <div className="col-span-3 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Sabit Ek</div>
+  <div className="col-span-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Sonuç (Örnek)</div>
+ </div>
+
+ {/* KURAL SATIRLARI */}
  <div className="divide-y divide-border/50">
- {rules.map((rule) => (
- <RuleRow key={rule.id} rule={rule} editMode={editMode} canRemove={rules.length > 1}
- onUpdate={(field, value) => updateRule(rule.id, field, value)} onRemove={() => removeRule(rule.id)} />
- ))}
+  {rules.map((rule) => {
+   const margin = toNum(rule.profitMargin);
+   const fixed = toNum(rule.fixedAmount);
+   const examplePrice = 100 * (1 + margin / 100) + fixed;
+   const minP = toNum(rule.minPrice);
+   const maxP = toNum(rule.maxPrice);
+   return (
+    <div key={rule.id} className="grid grid-cols-12 gap-2 items-center px-6 py-3 hover:bg-secondary/3 transition-colors">
+     {/* Fiyat Aralığı */}
+     <div className="col-span-4">
+      {editMode ? (
+       <div className="flex items-center gap-1">
+        <input type="text" inputMode="decimal" value={rule.minPrice}
+         onChange={(e) => updateRule(rule.id, 'minPrice', e.target.value)} onFocus={(e) => e.target.select()}
+         className="w-16 rounded-lg border border-current/20 bg-transparent px-2 py-1.5 text-right text-xs tabular-nums outline-none focus:ring-1 focus:ring-primary/30" placeholder="₺0" />
+        <span className="text-xs text-current">–</span>
+        <input type="text" inputMode="decimal" value={rule.maxPrice}
+         onChange={(e) => updateRule(rule.id, 'maxPrice', e.target.value)} onFocus={(e) => e.target.select()}
+         className="w-16 rounded-lg border border-current/20 bg-transparent px-2 py-1.5 text-right text-xs tabular-nums outline-none focus:ring-1 focus:ring-primary/30" placeholder="∞" />
+       </div>
+      ) : (
+       <div className="text-sm font-medium text-current">
+        {minP <= 0 && maxP <= 0 ? 'Tüm Fiyatlar' : maxP <= 0 ? `₺${rule.minPrice}+` : `₺${rule.minPrice} – ₺${rule.maxPrice}`}
+       </div>
+      )}
+     </div>
+
+     {/* Kâr Oranı */}
+     <div className="col-span-3">
+      {editMode ? (
+       <div className="flex items-center gap-1">
+        <input type="text" inputMode="decimal" value={rule.profitMargin}
+         onChange={(e) => updateRule(rule.id, 'profitMargin', e.target.value)} onFocus={(e) => e.target.select()}
+         className="w-14 rounded-lg border border-current/20 bg-transparent px-2 py-1.5 text-right text-xs tabular-nums outline-none focus:ring-1 focus:ring-primary/30" placeholder="%" />
+        <span className="text-xs text-current">%</span>
+       </div>
+      ) : margin > 0 ? (
+       <span className="inline-flex items-center gap-1 rounded-lg bg-green-50 dark:bg-green-900/20 px-2.5 py-1 text-xs font-bold text-green-700 dark:text-green-400">
+        %{rule.profitMargin}
+       </span>
+      ) : (
+       <span className="text-xs text-slate-400">—</span>
+      )}
+     </div>
+
+     {/* Sabit Ek */}
+     <div className="col-span-3">
+      {editMode ? (
+       <div className="flex items-center gap-1">
+        <input type="text" inputMode="decimal" value={rule.fixedAmount}
+         onChange={(e) => updateRule(rule.id, 'fixedAmount', e.target.value)} onFocus={(e) => e.target.select()}
+         className="w-14 rounded-lg border border-current/20 bg-transparent px-2 py-1.5 text-right text-xs tabular-nums outline-none focus:ring-1 focus:ring-primary/30" placeholder="₺0" />
+        <span className="text-xs text-current">₺</span>
+        <select value={rule.rounding} onChange={(e) => updateRule(rule.id, 'rounding', e.target.value)}
+         className="rounded-lg border border-current/20 bg-transparent px-1.5 py-1 text-[10px] outline-none">
+         {ROUNDING_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+       </div>
+      ) : fixed > 0 ? (
+       <span className="inline-flex items-center gap-1 rounded-lg bg-blue-50 dark:bg-blue-900/20 px-2.5 py-1 text-xs font-bold text-blue-700 dark:text-blue-400">
+        +{fixed.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+       </span>
+      ) : (
+       <span className="text-xs text-slate-400">—</span>
+      )}
+     </div>
+
+     {/* Sonuç */}
+     <div className="col-span-2">
+      <span className="inline-flex items-center rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary">
+       {examplePrice.toFixed(0)} ₺
+      </span>
+     </div>
+
+     {/* Sil butonu (sadece editMode) */}
+     {editMode && (
+      <div className="col-span-12 flex justify-end pt-1">
+       <button type="button" onClick={() => removeRule(rule.id)} disabled={rules.length <= 1}
+        className="text-[10px] text-red-500 hover:text-red-700 disabled:opacity-30 transition-colors">Kuralı Sil</button>
+      </div>
+     )}
+    </div>
+   );
+  })}
  </div>
 
- <div className="flex justify-center border-t px-6 py-3.5" >
- <button type="button" onClick={addRule} className="inline-flex items-center gap-2 rounded-xl bg-transparent px-5 py-2.5 text-sm font-semibold shadow-soft transition-all hover:shadow-hover" >
- <span style={{}}>+</span> Kural Ekle
- </button>
+ {/* KURAL EKLE */}
+ <div className="flex justify-center border-t px-6 py-3.5">
+  <button type="button" onClick={addRule}
+   className="inline-flex items-center gap-2 rounded-xl bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-all hover:bg-primary/20">
+   + Kural Ekle
+  </button>
  </div>
 
+ {/* CANLI FORMÜL */}
+ <div className="mx-6 mb-4 rounded-xl bg-slate-50 dark:bg-slate-800/30 p-3 border border-current/10">
+  <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">Örnek Hesaplama (100₺ alış için)</div>
+  <div className="text-xs text-current">
+   {rules.filter(r => toNum(r.profitMargin) > 0 || toNum(r.fixedAmount) > 0).length > 0 ? (
+    rules.filter(r => toNum(r.profitMargin) > 0 || toNum(r.fixedAmount) > 0).map((r, i) => {
+     const m = toNum(r.profitMargin);
+     const f = toNum(r.fixedAmount);
+     const result = 100 * (1 + m / 100) + f;
+     const range = toNum(r.minPrice) > 0 || toNum(r.maxPrice) > 0
+      ? `(${toNum(r.minPrice)}–${toNum(r.maxPrice) > 999999 ? '∞' : toNum(r.maxPrice)}₺ bandı): `
+      : '';
+     return <div key={i}>{range}100₺ × (1 + %{m}) + {f}₺ = <span className="font-bold text-primary">{result.toFixed(0)}₺</span></div>;
+    })
+   ) : (
+    <span className="text-slate-400">Kural tanımlayın, sonuç burada görünecek</span>
+   )}
+  </div>
+ </div>
+
+ {/* HATALAR */}
  {errors.length > 0 && (
- <div className="space-y-1 border-t px-6 py-3" >
- {errors.map((err, i) => <div key={i} className="text-xs font-medium" style={{}}>⚠️ {err}</div>)}
- </div>
+  <div className="space-y-1 border-t px-6 py-3">
+   {errors.map((err, i) => <div key={i} className="text-xs font-medium text-red-500">⚠️ {err}</div>)}
+  </div>
  )}
 
- <div className="flex flex-wrap items-center justify-center gap-4 border-t px-6 py-5" >
- <button type="button" onClick={handleDelete} disabled={!marketplaceId || deleting}
- className="inline-flex items-center justify-center gap-2 rounded-2xl px-8 py-3.5 text-[15px] font-semibold transition-all duration-200 disabled:opacity-50"
- style={{}}
- onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'currentColor'; }}
- onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'currentColor'; }}>
- {deleting ? 'Siliniyor...' : '🗑️ Sil'}
- </button>
- <button type="button" onClick={() => setEditMode(!editMode)} className="btn-purple !rounded-2xl !px-8 !py-3.5 !text-[15px]"
- style={!editMode ? undefined : { background: 'transparent' }}>⚙️ {editMode ? 'Rozet Görünümü' : 'Düzenle'}</button>
- <button type="button" onClick={handleSave} disabled={!marketplaceId || saving} className="btn-green !rounded-2xl !px-8 !py-3.5 !text-[15px]">
- {saving ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />Kaydediliyor...</> : <>✉️ Kaydet</>}
- </button>
+ {/* İŞLEMLER */}
+ <div className="flex flex-wrap items-center justify-center gap-3 border-t px-6 py-5">
+  <button type="button" onClick={handleDelete} disabled={!marketplaceId || deleting}
+   className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-300 dark:border-red-800 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 px-6 py-2.5 text-sm font-semibold transition-all disabled:opacity-50">
+   {deleting ? 'Siliniyor...' : '🗑️ Sil'}
+  </button>
+  <button type="button" onClick={() => setEditMode(!editMode)}
+   className={`inline-flex items-center justify-center gap-2 rounded-xl px-6 py-2.5 text-sm font-semibold transition-all ${ editMode ? 'bg-secondary/10 text-current' : 'bg-primary/10 text-primary hover:bg-primary/20' }`}>
+   {editMode ? '👁️ Görünüm' : '✏️ Düzenle'}
+  </button>
+  <button type="button" onClick={handleSave} disabled={!marketplaceId || saving}
+   className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary text-white px-6 py-2.5 text-sm font-semibold transition-all hover:bg-primary/90 shadow-lg shadow-primary/25 disabled:opacity-50">
+   {saving ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" /> Kaydediliyor...</> : '💾 Kaydet'}
+  </button>
  </div>
  </div>
 
+ {/* YAN PANEL: SKOR + ÖNERİLER */}
  <div className="flex w-full shrink-0 flex-col items-center gap-4 xl:w-64">
- <div className="rounded-full bg-transparent p-1.5 shadow-card" ><ScoreRing score={score} /></div>
- <div className="w-full rounded-2xl border bg-transparent p-4 shadow-soft" >
- <h3 className="mb-2.5 text-sm font-bold" >💡 AI Önerileri</h3>
- <ul className="space-y-2 text-xs" >
- {aiTips.map((tip, i) => <li key={i} className="flex items-start gap-2"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" style={{}} />{tip.text}</li>)}
- </ul>
+  <div className="rounded-full bg-transparent p-1.5 shadow-card" ><ScoreRing score={score} /></div>
+  <div className="w-full rounded-2xl border bg-transparent p-4 shadow-soft" >
+   <h3 className="mb-2.5 text-sm font-bold" >💡 AI Önerileri</h3>
+   <ul className="space-y-2 text-xs" >
+    {aiTips.map((tip, i) => <li key={i} className="flex items-start gap-2"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />{tip.text}</li>)}
+   </ul>
+  </div>
  </div>
- </div>
- </div>
+</div>
  </div>
 
  {/* ====== MERKEZI TEDARIKCI + PAZARYERI UYARISI ====== */}
@@ -444,70 +586,6 @@ export default function ListingTemplateTab() {
  </div>
  </div>
  )}
- </div>
- );
-}
-
-// ==================== KURAL SATIRI ====================
-
-function RuleRow({ rule, editMode, canRemove, onUpdate, onRemove }: {
- rule: PriceRule; editMode: boolean; canRemove: boolean;
- onUpdate: (field: keyof PriceRule, value: string) => void; onRemove: () => void;
-}) {
- const margin = toNum(rule.profitMargin); const fixed = toNum(rule.fixedAmount);
- const hasMargin = margin > 0; const hasFixed = fixed > 0; const isEmpty = !hasMargin && !hasFixed;
-
- return (
- <div className="grid grid-cols-[minmax(0,4fr)_minmax(0,4fr)_minmax(0,4fr)] items-center px-6 py-4">
- <div className="flex min-w-0 items-center gap-2 pr-3">
- <span className="shrink-0 text-[10px]" style={{}}>▸</span>
- {editMode ? (
- <div className="flex items-center gap-1.5">
- <input type="text" inputMode="decimal" value={rule.minPrice} onChange={(e) => onUpdate('minPrice', e.target.value)} onFocus={(e) => e.target.select()}
- className="w-20 rounded-lg bg-transparent px-2 py-1.5 text-right text-sm tabular-nums outline-none" placeholder="₺0" />
- <span className="text-xs text-current">–</span>
- <input type="text" inputMode="decimal" value={rule.maxPrice} onChange={(e) => onUpdate('maxPrice', e.target.value)} onFocus={(e) => e.target.select()}
- className="w-20 rounded-lg bg-transparent px-2 py-1.5 text-right text-sm tabular-nums outline-none" placeholder="₺0=sınırsız" />
- </div>
- ) : <span className="truncate text-sm font-medium" title={rangeLabel(rule)}>{rangeLabel(rule)}</span>}
- </div>
-
- <div className="pr-3">
- {editMode ? (
- <div className="flex items-center gap-1">
- <input type="text" inputMode="decimal" value={rule.profitMargin} onChange={(e) => onUpdate('profitMargin', e.target.value)} onFocus={(e) => e.target.select()}
- className="w-16 rounded-lg bg-transparent px-2 py-1.5 text-right text-sm tabular-nums outline-none" placeholder="%" />
- <span className="w-4 text-xs text-current">%</span>
- </div>
- ) : hasMargin ? (
- <span className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-text shadow-sm" style={{}}>
- <span className="flex h-4 w-4 items-center justify-center rounded-full bg-transparent/30 text-[10px]">✓</span>{rule.profitMargin} %
- </span>
- ) : hasFixed ? (
- <span className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-text shadow-sm" style={{}}>⚙ Sabit Tutar</span>
- ) : <span className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-text shadow-sm" style={{}}>⚠️ Eşleşme Yok</span>}
- </div>
-
- <div className="flex items-center gap-2">
- {editMode ? (
- <div className="flex items-center gap-1">
- <input type="text" inputMode="decimal" value={rule.fixedAmount} onChange={(e) => onUpdate('fixedAmount', e.target.value)} onFocus={(e) => e.target.select()}
- className="w-20 rounded-lg bg-transparent px-2 py-1.5 text-right text-sm tabular-nums outline-none" placeholder="₺0" />
- <span className="text-xs text-current">TL</span>
- <select value={rule.rounding} onChange={(e) => onUpdate('rounding', e.target.value)} className="ml-1 rounded-lg bg-transparent px-2 py-1.5 text-xs outline-none" title="Yuvarlama">
- {ROUNDING_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
- </select>
- <button type="button" onClick={onRemove} disabled={!canRemove} className="ml-1 rounded-lg p-1.5 text-sm transition-colors disabled:opacity-30" style={{}} title="Kuralı sil">🗑️</button>
- </div>
- ) : hasFixed ? (
- <span className="inline-flex items-center rounded-xl px-4 py-2 text-sm font-bold shadow-inner" style={{}}>
- + {fixed.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL
- </span>
- ) : isEmpty ? (
- <button type="button" onClick={() => onUpdate('profitMargin', rule.profitMargin || '10')}
- className="inline-flex items-center rounded-xl bg-transparent px-4 py-2 text-sm font-semibold shadow-soft transition-all hover:shadow-hover" title="Kuralı doldurmak için tıklayın (Düzenle ile detaylandırın)">Manuel Eşleştir</button>
- ) : <span className="inline-flex items-center rounded-xl px-4 py-2 text-sm font-semibold shadow-inner" style={{}}>+ 0,00 TL</span>}
- </div>
  </div>
  );
 }

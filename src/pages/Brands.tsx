@@ -112,7 +112,7 @@ export default function BrandIntelligenceV6() {
  try {
  const res = await apiFetch<{ message: string }>('/brands/match', {
  method: 'POST', headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ xmlBrandName, dgBrandId }),
+ body: JSON.stringify({ xmlBrandName, dgBrandId, brandSource: 'CUSTOMER' }),
  });
  if (res.ok && res.data) showToast('success', res.data.message);
  else showToast('error', res.error?.message || 'Eşleştirme başarısız');

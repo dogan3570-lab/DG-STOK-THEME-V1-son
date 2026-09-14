@@ -524,6 +524,11 @@ async function runAutoMatch(xmlSourceId: string | null = null) {
       apply: true,
       aiLimit: Number(process.env.CATEGORY_AI_LIMIT ?? 25),
       includeMatched: false,
+      onProgress: (processed, total) => {
+        // Canlı progress: autoMatchState IS SIRASINDA guncellenir (0/N -> ara -> N/N)
+        autoMatchState.processedProducts = processed;
+        autoMatchState.totalProducts = total;
+      },
     });
     autoMatchState.processedProducts = result.totalEvaluated;
     autoMatchState.matchedCount = result.productMutations;
@@ -1878,6 +1883,43 @@ router.delete('/:id', requireAuth, async (req: Request, res: Response) => {
 // ==================== NOT-GOING: Products not ready for marketplace ====================
 // GET /categories/not-going?xmlSourceId=X&page=1&limit=100&marketplaceId=Y&search=Z&gateFilter=category
 // Response: { ok, items, stats: { total, ready, notReady, byGate: {category,brand,variant,template,marketplace,price,stock}, multiMissing }, pagination: {page,limit,total,totalPages,hasNext,hasPrevious} }
+
+// ---- NOT-GOING EXCLUSION REGISTRY (Setting tablosu; schema DEĞİŞMEDEN) ----
+// "Pazaryerine Gitmeyen" ayrı bir tablo değil — bu endpoint sorgu anında hesaplanan bir
+// GÖRÜNÜMDÜR (Product gate alanları + status!=DELETED). "Bu ekrandan çıkar" işlemi ürünü
+// silmez: yalnızca ürün kimliğini Setting kaydına (not_going_excluded: CSV) yazar ve
+// görünüm bu setteki ID'leri hariç tutar. Ürün kaydı, XML verisi, kategori/marka/varyant
+// hazırlıkları ve diğer tüm modüller OLDUĞU GİBİ korunur. Geri alma = kaydı silmek.
+const NOT_GOING_EXCLUDED_KEY = 'not_going_excluded';
+
+async function getNotGoingExcludedSet(): Promise<Set<string>> {
+  const row = await prisma.setting.findUnique({ where: { key: NOT_GOING_EXCLUDED_KEY }, select: { value: true } });
+  if (!row?.value) return new Set();
+  return new Set(row.value.split(',').map(s => s.trim()).filter(Boolean));
+}
+
+async function addNotGoingExcluded(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const current = await getNotGoingExcludedSet();
+  for (const id of ids) current.add(id);
+  await prisma.setting.upsert({
+    where: { key: NOT_GOING_EXCLUDED_KEY },
+    update: { value: Array.from(current).join(',') },
+    create: { key: NOT_GOING_EXCLUDED_KEY, value: Array.from(current).join(',') },
+  });
+}
+
+async function removeNotGoingExcluded(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const current = await getNotGoingExcludedSet();
+  for (const id of ids) current.delete(id);
+  await prisma.setting.upsert({
+    where: { key: NOT_GOING_EXCLUDED_KEY },
+    update: { value: Array.from(current).join(',') },
+    create: { key: NOT_GOING_EXCLUDED_KEY, value: Array.from(current).join(',') },
+  });
+}
+
 router.get('/not-going', requireAuth, async (req: Request, res: Response) => {
   try {
     const xmlSourceId = readQueryValue(req.query?.xmlSourceId);
@@ -1892,32 +1934,60 @@ router.get('/not-going', requireAuth, async (req: Request, res: Response) => {
       return res.json({ ok: true, items: [], stats: { total: 0, ready: 0, notReady: 0, byGate: { category: 0, brand: 0, variant: 0, template: 0, marketplace: 0, price: 0, stock: 0 }, multiMissing: 0 }, pagination: { page: 1, limit, total: 0, totalPages: 0, hasNext: false, hasPrevious: false } });
     }
 
-    // xmlSourceId kapsamindaki tum urunleri al (durum filtresi: DELETED olmayanlar)
-    const sourceProducts = await prisma.product.findMany({
-      where: { xmlSourceId, status: { not: 'DELETED' } },
+    // EXCLUSION: kullanıcı bu ekrandan çıkardığı ürünler görünmez (ürün kaydı silinmez)
+    const excluded = await getNotGoingExcludedSet();
+
+    // Pazaryerine Gitmeyen = GERÇEKTEN GÖNDERİM DENEMESİ YAPILMIŞ fakat başarısız olmuş ürünler
+    // ProductMarketplaceState'de status = 'ERROR' olan kayıtları bul
+    const pmsWhere: any = {
+      status: 'ERROR',
+      product: { xmlSourceId, status: { not: 'DELETED' } },
+    };
+    if (marketplaceId) {
+      pmsWhere.marketplaceId = marketplaceId;
+    }
+    if (excluded.size > 0) {
+      pmsWhere.product.id = { notIn: Array.from(excluded) };
+    }
+
+    const failedStates = await prisma.productMarketplaceState.findMany({
+      where: pmsWhere,
       select: {
-        id: true, title: true, sku: true, barcode: true, stock: true,
-        salePrice: true, purchasePrice: true, images: true,
-        categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
-        categoryId: true, brandId: true, updatedAt: true,
-        category: { select: { id: true, name: true } },
-        brand: { select: { id: true, name: true } },
-        xmlSource: { select: { id: true, name: true } },
+        id: true,
+        productId: true,
+        marketplaceId: true,
+        status: true,
+        errorMessage: true,
+        lastActionAt: true,
+        product: {
+          select: {
+            id: true, title: true, sku: true, barcode: true, stock: true,
+            salePrice: true, purchasePrice: true, images: true,
+            categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
+            categoryId: true, brandId: true, updatedAt: true,
+            category: { select: { id: true, name: true } },
+            brand: { select: { id: true, name: true } },
+            xmlSource: { select: { id: true, name: true } },
+          },
+        },
+        marketplace: { select: { id: true, key: true, name: true } },
       },
+      orderBy: { lastActionAt: 'desc' },
     });
 
-    // Gate bazli hesaplama — tum urunler uzerinde
+    // Gate bazli hesaplama — sadece başarısız gönderim denemesi olan ürünler uzerinde
     const byGate = { category: 0, brand: 0, variant: 0, template: 0, marketplace: 0, price: 0, stock: 0 };
     let readyCount = 0;
     let multiMissing = 0;
 
-    const enrichedAll = sourceProducts.map((p: any) => {
+    const enrichedAll = failedStates.map((pms: any) => {
+      const p = pms.product;
       const gates = {
         category:  { ok: !!p.categoryId, gate: 'category' },
         brand:     { ok: !!p.brandId, gate: 'brand' },
         variant:   { ok: !!p.variantMatch, gate: 'variant' },
         template:  { ok: !!p.templateMatch, gate: 'template' },
-        marketplace: { ok: false, gate: 'marketplace' }, // operational match ayrı hesaplanır
+        marketplace: { ok: false, gate: 'marketplace' },
         price:     { ok: !!p.salePrice && p.salePrice > 0, gate: 'price' },
         stock:     { ok: p.stock > 0, gate: 'stock' },
       };
@@ -1942,6 +2012,11 @@ router.get('/not-going', requireAuth, async (req: Request, res: Response) => {
         isReady, gates,
         primaryReason: !p.categoryId ? 'Kategori eksik' : !p.brandId ? 'Marka eksik' : !p.variantMatch ? 'Varyant eksik' : !p.templateMatch ? 'Şablon eksik' : 'Diğer',
         updatedAt: p.updatedAt?.toISOString?.() || p.updatedAt,
+        marketplaceId: pms.marketplaceId,
+        marketplaceKey: pms.marketplace?.key || null,
+        marketplaceName: pms.marketplace?.name || null,
+        errorMessage: pms.errorMessage,
+        lastActionAt: pms.lastActionAt?.toISOString?.() || pms.lastActionAt,
       };
     });
 
@@ -1961,11 +2036,36 @@ router.get('/not-going', requireAuth, async (req: Request, res: Response) => {
     }
 
     // Gate filtresi
+    // FIX(GATE-FILTER): UI kebab-case değerler gönderiyor (cat-missing, not-ready, multi-missing);
+    // backend gates key'leri farklıydı (category, brand...) → p.gates['cat-missing'] undefined
+    // olup filtre SESSİZCE hiç uygulanmıyordu. Kontrat çevirisi backend'de normalize edilir:
+    const GATE_FILTER_MAP: Record<string, string> = {
+      'cat-missing': 'category',
+      'brand-missing': 'brand',
+      'var-missing': 'variant',
+      'category': 'category',
+      'brand': 'brand',
+      'variant': 'variant',
+      'template': 'template',
+      'marketplace': 'marketplace',
+      'price': 'price',
+      'stock': 'stock',
+    };
+    const normalizedGateFilter = GATE_FILTER_MAP[gateFilter] ?? gateFilter;
     if (gateFilter && gateFilter !== 'all') {
-      filtered = filtered.filter(p => {
-        const g = p.gates[gateFilter as keyof typeof p.gates];
-        return g && !g.ok;
-      });
+      if (gateFilter === 'multi-missing') {
+        filtered = filtered.filter(p => {
+          const missing = Object.values(p.gates as Record<string, { ok: boolean }>).filter(g => g && !g.ok);
+          return missing.length > 1;
+        });
+      } else if (gateFilter === 'not-ready') {
+        filtered = filtered.filter(p => !p.isReady);
+      } else {
+        filtered = filtered.filter(p => {
+          const g = p.gates[normalizedGateFilter as keyof typeof p.gates];
+          return g && !g.ok;
+        });
+      }
     }
 
     // Sayfalama
@@ -2013,6 +2113,294 @@ router.post('/not-going/resend', requireAuth, async (req: Request, res: Response
   } catch (error) {
     console.error('Error in not-going resend:', error);
     res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Gönderim hatası' } });
+  }
+});
+
+// ==================== NOT-GOING REMOVE (ürünü DEĞİL, sadece bu ekrandan çıkarır) ====================
+// POST /categories/not-going/remove  body: { productIds: string[] }
+// Product kaydına DOKUNMAZ: status, XML verisi, gate'ler, kategori/marka/varyant hazırlıkları
+// ve diğer tüm modüller korunur. Yalnızca exclusion kaydına ekler → ürün bu görünümde artık
+// listelenmez. Şartları sağlıyorsa Gönderime Hazır akışında normal olarak yer alır.
+router.post('/not-going/remove', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { productIds } = req.body || {};
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'productIds dizisi zorunlu ve boş olamaz' } });
+    }
+    if (productIds.length > 500) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Tek seferde en fazla 500 ürün çıkarılabilir' } });
+    }
+    const invalid = productIds.filter((id: unknown) => typeof id !== 'string' || !/^[0-9a-fA-F-]{10,40}$/.test(id));
+    if (invalid.length > 0) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: `${invalid.length} geçersiz ürün kimliği` } });
+    }
+
+    // Ürünlerin gerçekten var olduğunu ve DELETED olmadığını doğrula (yanlış ID koruması)
+    const existing = await prisma.product.findMany({
+      where: { id: { in: [...new Set(productIds)] }, status: { not: 'DELETED' } },
+      select: { id: true, title: true },
+    });
+    const existingSet = new Set(existing.map(p => p.id));
+    const notFound = productIds.filter(id => !existingSet.has(id));
+
+    // Exclusion kaydına ekle (ürün kaydına hiçbir yazma yapılmaz)
+    await addNotGoingExcluded([...existingSet]);
+
+    const actorUserId = (req as unknown as { actor?: { userId?: string } }).actor?.userId ?? null;
+    await prisma.auditLog.create({
+      data: {
+        action: 'NOT_GOING_REMOVE',
+        entity: 'Product',
+        entityId: existing.length === 1 ? existing[0].id : null,
+        actorUserId,
+        success: true,
+        details: `${existing.length} ürün "Pazaryerine Gitmeyen" ekranından çıkarıldı (ürün kaydı korunur)`,
+      },
+    }).catch(() => null);
+
+    return res.json({ ok: true, removed: existing.length, notFound, total: productIds.length });
+  } catch (error) {
+    console.error('Error in not-going remove:', error);
+    return res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Çıkarma işlemi başarısız' } });
+  }
+});
+
+// ==================== NOT-GOING RESTORE (exclusion'ı geri alır — ürün listeye döner) ====================
+// POST /categories/not-going/restore  body: { productIds: string[] }
+router.post('/not-going/restore', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { productIds } = req.body || {};
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'productIds dizisi zorunlu ve boş olamaz' } });
+    }
+    const invalid = productIds.filter((id: unknown) => typeof id !== 'string' || !/^[0-9a-fA-F-]{10,40}$/.test(id));
+    if (invalid.length > 0) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: `${invalid.length} geçersiz ürün kimliği` } });
+    }
+
+    await removeNotGoingExcluded(productIds);
+
+    const actorUserId = (req as unknown as { actor?: { userId?: string } }).actor?.userId ?? null;
+    await prisma.auditLog.create({
+      data: {
+        action: 'NOT_GOING_RESTORE',
+        entity: 'Product',
+        entityId: productIds.length === 1 ? productIds[0] : null,
+        actorUserId,
+        success: true,
+        details: `${productIds.length} ürün "Pazaryerine Gitmeyen" ekranına geri alındı`,
+      },
+    }).catch(() => null);
+
+    return res.json({ ok: true, restored: productIds.length });
+  } catch (error) {
+    console.error('Error in not-going restore:', error);
+    return res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Geri alma başarısız' } });
+  }
+});
+
+// ==================== FILTERED PRODUCTS + PRODUCT DETAIL (Kategori Havuzu UI contract) ====================
+// UI (catFetchFilteredProducts / catOpenProductDetail) bu iki endpoint'i bekler; veri TAMAMEN gercek DB'den gelir.
+
+// Kategori agacini parentId zincirinden ceker (gercek Category hiyerarsisi — uydurma yok)
+async function buildCategoryPath(categoryId: string): Promise<{ id: string; name: string; path: string; externalId: string | null } | null> {
+  const chain: Array<{ id: string; name: string; parentId: string | null; externalId: string | null }> = [];
+  let currentId: string | null = categoryId;
+  let guard = 0;
+  while (currentId !== null && guard < 12) {
+    const cid: string = currentId;
+    const c: { id: string; name: string; parentId: string | null; externalId: string | null } | null =
+      await prisma.category.findUnique({ where: { id: cid }, select: { id: true, name: true, parentId: true, externalId: true } });
+    if (!c) break;
+    chain.push(c);
+    currentId = c.parentId;
+    guard++;
+  }
+  if (chain.length === 0) return null;
+  const path = chain.slice().reverse().map(c => c.name).join(' > ');
+  const leaf = chain[0];
+  return { id: leaf.id, name: leaf.name, path, externalId: leaf.externalId };
+}
+
+// GET /categories/filtered — UI urun listesi (gercek DB + gercek filtreler + gercek pagination)
+router.get('/filtered', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const xmlSourceId = readQueryValue(req.query?.xmlSourceId);
+    const marketplaceId = readQueryValue(req.query?.marketplaceId);
+    const page = Math.max(1, parseInt(String(req.query.page || '1')) || 1);
+    const pageSize = Math.min(200, Math.max(1, parseInt(String(req.query.pageSize || '50')) || 50));
+    const sortByRaw = String(req.query.sortBy || 'priority');
+    const search = String(req.query.search || '').trim();
+
+    if (!xmlSourceId || !marketplaceId) {
+      return res.status(400).json({ ok: false, error: { code: 'CONTEXT_REQUIRED', message: 'xmlSourceId ve marketplaceId zorunludur' } });
+    }
+
+    // Context gercekligi: kaynak ve pazaryeri gercekten var mi
+    const [src, mp] = await Promise.all([
+      prisma.xmlSource.findUnique({ where: { id: xmlSourceId }, select: { id: true, name: true } }),
+      prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { id: true, name: true, key: true } }),
+    ]);
+    if (!src) return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'XML kaynağı bulunamadı' } });
+    if (!mp) return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+
+    const where: any = { xmlSourceId, status: { not: 'DELETED' } };
+    if (search) where.OR = [{ title: { contains: search } }, { xmlKey: { contains: search } }, { sku: { contains: search } }, { barcode: { contains: search } }];
+
+    let orderBy: any = { createdAt: 'desc' };
+    if (sortByRaw === 'name') orderBy = { title: 'asc' };
+    else if (sortByRaw === 'name-desc') orderBy = { title: 'desc' };
+
+    const [products, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        select: {
+          id: true, xmlKey: true, title: true, supplierCategory: true, xmlBrandName: true,
+          sku: true, barcode: true, stock: true, salePrice: true, purchasePrice: true,
+          status: true, categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
+          categoryId: true, brandId: true, aiScore: true, matchedBy: true, aiSuggestedCategoryId: true,
+          images: true, description: true, createdAt: true, updatedAt: true,
+          category: { select: { id: true, name: true } },
+          brand: { select: { id: true, name: true } },
+        },
+        orderBy,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.product.count({ where }),
+    ]);
+
+    // Her urun icin SECILI pazaryerinin gercek kategori mapping bilgisi (externalId/externalName/externalPath)
+    const categoryIds = Array.from(new Set(products.map(p => p.categoryId).filter(Boolean) as string[]));
+    const mappingsByCat = new Map<string, { externalId: string | null; externalName: string | null; externalPath: string | null }>();
+    if (categoryIds.length > 0) {
+      const maps = await prisma.categoryMapping.findMany({
+        where: { categoryId: { in: categoryIds }, marketplaceId, active: true },
+        select: { categoryId: true, externalId: true, externalName: true, externalPath: true },
+      });
+      for (const m of maps) mappingsByCat.set(m.categoryId, { externalId: m.externalId, externalName: m.externalName, externalPath: m.externalPath });
+    }
+
+    const items = products.map((p) => {
+      const catInfo = p.categoryId ? mappingsByCat.get(p.categoryId) ?? null : null;
+      return {
+        id: p.id, xmlKey: p.xmlKey, title: p.title, supplierCategory: p.supplierCategory,
+        xmlBrandName: p.xmlBrandName, sku: p.sku, barcode: p.barcode,
+        stock: p.stock, salePrice: p.salePrice, purchasePrice: p.purchasePrice,
+        status: p.status, categoryMatch: p.categoryMatch, brandMatch: p.brandMatch,
+        variantMatch: p.variantMatch, templateMatch: p.templateMatch,
+        categoryId: p.categoryId, brandId: p.brandId, aiScore: p.aiScore, matchedBy: p.matchedBy,
+        aiSuggestedCategoryId: p.aiSuggestedCategoryId,
+        categoryName: p.category?.name ?? null, brandName: p.brand?.name ?? null,
+        imageUrl: (p.images || '').split(',')[0]?.trim() || null,
+        description: p.description,
+        // SECILI pazaryerine ait GERCEK kategori bilgisi (yoksa null — sahte veri uretilmez)
+        marketplaceCategory: catInfo,
+        createdAt: p.createdAt, updatedAt: p.updatedAt,
+      };
+    });
+
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const summary = {
+      total, matched: await prisma.product.count({ where: { ...where, categoryMatch: true } }),
+      unmatched: await prisma.product.count({ where: { ...where, categoryMatch: false } }),
+    };
+
+    return res.json({ ok: true, items, pagination: { page, limit: pageSize, total, totalPages, hasNext: page < totalPages, hasPrevious: page > 1 }, summary });
+  } catch (error) {
+    console.error('Error fetching filtered products:', error);
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch filtered products' } });
+  }
+});
+
+// GET /categories/:productId — UI urun detay (gercek DB + gercek kategori agaci + gercek safety gate)
+// NOT: sabit route'lardan SONRA tanimlandi; /stats, /tree, /filtered gibi path'ler once eslesir.
+router.get('/:productId', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const productId = String(req.params.productId || '');
+    const marketplaceId = readQueryValue(req.query?.marketplaceId);
+    if (!/^[0-9a-fA-F-]{10,40}$/.test(productId)) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Geçersiz ürün kimliği' } });
+    }
+
+    const product = await prisma.product.findFirst({
+      where: { id: productId, status: { not: 'DELETED' } },
+      select: {
+        id: true, xmlKey: true, title: true, supplierCategory: true, xmlBrandName: true,
+        description: true, sku: true, barcode: true, stock: true, salePrice: true, purchasePrice: true,
+        status: true, categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
+        categoryId: true, matchedBy: true, aiScore: true, aiSuggestedCategoryId: true,
+        images: true, createdAt: true, updatedAt: true,
+        category: { select: { id: true, name: true, externalId: true } },
+        brand: { select: { id: true, name: true } },
+      },
+    });
+    if (!product) {
+      return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Ürün bulunamadı' } });
+    }
+
+    // Kategori agaci — gercek Category hiyerarsisinden (parentId zinciri)
+    const currentCategory = product.categoryId ? await buildCategoryPath(product.categoryId) : null;
+
+    // Secili pazaryerine ait GERCEK mapping (externalId/externalName/externalPath); yoksa null
+    let marketplaceCategory: { externalId: string | null; externalName: string | null; externalPath: string | null } | null = null;
+    let selectedMarketplace: { id: string; name: string; key: string } | null = null;
+    if (product.categoryId) {
+      let mpId = marketplaceId;
+      if (!mpId) {
+        const ttMp = await prisma.marketplace.findUnique({ where: { key: 'tt' }, select: { id: true, name: true, key: true } });
+        mpId = ttMp?.id ?? null;
+        if (ttMp) selectedMarketplace = ttMp;
+      } else {
+        const mpRow = await prisma.marketplace.findUnique({ where: { id: mpId }, select: { id: true, name: true, key: true } });
+        if (mpRow) selectedMarketplace = mpRow;
+      }
+      if (mpId) {
+        const mapping = await prisma.categoryMapping.findFirst({
+          where: { categoryId: product.categoryId, marketplaceId: mpId, active: true },
+          select: { externalId: true, externalName: true, externalPath: true },
+        });
+        if (mapping) marketplaceCategory = mapping;
+      }
+    }
+
+    // Safety gate — mevcut gercek gate verilerinden uretilir (uydurma yok)
+    const safetyGate = {
+      passed: product.categoryMatch && product.brandMatch && product.variantMatch && product.templateMatch,
+      categoryMatch: product.categoryMatch,
+      brandMatch: product.brandMatch,
+      variantMatch: product.variantMatch,
+      templateMatch: product.templateMatch,
+      reason: !product.categoryMatch ? 'Kategori eşleşmesi eksik'
+        : !product.brandMatch ? 'Marka eşleşmesi eksik'
+        : !product.variantMatch ? 'Varyant eşleşmesi eksik'
+        : !product.templateMatch ? 'Şablon eşleşmesi eksik'
+        : null,
+    };
+
+    return res.json({
+      ok: true,
+      product: {
+        id: product.id, xmlKey: product.xmlKey, title: product.title,
+        supplierCategory: product.supplierCategory, xmlBrandName: product.xmlBrandName,
+        description: product.description, sku: product.sku, barcode: product.barcode,
+        price: product.salePrice, stock: product.stock,
+        status: product.status, categoryId: product.categoryId,
+        categoryMatch: product.categoryMatch, matchedBy: product.matchedBy,
+        // UI '!== undefined ? .toFixed(2)' kontrolu null'a karsi kirilgandi: null -> alan gonderilmez
+        aiScore: product.aiScore != null ? product.aiScore : undefined,
+        confidence: product.aiScore != null ? product.aiScore : undefined,
+        suggestedCategory: product.aiSuggestedCategoryId,
+        categoryTree: currentCategory ? { id: currentCategory.id, name: currentCategory.name, externalId: currentCategory.externalId, path: currentCategory.path } : null,
+        currentCategory: currentCategory ? { id: currentCategory.id, name: currentCategory.name, externalId: currentCategory.externalId } : null,
+        marketplaceCategory,
+        selectedMarketplace,
+        safetyGate,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching product detail:', error);
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch product detail' } });
   }
 });
 

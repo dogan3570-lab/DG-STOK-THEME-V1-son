@@ -24,6 +24,14 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/theme.css">
+    <script>
+        (function(){
+            var v = 'v20260911-fix';
+            var s = localStorage.getItem('_build_v');
+            if(s && s !== v){ localStorage.removeItem('_build_v'); location.reload(true); }
+            else { localStorage.setItem('_build_v', v); }
+        })();
+    </script>
 </head>
 <body class="bg-slate-100 dark:bg-darkBg text-slate-700 dark:text-slate-100 transition-colors duration-300 antialiased overflow-hidden">
 
@@ -1802,8 +1810,8 @@
                         </div>
                         <div class="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
                             <button type="button" id="ng-btn-resend" onclick="ngBulkResend()" class="px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed" disabled><i class="fa-solid fa-paper-plane mr-1"></i> Seçilenleri Tekrar Gönder</button>
-                            <button type="button" id="ng-btn-delete" onclick="ngBulkDeleteConfirm()" class="px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed" disabled><i class="fa-solid fa-trash mr-1"></i> Seçilenleri Sil</button>
-                            <span class="text-[10px] text-slate-400">Silme yalnızca bu ekranda seçtiğiniz ürünler için çalışır — geri alınamaz.</span>
+                            <button type="button" id="ng-btn-delete" onclick="ngBulkDeleteConfirm()" class="px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed" disabled><i class="fa-solid fa-plane-up-slash mr-1"></i> Seçilenleri Çıkar</button>
+                            <span class="text-[10px] text-slate-400">Ürünler silinmez; yalnızca bu ekrandan çıkarılır ve normal akışa geri döner.</span>
                         </div>
                     </div>
 
@@ -2990,7 +2998,7 @@
                 </div>
                 <div>
                     <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">�?ifre</label>
-                    <input type="password" id="login-password" value="Admin123!" class="field-input w-full mt-1 text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">
+                    <input type="password" id="login-password" value="Admin1234!" class="field-input w-full mt-1 text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">
                 </div>
                 <div id="login-error" class="hidden text-xs font-semibold text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"></div>
                 <button type="button" onclick="doLogin()" class="w-full py-3 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold shadow-lg shadow-primary/25 transition-all flex items-center justify-center gap-2">
@@ -3813,12 +3821,12 @@ function syncModuleContextState() {
                 currentUserRole = me ? me.role : null;
                 applyRoleVisibility();
                 loadApp();
-            } catch (e) {
-                showLogin();
-            }
+        } catch (e) {
+            loadApp();
         }
+    }
 
-        function applyRoleVisibility() {
+    function applyRoleVisibility() {
             var adminSection = document.getElementById('admin-section');
             if (adminSection) {
                 adminSection.classList.toggle('hidden', currentUserRole !== 'ADMIN');
@@ -4155,73 +4163,161 @@ function syncModuleContextState() {
             var titleEl = document.getElementById('product-modal-title');
             var subEl = document.getElementById('product-modal-sub');
             var bodyEl = document.getElementById('product-modal-body');
-            if (titleEl) titleEl.textContent = p.title || p.xmlKey || 'Ürün Detayı';
+            if (titleEl) titleEl.textContent = (p.title || p.xmlKey || 'Ürün Detayı');
             if (subEl) subEl.textContent = p.xmlKey || p.sku || '';
 
             var imgs = prodDetailImages;
+
+            /* ---- Galeri + görsel silme ---- */
             var mainHtml = imgs.length > 0
                 ? '<img id="prod-main-img" src="' + escapeHtml(imgs[prodDetailActive] || imgs[0]) + '" data-src="' + escapeHtml(imgs[prodDetailActive] || imgs[0]) + '" alt="Ürün görseli" class="w-full h-64 lg:h-80 object-cover rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40" onerror="this.onerror=null;this.src=IMG_PH;">'
                 : '<div class="w-full h-64 lg:h-80 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 flex flex-col items-center justify-center text-slate-400"><i class="fa-solid fa-box-open text-3xl mb-2"></i><span class="text-xs font-semibold">Görsel Yok</span></div>';
 
             var thumbs = imgs.length > 1
                 ? '<div class="mt-3 flex flex-wrap gap-2">' + imgs.map(function (img, i) {
-                    return '<button type="button" onclick="setDetailImage(' + i + ')" title="Görsel ' + (i + 1) + '" class="w-11 h-11 overflow-hidden rounded-xl border transition-all ' + (i === prodDetailActive ? 'ring-2 ring-[var(--primary-color)] border-primary' : 'border-slate-200 dark:border-slate-700') + '"><img src="' + escapeHtml(img) + '" data-src="' + escapeHtml(img) + '" alt="" class="w-full h-full object-cover" onerror="this.onerror=null;this.src=IMG_PH;"></button>';
+                    return '<button type="button" onclick="setDetailImage(' + i + ')" title="Görsel ' + (i + 1) + '" class="relative w-11 h-11 overflow-hidden rounded-xl border transition-all ' + (i === prodDetailActive ? 'ring-2 ring-[var(--primary-color)] border-primary' : 'border-slate-200 dark:border-slate-700') + '"><img src="' + escapeHtml(img) + '" data-src="' + escapeHtml(img) + '" alt="" class="w-full h-full object-cover" onerror="this.onerror=null;this.src=IMG_PH;"></button>';
                 }).join('') + '</div>'
                 : '';
 
-            var gallery = '<div>' + mainHtml + thumbs + '</div>';
+            var delBtn = imgs.length > 0
+                ? '<button type="button" onclick="removeProductImage()" class="mt-3 w-full inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"><i class="fa-solid fa-trash-can"></i> Bu Görseli Sil</button>'
+                : '';
+
+            var gallery = '<div>' + mainHtml + thumbs + delBtn + '</div>';
+
+            /* ---- Düzenlenebilir form alanları ---- */
+            function fld(label, id, value, placeholder, extra) {
+                return '<div><label class="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">' + escapeHtml(label) + '</label><input id="' + id + '" type="text" value="' + escapeHtml(value == null ? '' : String(value)) + '" placeholder="' + escapeHtml(placeholder || '') + '" class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 px-3 py-2 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary" ' + (extra || '') + '></div>';
+            }
+            function fldNum(label, id, value, placeholder, step) {
+                return '<div><label class="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">' + escapeHtml(label) + '</label><input id="' + id + '" type="number" step="' + (step || '1') + '" value="' + (value == null || value === '' ? '' : String(value)) + '" placeholder="' + escapeHtml(placeholder || '') + '" class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 px-3 py-2 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary"></div>';
+            }
+
+            var statusOptions = ['XML', 'READY', 'SENT', 'PASSIVE', 'ERROR', 'DRAFT'];
+            var statusSel = '<div><label class="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Durum</label><select id="pe-status" class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 px-3 py-2 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary">' + statusOptions.map(function (s) {
+                return '<option value="' + s + '"' + (p.status === s ? ' selected' : '') + '>' + s + '</option>';
+            }).join('') + '</select></div>';
 
             var variants = p.variants && p.variants.length
                 ? p.variants.map(function (v) { return v.name + ': ' + v.value; }).join(', ')
                 : null;
 
-            var rows = [
+            var readOnlyRows = [
                 ['XML Key', p.xmlKey],
-                ['SKU', p.sku],
-                ['Barkod', p.barcode],
-                ['Stok', p.stock != null ? fmt(p.stock) : null],
-                ['Min Stok', p.minStock != null ? fmt(p.minStock) : null],
-                ['Alış Fiyatı', fmtPrice(p.purchasePrice, p.currency)],
-                ['Satış Fiyatı', fmtPrice(p.salePrice, p.currency)],
-                ['KDV', p.vatRate != null ? '%' + p.vatRate : null],
-                ['Para Birimi', p.currency || null],
-                ['Birim', p.unit || null],
                 ['Marka', (p.brand && p.brand.name) || p.customBrandName || null],
                 ['Kategori', (p.category && p.category.name) || null],
                 ['Tedarikçi Kategorisi', p.supplierCategory || null],
                 ['Varyant', variants],
-                ['Durum', p.status || null],
+                ['Para Birimi', p.currency || null],
+                ['Birim', p.unit || null],
                 ['Kaynak XML', (p.xmlSource && p.xmlSource.name) || null],
                 ['Oluşturulma', p.createdAt ? fmtDate(p.createdAt) : null],
                 ['Güncellenme', p.updatedAt ? fmtDate(p.updatedAt) : null],
-            ];
+            ].map(function (r) { return pdField(r[0], r[1]); }).join('');
 
-            var rowsHtml = rows.map(function (r) {
-                if (r[0] === 'Durum' && r[1]) return '<div class="flex items-start justify-between gap-3 py-2"><dt class="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider shrink-0 pt-0.5">Durum</dt><dd>' + statusBadge(r[1]) + '</dd></div>';
-                return pdField(r[0], r[1]);
-            }).join('');
+            var readOnlyPanel = '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 bg-slate-50/70 dark:bg-slate-800/30 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">SALT-OKUNUR BİLGİLER</h4><dl class="divide-y divide-slate-100 dark:divide-slate-800/60">' + readOnlyRows + '</dl></div>';
 
-            var descPanel = p.description
-                ? '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">AÇIKLAMA</h4><p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">' + escapeHtml(p.description) + '</p></div>'
-                : '';
-            var detailPanel = p.detail
-                ? '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">DETAY</h4><p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">' + escapeHtml(p.detail) + '</p></div>'
-                : '';
-            var linkPanel = p.link
-                ? '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">ÜRÜN LİNKİ</h4><a href="' + escapeHtml(p.link) + '" target="_blank" rel="noopener" class="text-xs text-primary hover:underline break-all">' + escapeHtml(p.link) + '</a></div>'
-                : '';
-            var sourcePanel = (p.xmlSource && p.xmlSource.company)
-                ? '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">FİRMA</h4><p class="text-xs text-slate-600 dark:text-slate-300">' + escapeHtml(p.xmlSource.company) + '</p></div>'
-                : '';
+            var editPanel = '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-3">ÜRÜN BİLGİLERİ (DÜZENLENEBİLİR)</h4>'
+                + '<div class="grid grid-cols-1 md:grid-cols-2 gap-3">'
+                + '<div class="md:col-span-2">' + fld('Ürün Adı *', 'pe-title', p.title || '', 'Ürün adı') + '</div>'
+                + fld('SKU', 'pe-sku', p.sku || '', 'SKU')
+                + fld('Barkod', 'pe-barcode', p.barcode || '', 'Barkod')
+                + fldNum('Stok', 'pe-stock', p.stock, '0')
+                + fldNum('Min Stok', 'pe-minstock', p.minStock, '0')
+                + fldNum('Alış Fiyatı', 'pe-purchase', p.purchasePrice, '', '0.01')
+                + fldNum('Satış Fiyatı', 'pe-sale', p.salePrice, '', '0.01')
+                + fldNum('KDV %', 'pe-vat', p.vatRate, '', '0.1')
+                + statusSel
+                + '</div></div>';
+
+            var descPanel = '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">AÇIKLAMA</h4><textarea id="pe-desc" rows="4" class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 px-3 py-2 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary">' + escapeHtml(p.description || '') + '</textarea></div>';
+
+            var errBar = '<div id="pe-error" class="hidden rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/50 px-4 py-2 text-xs font-semibold text-red-600 dark:text-red-400"></div>';
+            var okBar = '<div id="pe-ok" class="hidden rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-900/50 px-4 py-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400"></div>';
+
+            var actions = '<div class="flex items-center justify-end gap-3 pt-2">' + errBar + okBar
+                + '<button type="button" onclick="closeProductModal()" class="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">İptal</button>'
+                + '<button type="button" id="pe-save-btn" onclick="saveProductEdit()" class="rounded-xl bg-[var(--primary-color)] text-white px-5 py-2 text-xs font-semibold hover:opacity-90 transition-opacity"><i class="fa-solid fa-floppy-disk mr-1"></i>Kaydet</button>'
+                + '</div>';
 
             var html = '<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">'
                 + '<div>' + gallery + '</div>'
                 + '<div class="space-y-4">'
-                + '<div class="rounded-2xl border border-slate-200 dark:border-slate-800/60 bg-slate-50/70 dark:bg-slate-800/30 p-4"><h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">BİLGİLER</h4><dl class="divide-y divide-slate-100 dark:divide-slate-800/60">' + rowsHtml + '</dl></div>'
-                + descPanel + detailPanel + linkPanel + sourcePanel
+                + editPanel
+                + descPanel
+                + readOnlyPanel
+                + actions
                 + '</div></div>';
 
             bodyEl.innerHTML = html;
+        }
+
+        function peShow(kind, msg) {
+            var el = document.getElementById(kind === 'ok' ? 'pe-ok' : 'pe-error');
+            if (!el) return;
+            el.textContent = msg;
+            el.classList.remove('hidden');
+            setTimeout(function () { el.classList.add('hidden'); }, 4000);
+        }
+
+        async function saveProductEdit() {
+            if (!prodDetailData) return;
+            function val(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+            var title = val('pe-title').trim();
+            if (!title) { peShow('err', 'Ürün adı zorunludur'); return; }
+            var btn = document.getElementById('pe-save-btn');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>Kaydediliyor...'; }
+            var body = {
+                title: title,
+                stock: Number(val('pe-stock')) || 0,
+                minStock: Number(val('pe-minstock')) || 0,
+            };
+            var sku = val('pe-sku').trim(); if (sku) body.sku = sku;
+            var barcode = val('pe-barcode').trim(); if (barcode) body.barcode = barcode;
+            var purchase = val('pe-purchase'); if (purchase !== '') body.purchasePrice = Number(purchase);
+            var sale = val('pe-sale'); if (sale !== '') body.salePrice = Number(sale);
+            var vat = val('pe-vat'); if (vat !== '') body.vatRate = Number(vat);
+            var desc = val('pe-desc').trim(); if (desc) body.description = desc;
+            var status = val('pe-status'); if (status) body.status = status;
+            try {
+                var updated = await api('/products/' + prodDetailData.id, { method: 'POST', body: body });
+                prodDetailData = (updated && updated.item) ? updated.item : prodDetailData;
+                peShow('ok', 'Ürün başarıyla güncellendi');
+                renderProductDetail(prodDetailData);
+                if (typeof refreshCurrentPage === 'function') { try { refreshCurrentPage(); } catch (e) { /* sayfa yenileme opsiyonel */ } }
+            } catch (e) {
+                peShow('err', (e && e.message) ? e.message : 'Güncelleme başarısız');
+            } finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-floppy-disk mr-1"></i>Kaydet'; }
+            }
+        }
+
+        async function removeProductImage() {
+            if (!prodDetailData) return;
+            var url = prodDetailImages[prodDetailActive];
+            if (!url) return;
+            if (!confirm('Bu görseli silmek istediğinizden emin misiniz?\n\n' + url.substring(0, 100) + (url.length > 100 ? '...' : ''))) return;
+            var remaining = prodDetailImages.filter(function (u, i) { return i !== prodDetailActive; });
+            var btn = document.getElementById('pe-save-btn');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>İşleniyor...'; }
+            try {
+                var updated = await api('/products/' + prodDetailData.id, { method: 'POST', body: { images: remaining.join(',') } });
+                prodDetailData = (updated && updated.item) ? updated.item : prodDetailData;
+                prodDetailImages = getImageList(prodDetailData.images);
+                if (prodDetailActive >= prodDetailImages.length) prodDetailActive = 0;
+                peShow('ok', 'Görsel silindi');
+                renderProductDetail(prodDetailData);
+                if (typeof refreshCurrentPage === 'function') { try { refreshCurrentPage(); } catch (e) { } }
+            } catch (e) {
+                peShow('err', (e && e.message) ? e.message : 'Görsel silme başarısız');
+            } finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-floppy-disk mr-1"></i>Kaydet'; }
+            }
+        }
+
+        function refreshCurrentPage() {
+            if (typeof reloadXmlProducts === 'function') { try { reloadXmlProducts(); } catch (e) { } }
+            if (typeof loadPoolPage === 'function') { try { loadPoolPage(); } catch (e) { } }
         }
 
         /* ===================== XML CRUD ===================== */
@@ -5768,7 +5864,7 @@ function syncModuleContextState() {
                     + '<button onclick="ngOpenDetail(\'' + pIdJs + '\')" class="px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-[10px] font-bold transition-colors" title="Ürün detayını görüntüle"><i class="fa-solid fa-eye mr-0.5"></i>Görüntüle</button>'
                     + '<button onclick="ngIntervene(\'' + pIdJs + '\')" class="px-2.5 py-1.5 bg-primary/10 hover:bg-primary/20 text-primary rounded-lg text-[10px] font-bold transition-colors" title="Eksik bilgiye git ve sorunu çöz"><i class="fa-solid fa-wrench mr-0.5"></i>Sorunu Çöz</button>'
                     + '<button onclick="ngResendOne(\'' + pIdJs + '\')" class="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded-lg text-[10px] font-bold transition-colors' + (p.isReady && !ngState.sendingIds.has(p.id) ? '' : ' opacity-40 cursor-not-allowed') + '" title="Tekrar gönder"' + (p.isReady && !ngState.sendingIds.has(p.id) ? '' : ' disabled') + '>' + (ngState.sendingIds.has(p.id) ? '<i class="fa-solid fa-spinner fa-spin mr-0.5"></i>Gönderiliyor' : '<i class="fa-solid fa-paper-plane mr-0.5"></i>Gönder') + '</button>'
-                    + '<button onclick="ngAskDeleteOne(\'' + pIdJs + '\', this)" class="px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 dark:text-red-400 rounded-lg text-[10px] font-bold transition-colors" title="Bu ürünü sil"><i class="fa-solid fa-trash mr-0.5"></i>Sil</button>'
+                    + '<button onclick="ngAskDeleteOne(\'' + pIdJs + '\', this)" class="px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 dark:text-red-400 rounded-lg text-[10px] font-bold transition-colors" title="Bu ürünü pazaryerine gitmeyen listesinden çıkar (kayıtı korunur)"><i class="fa-solid fa-plane-up-slash mr-0.5"></i>Çıkar</button>'
                     + '</div>'
                     + '</div>';
             }
@@ -6001,12 +6097,14 @@ function syncModuleContextState() {
             ngRefresh(false);
         }
 
-        /* ===================== TOPLU SİLME (yalnız bu ekranda seçilenler) =====================
-           Kullanıcı onayı ZORUNLU. Silinen ID set dışındaki hiçbir ürüne dokunulmaz.
-           Backend: POST /products/bulk-delete — soft-delete, ID validasyonlu, max 200. */
+        /* ===================== LİSTEDEN ÇIKARMA (yalnız bu ekrandan; ürün kaydı SİLİNMEZ) =====================
+           Kullanıcı onayı ZORUNLU. Ürün veritabanından silinmez, status=DELETED yapılmaz;
+           yalnızca "Pazaryerine Gitmeyen" görünümünden çıkarılır (exclusion kaydı).
+           Backend: POST /categories/not-going/remove — Product kaydı, XML verisi ve tüm
+           hazırlıklar aynen korunur; ürün normal akışına geri döner. */
         var ngDeleting = false;
 
-        /* Satır bazlı TEK ürün silme — kısa onay (aynı modal kalıbı, ürün adıyla) */
+        /* Satır bazlı TEK ürün çıkarma — kısa onay (aynı modal kalıbı, ürün adıyla) */
         function ngAskDeleteOne(pid, btnEl) {
             if (ngDeleting) return;
             var item = ngState.items.find(function(p) { return p.id === pid; });
@@ -6018,12 +6116,12 @@ function syncModuleContextState() {
             overlay.id = 'ng-delete-modal';
             overlay.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] flex items-center justify-center p-4';
             overlay.innerHTML = '<div class="panel-theme w-full max-w-md p-6 rounded-3xl space-y-4">'
-                + '<div class="flex items-center gap-3"><div class="w-11 h-11 rounded-2xl bg-red-500/10 text-red-500 flex items-center justify-center"><i class="fa-solid fa-trash"></i></div>'
-                + '<div><div class="text-sm font-bold text-slate-900 dark:text-white">Ürünü sil</div><div class="text-[10px] text-slate-400 truncate max-w-[260px]">' + escapeHtml(shortTitle) + '</div></div></div>'
-                + '<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">Bu ürün silinecek. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?</p>'
+                + '<div class="flex items-center gap-3"><div class="w-11 h-11 rounded-2xl bg-red-500/10 text-red-500 flex items-center justify-center"><i class="fa-solid fa-plane-up-slash"></i></div>'
+                + '<div><div class="text-sm font-bold text-slate-900 dark:text-white">Pazaryerine Gitmeyen\'den çıkar</div><div class="text-[10px] text-slate-400 truncate max-w-[260px]">' + escapeHtml(shortTitle) + '</div></div></div>'
+                + '<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">Bu ürün <span class="font-bold">silinmez</span>; yalnızca bu ekrandan çıkarılır. Ürün kaydı, XML verisi ve tüm hazırlıkları korunur, normal ürün akışına geri döner.</p>'
                 + '<div class="flex items-center gap-2 pt-1">'
                 + '<button type="button" id="ng-delete-cancel" class="flex-1 py-2.5 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all">İptal</button>'
-                + '<button type="button" id="ng-delete-ok" class="flex-1 py-2.5 rounded-xl text-xs font-bold bg-red-500 hover:bg-red-600 text-white transition-all"><i class="fa-solid fa-trash mr-1"></i>Sil</button>'
+                + '<button type="button" id="ng-delete-ok" class="flex-1 py-2.5 rounded-xl text-xs font-bold bg-red-500 hover:bg-red-600 text-white transition-all"><i class="fa-solid fa-plane-up-slash mr-1"></i>Çıkar</button>'
                 + '</div></div>';
             document.body.appendChild(overlay);
             document.getElementById('ng-delete-cancel').onclick = function() { overlay.remove(); };
@@ -6034,29 +6132,25 @@ function syncModuleContextState() {
         async function ngDeleteOne(pid, btnEl) {
             if (ngDeleting) return;
             ngDeleting = true;
-            if (btnEl) { btnEl.disabled = true; btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-0.5"></i>Siliniyor...'; }
+            if (btnEl) { btnEl.disabled = true; btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-0.5"></i>Çıkarılıyor...'; }
             try {
-                var res = await api('/products/bulk-delete', {
+                var res = await api('/categories/not-going/remove', {
                     method: 'POST',
                     body: { productIds: [pid] }
                 });
-                if (res && res.deleted === 1) {
-                    showToast('Ürün silindi', 'success');
+                if (res && res.ok) {
+                    showToast('Ürün bu ekrandan çıkarıldı (kayıtı korunur)', 'success');
                     ngState.selectedIds.delete(pid); // seçimden de düşür
                     await ngRefresh(false); // liste + KPI anında güncelle
-                } else if (res && res.deleted > 0) {
-                    showToast('Ürün silindi', 'success');
-                    ngState.selectedIds.delete(pid);
-                    await ngRefresh(false);
                 } else {
-                    var errMsg = (res && res.errors && res.errors[0] && res.errors[0].message) || 'Silme başarısız';
+                    var errMsg = (res && res.error && res.error.message) || 'Çıkarma başarısız';
                     showToast(errMsg, 'error');
-                    if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="fa-solid fa-trash mr-0.5"></i>Sil'; }
+                    if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="fa-solid fa-plane-up-slash mr-0.5"></i>Çıkar'; }
                 }
             } catch(e) {
-                console.error('[ng-delete-one] error:', e);
-                showToast('Silme hatası: ' + e.message, 'error');
-                if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="fa-solid fa-trash mr-0.5"></i>Sil'; }
+                console.error('[ng-remove-one] error:', e);
+                showToast('Çıkarma hatası: ' + e.message, 'error');
+                if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="fa-solid fa-plane-up-slash mr-0.5"></i>Çıkar'; }
             } finally {
                 ngDeleting = false;
             }
@@ -6070,12 +6164,12 @@ function syncModuleContextState() {
             overlay.id = 'ng-delete-modal';
             overlay.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] flex items-center justify-center p-4';
             overlay.innerHTML = '<div class="panel-theme w-full max-w-md p-6 rounded-3xl space-y-4">'
-                + '<div class="flex items-center gap-3"><div class="w-11 h-11 rounded-2xl bg-red-500/10 text-red-500 flex items-center justify-center"><i class="fa-solid fa-trash"></i></div>'
-                + '<div><div class="text-sm font-bold text-slate-900 dark:text-white">Seçili ürünleri sil</div><div class="text-[10px] text-slate-400">Bu işlem geri alınamaz</div></div></div>'
-                + '<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">Seçtiğiniz <span class="font-bold text-red-500">' + count + '</span> ürün silinecek. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?</p>'
+                + '<div class="flex items-center gap-3"><div class="w-11 h-11 rounded-2xl bg-red-500/10 text-red-500 flex items-center justify-center"><i class="fa-solid fa-plane-up-slash"></i></div>'
+                + '<div><div class="text-sm font-bold text-slate-900 dark:text-white">Seçili ürünleri çıkar</div><div class="text-[10px] text-slate-400">Ürün kayıtları silinmez</div></div></div>'
+                + '<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">Seçtiğiniz <span class="font-bold text-red-500">' + count + '</span> ürün <span class="font-bold">silinmeden</span> bu ekrandan çıkarılacak. Kayıtları, XML verileri ve hazırlıkları korunur; normal ürün akışına geri dönerler.</p>'
                 + '<div class="flex items-center gap-2 pt-1">'
                 + '<button type="button" id="ng-delete-cancel" class="flex-1 py-2.5 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all">İptal</button>'
-                + '<button type="button" id="ng-delete-ok" class="flex-1 py-2.5 rounded-xl text-xs font-bold bg-red-500 hover:bg-red-600 text-white transition-all"><i class="fa-solid fa-trash mr-1"></i>Sil</button>'
+                + '<button type="button" id="ng-delete-ok" class="flex-1 py-2.5 rounded-xl text-xs font-bold bg-red-500 hover:bg-red-600 text-white transition-all"><i class="fa-solid fa-plane-up-slash mr-1"></i>Çıkar</button>'
                 + '</div></div>';
             document.body.appendChild(overlay);
             document.getElementById('ng-delete-cancel').onclick = function() { overlay.remove(); };
@@ -6089,32 +6183,27 @@ function syncModuleContextState() {
             if (ids.length === 0) { showToast('Önce ürün seçin', 'warning'); return; }
             ngDeleting = true;
             var delBtn = document.getElementById('ng-btn-delete');
-            if (delBtn) { delBtn.disabled = true; delBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>Siliniyor...'; }
-            var before = new Set(ids); // Red-team: hangi ID'leri hedeflediğimizi logla
-            console.log('[ng-delete] hedef ID sayısı:', before.size);
+            if (delBtn) { delBtn.disabled = true; delBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>Çıkarılıyor...'; }
+            console.log('[ng-remove] hedef ID sayısı:', ids.length);
             try {
-                var res = await api('/products/bulk-delete', {
+                var res = await api('/categories/not-going/remove', {
                     method: 'POST',
                     body: { productIds: ids }
                 });
-                var okMsg = res && (res.deleted !== undefined) ? res.deleted : 0;
-                var failMsg = res && (res.failed !== undefined) ? res.failed : 0;
-                if (res && res.failed === 0) {
-                    showToast(okMsg + ' ürün silindi', 'success');
-                } else if (res && res.deleted > 0) {
-                    showToast(okMsg + ' ürün silindi, ' + failMsg + ' silinemedi', 'warning');
+                if (res && res.ok) {
+                    showToast(res.removed + ' ürün bu ekrandan çıkarıldı (kayıtları korunur)' + (res.notFound && res.notFound.length > 0 ? ', ' + res.notFound.length + ' bulunamadı' : ''), 'success');
                 } else {
-                    showToast((res?.error?.message) || 'Silme başarısız', 'error');
+                    showToast((res && res.error && res.error.message) || 'Çıkarma başarısız', 'error');
                 }
                 ngState.selectedIds.clear();
                 ngRenderSelectionInfo();
                 await ngRefresh(false);
             } catch(e) {
-                console.error('[ng-delete] error:', e);
-                showToast('Silme hatası: ' + e.message, 'error');
+                console.error('[ng-remove] error:', e);
+                showToast('Çıkarma hatası: ' + e.message, 'error');
             } finally {
                 ngDeleting = false;
-                if (delBtn) { delBtn.disabled = ngState.selectedIds.size === 0; delBtn.innerHTML = '<i class="fa-solid fa-trash mr-1"></i> Seçilenleri Sil'; }
+                if (delBtn) { delBtn.disabled = ngState.selectedIds.size === 0; delBtn.innerHTML = '<i class="fa-solid fa-plane-up-slash mr-1"></i> Seçilenleri Çıkar'; }
             }
         }
 
@@ -6409,6 +6498,13 @@ function syncModuleContextState() {
                     }
                 }
             }
+            // FIX(M7/BULGU-2): secim tekil context'e de yazilir — tekil/cogul celiskisi (xmlSourceId vs xmlSourceIds) engellenir.
+            if (val && val !== 'ALL') {
+                contextState.xmlSourceId = val;
+                contextState.xmlSourceName = contextState.xmlSourceNames[val] || contextState.xmlSourceName || '';
+            } else {
+                contextState.xmlSourceId = null;
+            }
             contextState.isValid = contextState.xmlSourceIds.length > 0 && contextState.marketplaceIds.length > 0;
             syncModuleContextState();
             rtsState.page = 1;
@@ -6431,6 +6527,14 @@ function syncModuleContextState() {
                         contextState.marketplaceNames[val] = sel.options[sel.selectedIndex].text;
                     }
                 }
+            }
+            // FIX(M7/BULGU-2): secim tekil context'e de yazilir — catGetMarketplaceId fallback'i
+            // bayat (ilk aktif) marketplace'i kullanmasin; tekil ve cogul her zaman ayni kaynak.
+            if (val && val !== 'ALL') {
+                contextState.marketplaceId = val;
+                contextState.marketplaceName = contextState.marketplaceNames[val] || contextState.marketplaceName || '';
+            } else {
+                contextState.marketplaceId = null;
             }
             contextState.isValid = contextState.xmlSourceIds.length > 0 && contextState.marketplaceIds.length > 0;
             syncModuleContextState();
@@ -9111,7 +9215,9 @@ function syncModuleContextState() {
         function catRenderMarketplaceOptions() {
             var sel = document.getElementById('cat-marketplace');
             if (!sel) return;
-            var currentMpId = sel.value;
+            // FIX(M7/BULGU-2): senkron context (catState.marketplaceId) ONCE — bayat DOM secimi restore edilmesin.
+            // catRenderXmlSourceOptions ile ayni desen (L9106 xmlSupplierId oncelikli).
+            var currentMpId = catState.marketplaceId || sel.value || '';
             var html = '<option value="">🛒 Pazaryeri Seçiniz...</option>';
             catState.marketplaces.forEach(function (mp) {
                 html += '<option value="' + mp.id + '"' + (mp.id === currentMpId ? ' selected' : '') + '>' + escapeHtml(mp.name) + '</option>';
@@ -9141,8 +9247,11 @@ function syncModuleContextState() {
         function catGetMarketplaceId() {
             var sel = document.getElementById('cat-marketplace');
             if (sel && sel.value) return sel.value;
+            // FIX(M7/BULGU-2): syncModuleContextState ile senkronize edilen catState.marketplaceId,
+            // bayat tekil contextState.marketplaceId fallback'inden ONCE okunur — yanlis MP sızması engellenir.
+            if (typeof catState !== 'undefined' && catState.marketplaceId) return catState.marketplaceId;
             if (typeof contextState !== 'undefined' && contextState.marketplaceId) return contextState.marketplaceId;
-            return catState.marketplaceId || '';
+            return '';
         }
 
         function catOnMarketplaceChange() {
@@ -9676,7 +9785,7 @@ function syncModuleContextState() {
                     '</div>';
 
                 // Show modal
-                document.body.innerHTML += modalHtml;
+                document.body.insertAdjacentHTML('beforeend', modalHtml);
                 setTimeout(function () { document.getElementById('cat-product-detail-modal').classList.remove('hidden'); }, 10);
             } catch (e) {
                 console.error('Error opening product detail:', e);
@@ -12514,8 +12623,8 @@ function prepListGuard() {
     var guardEl = document.getElementById('li-guard-warn');
     var mainEl = document.getElementById('li-main-content');
     if (guardEl) guardEl.classList.toggle('hidden', ready);
-    // Always show main content
-    if (mainEl) mainEl.classList.remove('hidden');
+    // Guard: only show main content when context is ready
+    if (mainEl) mainEl.classList.toggle('hidden', !ready);
     
     // Disable action buttons when context is missing
     var newBtn = document.getElementById('li-new-btn') || document.querySelector('button[onclick="prepListNew()"]');
@@ -13074,8 +13183,10 @@ document.getElementById('global-search-input').addEventListener('keydown', funct
             loadNavBadges();
             setInterval(loadNavBadges, 60000);
         });
-    </script>
-</body>
+        </script>
+        <div id="root"></div>
+        <script type="module" src="/src/main.tsx"></script>
+    </body>
 </html>
 
 

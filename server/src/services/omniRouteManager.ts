@@ -1,4 +1,43 @@
 import { prisma } from '../db/prisma.ts';
+import http from 'http';
+
+// ==================== HTTP HELPER (native fetch crash-safe) ====================
+
+function httpGet(url: string, headers?: Record<string, string>, timeoutMs = 10000): Promise<{ ok: boolean; status: number; body: string; latencyMs: number }> {
+  const startTime = Date.now();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { req.destroy(); resolve({ ok: false, status: 0, body: '', latencyMs: Date.now() - startTime }); }, timeoutMs);
+    const req = http.get(url, { headers, timeout: timeoutMs }, (res) => {
+      let data = '';
+      res.on('data', (c: any) => { data += c; });
+      res.on('end', () => { clearTimeout(timer); resolve({ ok: res.statusCode! >= 200 && res.statusCode! < 300, status: res.statusCode!, body: data, latencyMs: Date.now() - startTime }); });
+      res.on('error', () => { clearTimeout(timer); resolve({ ok: false, status: 0, body: '', latencyMs: Date.now() - startTime }); });
+    });
+    req.on('error', () => { clearTimeout(timer); resolve({ ok: false, status: 0, body: '', latencyMs: Date.now() - startTime }); });
+    req.on('timeout', () => { req.destroy(); clearTimeout(timer); resolve({ ok: false, status: 0, body: '', latencyMs: Date.now() - startTime }); });
+  });
+}
+
+function httpPost(url: string, bodyStr: string, headers?: Record<string, string>, timeoutMs = 60000): Promise<{ ok: boolean; status: number; body: string; latencyMs: number }> {
+  const startTime = Date.now();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { req.destroy(); resolve({ ok: false, status: 0, body: '', latencyMs: Date.now() - startTime }); }, timeoutMs);
+    const req = http.request(url, {
+      method: 'POST',
+      headers: { ...(headers || {}), 'Content-Length': Buffer.byteLength(bodyStr) },
+      timeout: timeoutMs,
+    }, (res) => {
+      let data = '';
+      res.on('data', (c: any) => { data += c; });
+      res.on('end', () => { clearTimeout(timer); resolve({ ok: res.statusCode! >= 200 && res.statusCode! < 300, status: res.statusCode!, body: data, latencyMs: Date.now() - startTime }); });
+      res.on('error', () => { clearTimeout(timer); resolve({ ok: false, status: 0, body: '', latencyMs: Date.now() - startTime }); });
+    });
+    req.on('error', () => { clearTimeout(timer); resolve({ ok: false, status: 0, body: '', latencyMs: Date.now() - startTime }); });
+    req.on('timeout', () => { req.destroy(); clearTimeout(timer); resolve({ ok: false, status: 0, body: '', latencyMs: Date.now() - startTime }); });
+    req.write(bodyStr);
+    req.end();
+  });
+}
 
 // ==================== TYPES ====================
 
@@ -54,10 +93,26 @@ export interface OmniRouteStatus {
 // ==================== CONSTANTS ====================
 
 const OMNIROUTE_BASE = process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128';
-const OMNIROUTE_API_KEY = process.env.OMNIROUTE_API_KEY || '';
+// API key is read from DB (AIProviderConfig) via decryptApiKey, NOT from env.
+// This allows the AI Control Center UI to set the key without code/env changes.
+let OMNIROUTE_API_KEY = '';
+let apiKeyResolved = false;
+
+async function resolveApiKey(): Promise<string> {
+  if (apiKeyResolved) return OMNIROUTE_API_KEY;
+  try {
+    const { decryptApiKey } = await import('./crypto.ts');
+    const row = await prisma.aIProviderConfig.findUnique({ where: { provider: 'omniroute' } });
+    if (row && row.apiKeyEncrypted && row.apiKeyIv && row.apiKeyTag) {
+      OMNIROUTE_API_KEY = decryptApiKey(row.apiKeyEncrypted, row.apiKeyIv, row.apiKeyTag);
+    }
+  } catch {}
+  apiKeyResolved = true;
+  return OMNIROUTE_API_KEY;
+}
 const REGISTRY_KEY = 'omniroute_registry';
 const HEALTH_CHECK_TIMEOUT_MS = 10000;
-const COMPLETION_TIMEOUT_MS = 120000;
+const COMPLETION_TIMEOUT_MS = 60000;
 const MAX_ATTEMPTS_PER_REQUEST = 5;
 const COOLDOWN_BASE_MS = 5 * 60 * 1000;
 const COOLDOWN_MAX_MS = 4 * 60 * 60 * 1000;
@@ -114,19 +169,11 @@ async function saveRegistry(reg: OmniRouteRegistry): Promise<void> {
 
 export async function checkHealth(): Promise<{ ok: boolean; version?: string; error?: string }> {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
-
-    const res = await fetch(`${OMNIROUTE_BASE}/api/health`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    if (!res.ok) {
-      return { ok: false, error: `HTTP ${res.status}` };
+    const result = await httpGet(`${OMNIROUTE_BASE}/api/health`, undefined, HEALTH_CHECK_TIMEOUT_MS);
+    if (!result.ok) {
+      return { ok: false, error: `HTTP ${result.status}` };
     }
-
-    const data = await res.json() as any;
+    const data = JSON.parse(result.body) as any;
     return {
       ok: data.status === 'ok',
       version: data.version || null,
@@ -142,29 +189,29 @@ async function fetchModels(): Promise<any[]> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (OMNIROUTE_API_KEY) {
-    headers['Authorization'] = `Bearer ${OMNIROUTE_API_KEY}`;
+  const apiKey = await resolveApiKey();
+  if (apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
-
   try {
-    const res = await fetch(`${OMNIROUTE_BASE}/v1/models`, {
-      headers,
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`HTTP_${res.status} ${body}`.slice(0, 500));
+    let result: { ok: boolean; status: number; body: string } | null = null;
+    let lastErr: string | null = null;
+    const endpoints = [`${OMNIROUTE_BASE}/v1/models`, `${OMNIROUTE_BASE}/api/health`];
+    for (const url of endpoints) {
+      const r = await httpGet(url, headers, HEALTH_CHECK_TIMEOUT_MS);
+      if (r.ok) { result = r; break; }
+      lastErr = `HTTP_${r.status}`;
     }
 
-    const data = await res.json() as any;
-    return Array.isArray(data?.data) ? data.data : [];
+    if (!result) {
+      throw new Error(lastErr || 'No reachable OmniRoute model endpoint');
+    }
+
+    const data: any = JSON.parse(result.body || '{}');
+    const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.models) ? data.models : []);
+    return list;
   } catch (err: any) {
-    clearTimeout(timeout);
     throw err;
   }
 }
@@ -291,6 +338,10 @@ function modelScore(m: OmniRouteModelEntry): number {
   else if (m.health === 'unknown') score += 50;
   else if (m.health === 'degraded') score += 20;
 
+  // Config-2: auto/* models use OmniRoute's native routing — always prefer them
+  const id = m.id.toLowerCase();
+  if (id.startsWith('auto/')) score += 200;
+
   const total = m.totalRequests || 1;
   const failRate = m.failedRequests / total;
   score -= failRate * 50;
@@ -402,110 +453,135 @@ export function classifyError(err: any): { type: string; errorCode: string; erro
  * OmniRoute üzerinden completion yapar.
  * Free modeller ile fallback zinciri çalıştırır.
  */
+async function sendToOmniRoute(
+  model: string,
+  request: { messages: { role: string; content: string }[]; temperature?: number; max_tokens?: number; response_format?: { type: string } },
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<{ ok: boolean; content: string | null; model: string; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; latencyMs: number; error?: string }> {
+  const body: any = {
+    model,
+    messages: request.messages,
+    temperature: request.temperature ?? 0.1,
+    max_tokens: request.max_tokens ?? 1024,
+    stream: false,
+  };
+  if (request.response_format) {
+    body.response_format = request.response_format;
+  }
+  const bodyStr = JSON.stringify(body);
+  const startTime = Date.now();
+  console.log('[SOMR-01] sendToOmniRoute START model=' + model, new Date().toISOString());
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      req.destroy();
+      resolve({ ok: false, content: null, model, latencyMs: Date.now() - startTime, error: 'TIMEOUT: request timed out' });
+    }, timeoutMs);
+
+    const req = http.request(`${OMNIROUTE_BASE}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(bodyStr) },
+      timeout: timeoutMs,
+    }, (res: any) => {
+      let data = '';
+      res.on('data', (chunk: any) => { data += chunk; });
+      res.on('end', () => {
+        clearTimeout(timer);
+        const latencyMs = Date.now() - startTime;
+        console.log('[SOMR-02] http DONE status=' + res.statusCode + ' latency=' + latencyMs, new Date().toISOString());
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return resolve({ ok: false, content: null, model, latencyMs, error: `HTTP_${res.statusCode}: ${data.slice(0, 200) || res.statusCode}` });
+        }
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed?.choices?.[0]?.message?.content ?? null;
+          const usage = parsed?.usage
+            ? { prompt_tokens: parsed.usage.prompt_tokens ?? 0, completion_tokens: parsed.usage.completion_tokens ?? 0, total_tokens: parsed.usage.total_tokens ?? 0 }
+            : undefined;
+          resolve({ ok: true, content, model, usage, latencyMs });
+        } catch (e: any) {
+          resolve({ ok: false, content: null, model, latencyMs, error: `PARSE_ERROR: ${e?.message}` });
+        }
+      });
+      res.on('error', (err: any) => {
+        clearTimeout(timer);
+        const latencyMs = Date.now() - startTime;
+        console.log('[SOMR-03] http RES_ERROR err=' + err.message, new Date().toISOString());
+        const classified = classifyError(err);
+        resolve({ ok: false, content: null, model, latencyMs, error: `${classified.errorCode}: ${classified.errorMsg}` });
+      });
+    });
+
+    req.on('error', (err: any) => {
+      clearTimeout(timer);
+      const latencyMs = Date.now() - startTime;
+      console.log('[SOMR-03] http REQ_ERROR err=' + err.message, new Date().toISOString());
+      const classified = classifyError(err);
+      resolve({ ok: false, content: null, model, latencyMs, error: `${classified.errorCode}: ${classified.errorMsg}` });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      clearTimeout(timer);
+      resolve({ ok: false, content: null, model, latencyMs: Date.now() - startTime, error: 'TIMEOUT: socket timeout' });
+    });
+
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
 export async function completeWithFreeModel(request: {
   messages: { role: string; content: string }[];
   temperature?: number;
   max_tokens?: number;
   response_format?: { type: string };
 }): Promise<OmniRouteCompletionResult> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (OMNIROUTE_API_KEY) {
-    headers['Authorization'] = `Bearer ${OMNIROUTE_API_KEY}`;
+  console.log('[CMFM-01] completeWithFreeModel START', new Date().toISOString());
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  console.log('[CMFM-02] resolving API key...');
+  const apiKey = await resolveApiKey();
+  console.log('[CMFM-03] apiKey resolved, hasKey=' + !!apiKey);
+  if (apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  const excluded = new Set<string>();
-  let lastError: string | null = null;
-  let lastErrorCode: string | null = null;
+  const timeoutMs = Math.min(COMPLETION_TIMEOUT_MS, 60000);
+  console.log('[CMFM-04] calling sendToOmniRoute auto/best-free', new Date().toISOString(), 'rss=' + Math.round(process.memoryUsage().rss/1024/1024) + 'MB');
+
+  const primary = await sendToOmniRoute('auto/best-free', request, headers, timeoutMs);
+  console.log('[CMFM-05] sendToOmniRoute returned ok=' + primary.ok + ' latency=' + primary.latencyMs, new Date().toISOString(), 'rss=' + Math.round(process.memoryUsage().rss/1024/1024) + 'MB');
+  if (primary.ok) {
+    try { await recordModelOutcome('auto/best-free', true, undefined, undefined, primary.latencyMs); } catch {}
+    return { ok: true, content: primary.content, model: primary.model, usage: primary.usage };
+  }
+  try { await recordModelOutcome('auto/best-free', false, 'PRIMARY_FAILED', primary.error, primary.latencyMs); } catch {}
+
+  const excluded = new Set<string>(['auto/best-free']);
+  let lastError = primary.error || 'auto/best-free başarısız';
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS_PER_REQUEST; attempt++) {
     const modelEntry = await selectBestFreeModel(excluded);
-    if (!modelEntry) {
-      return {
-        ok: false,
-        content: null,
-        model: 'none',
-        error: lastError ? `Tüm modeller başarısız: ${lastError}` : 'Uygun ücretsiz model bulunamadı',
-        errorCode: lastErrorCode || 'NO_MODEL_AVAILABLE',
-      };
-    }
-
+    if (!modelEntry) break;
     excluded.add(modelEntry.id);
-    const startTime = Date.now();
 
-    const body: any = {
-      model: modelEntry.id,
-      messages: request.messages,
-      temperature: request.temperature ?? 0.1,
-      max_tokens: request.max_tokens ?? 1024,
-      stream: false,
-    };
-    if (request.response_format) {
-      body.response_format = request.response_format;
+    const result = await sendToOmniRoute(modelEntry.id, request, headers, timeoutMs);
+    const classified = result.error ? classifyError(new Error(result.error)) : null;
+    try { await recordModelOutcome(modelEntry.id, result.ok, classified?.errorCode, classified?.errorMsg, result.latencyMs); } catch {}
+
+    if (result.ok) {
+      return { ok: true, content: result.content, model: result.model, usage: result.usage };
     }
-
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
-
-      const res = await fetch(`${OMNIROUTE_BASE}/v1/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      const latencyMs = Date.now() - startTime;
-
-      if (!res.ok) {
-        const errorBody = await res.text().catch(() => '');
-        const errorCode = `HTTP_${res.status}`;
-        const errorMsg = errorBody || `HTTP ${res.status}`;
-        const classified = classifyError(new Error(`${errorCode} ${errorMsg}`));
-
-        await recordModelOutcome(modelEntry.id, false, classified.errorCode, classified.errorMsg, latencyMs);
-
-        lastError = classified.errorMsg;
-        lastErrorCode = classified.errorCode;
-        continue;
-      }
-
-      const data: any = await res.json();
-      const content = data?.choices?.[0]?.message?.content ?? null;
-      const usage = data?.usage
-        ? {
-            prompt_tokens: data.usage.prompt_tokens ?? 0,
-            completion_tokens: data.usage.completion_tokens ?? 0,
-            total_tokens: data.usage.total_tokens ?? 0,
-          }
-        : undefined;
-
-      await recordModelOutcome(modelEntry.id, true, undefined, undefined, latencyMs);
-
-      return {
-        ok: true,
-        content,
-        model: modelEntry.id,
-        usage,
-      };
-    } catch (err: any) {
-      const latencyMs = Date.now() - startTime;
-      const classified = classifyError(err);
-      await recordModelOutcome(modelEntry.id, false, classified.errorCode, classified.errorMsg, latencyMs);
-
-      lastError = classified.errorMsg;
-      lastErrorCode = classified.errorCode;
-    }
+    lastError = result.error || 'Model başarısız';
   }
 
   return {
     ok: false,
     content: null,
     model: 'none',
-    error: lastError ? `Tüm modeller başarısız: ${lastError}` : 'Tüm denemeler başarısız',
-    errorCode: lastErrorCode || 'ALL_MODELS_FAILED',
+    error: `Tüm modeller başarısız: ${lastError}`,
+    errorCode: 'ALL_MODELS_FAILED',
   };
 }
 
@@ -518,8 +594,6 @@ export async function testModel(modelId?: string): Promise<{
   error?: string;
   errorCode?: string;
 }> {
-  const startTime = Date.now();
-
   const targetModel = modelId || (await selectBestFreeModel())?.id;
   if (!targetModel) {
     return { ok: false, model: 'none', latencyMs: 0, error: 'Uygun model bulunamadı', errorCode: 'NO_MODEL' };
@@ -533,32 +607,27 @@ export async function testModel(modelId?: string): Promise<{
   }
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
-
-    const res = await fetch(`${OMNIROUTE_BASE}/v1/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
+    const result = await httpPost(
+      `${OMNIROUTE_BASE}/v1/chat/completions`,
+      JSON.stringify({
         model: targetModel,
         messages: [{ role: 'user', content: 'Reply with exactly: OMNIROUTE_OK' }],
         max_tokens: 20,
         stream: false,
       }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
+      headers,
+      COMPLETION_TIMEOUT_MS,
+    );
 
-    const latencyMs = Date.now() - startTime;
+    const latencyMs = result.latencyMs;
 
-    if (!res.ok) {
-      const errorBody = await res.text().catch(() => '');
-      const classified = classifyError(new Error(errorBody));
+    if (!result.ok) {
+      const classified = classifyError(new Error(result.body));
       await recordModelOutcome(targetModel, false, classified.errorCode, classified.errorMsg, latencyMs);
       return { ok: false, model: targetModel, latencyMs, error: classified.errorMsg, errorCode: classified.errorCode };
     }
 
-    const data: any = await res.json();
+    const data: any = JSON.parse(result.body);
     const content = data?.choices?.[0]?.message?.content ?? '';
     const ok = content.toUpperCase().includes('OK');
 
@@ -572,10 +641,9 @@ export async function testModel(modelId?: string): Promise<{
       errorCode: ok ? undefined : 'MODEL_TEST_FAILED',
     };
   } catch (err: any) {
-    const latencyMs = Date.now() - startTime;
     const classified = classifyError(err);
-    await recordModelOutcome(targetModel, false, classified.errorCode, classified.errorMsg, latencyMs);
-    return { ok: false, model: targetModel, latencyMs, error: classified.errorMsg, errorCode: classified.errorCode };
+    await recordModelOutcome(targetModel, false, classified.errorCode, classified.errorMsg, 0);
+    return { ok: false, model: targetModel, latencyMs: 0, error: classified.errorMsg, errorCode: classified.errorCode };
   }
 }
 

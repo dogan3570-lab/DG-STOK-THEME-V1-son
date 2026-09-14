@@ -650,13 +650,84 @@ export async function resetAllQuotas(): Promise<void> {
   await saveState();
 }
 
-// ==================== STUB FUNCTIONS (post-checkpoint developments) ====================
-// These functions were added after 29770fe but before deletion.
-// Stubs provided to prevent import errors.
+// ==================== MASTER REQUEST EXECUTION (Config-2: Router → OmniRoute-2) ====================
+// Config-2: calls OmniRoute-2 (localhost:20128) via omniRouteManager.completeWithFreeModel
 
-export async function executeMasterRequest(_opts: any): Promise<any> {
-  console.warn('[omniRouteOrchestrator] executeMasterRequest: stub called');
-  return { ok: false, error: { code: 'STUB', message: 'Not implemented in restore' } };
+export async function executeMasterRequest(opts: {
+  taskType: TaskType;
+  messages: { role: string; content: string }[];
+  maxTokens?: number;
+  temperature?: number;
+  response_format?: { type: 'json_object' | 'text' };
+  metadata?: Record<string, any>;
+}): Promise<{
+  ok: boolean;
+  content: string | null;
+  model: string;
+  source?: string;
+  totalLatencyMs: number;
+  error?: string;
+  errorCode?: string;
+  validatedJson?: any;
+}> {
+  const startTime = Date.now();
+  
+  const { taskType, messages, maxTokens = 500, temperature = 0.7, response_format, metadata } = opts;
+  
+  console.log(`[EXEC-01] executeMasterRequest taskType=${taskType} msgs=${messages.length} maxT=${maxTokens}`, new Date().toISOString());
+  
+  // Config-2: calls OmniRoute-2 via omniRouteManager (not OpenRouter cloud)
+  const { completeWithFreeModel } = await import('./omniRouteManager.ts');
+  console.log('[EXEC-02] completeWithFreeModel imported', new Date().toISOString());
+  
+  const result = await completeWithFreeModel({
+    messages: opts.messages,
+    temperature: opts.temperature ?? 0.7,
+    max_tokens: opts.maxTokens ?? 500,
+    response_format: opts.response_format,
+  });
+  
+  console.log(`[EXEC-03] completeWithFreeModel ok=${result.ok} model=${result.model} error=${result.error || 'none'}`, new Date().toISOString());
+  
+  const totalLatencyMs = Date.now() - startTime;
+  
+  if (!result.ok) {
+    return {
+      ok: false,
+      content: null,
+      model: result.model || 'none',
+      source: 'omniroute',
+      totalLatencyMs: Date.now() - startTime,
+      error: result.error,
+      errorCode: result.errorCode,
+    };
+  }
+  
+  // Try to parse JSON if response_format is json_object
+  let validatedJson: any = undefined;
+  if (result.ok && opts.response_format?.type === 'json_object' && result.content) {
+    try {
+      const jsonStr = result.content.trim();
+      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed && typeof parsed === 'object') {
+          validatedJson = parsed;
+        }
+      }
+    } catch {
+      // JSON parsing failed, leave validatedJson as undefined
+    }
+  }
+  
+  return {
+    ok: true,
+    content: result.content,
+    model: result.model,
+    source: 'omniroute',
+    totalLatencyMs: Date.now() - startTime,
+    validatedJson,
+  };
 }
 
 export function explainRouting(_taskType?: string, _modelId?: string, _capability?: string, _limit?: number): any[] {

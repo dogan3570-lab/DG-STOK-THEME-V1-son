@@ -43,7 +43,11 @@ const STATUS_CFG: Record<RowStatus, { icon: string; label: string; bg: string; t
 };
 
 function normalizeBrand(name: string): string {
- return name.toLocaleLowerCase('tr-TR').replace(/[^a-z0-9çğıöşü]/g, '').trim();
+ const map: Record<string, string> = {
+  'ç': 'c', 'ğ': 'g', 'ı': 'i', 'ö': 'o', 'ş': 's', 'ü': 'u',
+  'Ç': 'c', 'Ğ': 'g', 'İ': 'i', 'I': 'i', 'Ö': 'o', 'Ş': 's', 'Ü': 'u',
+ };
+ return (name || '').split('').map(ch => map[ch] ?? ch).join('').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
 }
 
 function findSuggestion(xmlBrand: string, systemBrands: SystemBrand[]): SystemBrand | null {
@@ -64,7 +68,9 @@ function findSuggestion(xmlBrand: string, systemBrands: SystemBrand[]): SystemBr
 // ==================== ANA BILESEN ====================
 
 export default function BrandMatchTab() {
- const { marketplaceId, marketplaces, selectMarketplace } = useMarketplace();
+ const { selectedMarketplace, marketplaces, setSelectedMarketplace } = useMarketplace();
+ const marketplaceId = selectedMarketplace?.id ?? '';
+ const marketplaceKey = selectedMarketplace?.key ?? '';
  const [xmlBrands, setXmlBrands] = useState<XmlBrandItem[]>([]);
  const [mappings, setMappings] = useState<MappingItem[]>([]);
  const [systemBrands, setSystemBrands] = useState<SystemBrand[]>([]);
@@ -205,7 +211,7 @@ export default function BrandMatchTab() {
  if (!requireMarketplace()) return;
  const r = await apiFetch<{ matchedCount: number; message: string }>('/brands/match', {
  method: 'POST', headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ xmlBrandName, dgBrandId, marketplaceId }),
+ body: JSON.stringify({ xmlBrandName, dgBrandId, xmlSourceId: xmlSupplierId || undefined, marketplaceKey: marketplaceKey || undefined, brandSource: 'CUSTOMER' }),
  });
  if (r.ok) {
  showToast('success', `? ${xmlBrandName} › ${dgBrandName || 'marka'} (${r.data?.matchedCount ?? 0} ürün)`);
@@ -219,7 +225,7 @@ export default function BrandMatchTab() {
  try {
  const r = await apiFetch<{ matchedCount: number; suggestedCount: number; message: string }>('/brands/ai-match', {
  method: 'POST', headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ marketplaceId }),
+ body: JSON.stringify({}),
  });
  if (r.ok && r.data) {
  showToast('success', `?? ${r.data.message || `${r.data.matchedCount} ürün eşleştirildi`}`);
@@ -241,7 +247,7 @@ export default function BrandMatchTab() {
  try {
  const r = await apiFetch<{ matchedCount: number; message: string }>('/brands/bulk-match', {
  method: 'POST', headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ matches, marketplaceId }),
+ body: JSON.stringify({ matches }),
  });
  if (r.ok && r.data) {
  showToast('success', `? ${r.data.message || `${matches.length} marka eşleştirildi`}`);
@@ -281,11 +287,11 @@ export default function BrandMatchTab() {
  <option value="">?? Tedarikci / XML Seciniz...</option>
  {xmlSources.map(xs => <option key={xs.id} value={xs.id}>{xs.name}</option>)}
  </select>
- <select value={marketplaceId} onChange={e => selectMarketplace(e.target.value)}
- className="rounded-xl border border-current bg-secondary/5 px-4 py-2 text-sm font-medium text-current min-w-[200px]">
- <option value="">?? Pazaryeri Seciniz...</option>
- {marketplaces.map(mp => <option key={mp.id} value={mp.id}>{mp.name}</option>)}
- </select>
+ <select value={marketplaceId} onChange={e => { const mp = marketplaces.find(m => m.id === e.target.value); setSelectedMarketplace(mp || null); }}
+  className="rounded-xl border border-current bg-secondary/5 px-4 py-2 text-sm font-medium text-current min-w-[200px]">
+  <option value="">?? Pazaryeri Seciniz...</option>
+  {marketplaces.map(mp => <option key={mp.id} value={mp.id}>{mp.name}</option>)}
+  </select>
  </div>
 
  {/* ====== ANA KART ====== */}
@@ -496,7 +502,7 @@ export default function BrandMatchTab() {
  </div>
  )}
 
- {manualOpen && <ManualAddModal xmlBrand={manualForBrand} onClose={() => setManualOpen(false)} onDone={handleManualDone} />}
+ {manualOpen && <ManualAddModal xmlBrand={manualForBrand} xmlSourceId={xmlSupplierId} marketplaceKey={marketplaceKey} onClose={() => setManualOpen(false)} onDone={handleManualDone} />}
  </div>
  );
 }
@@ -615,10 +621,7 @@ function BrandSelectDropdown({ systemBrands, preselectedId, placeholder, open, o
  ) : (
  filtered.map((b) => (
  <button key={b.id} type="button" onClick={() => { setSelected(b); onSelect(b.id, b.name); }}
- className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium transition-colors"
- 
- onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'currentColor'; }}
- onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = selected?.id === b.id ? 'currentColor' : 'transparent'; }}>
+  className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-slate-200 dark:hover:bg-slate-600 ${selected?.id === b.id ? 'bg-slate-200 dark:bg-slate-600' : ''}`}>
  <span className="flex-1 truncate">{b.name}</span>
  {b.productCount != null && b.productCount > 0 && <span className="text-[9px] text-current">({b.productCount})</span>}
  </button>
@@ -650,7 +653,7 @@ function KpiCardMini({ icon, iconBg, cardBg, border, title, value, valueColor }:
 
 // ==================== MANUEL EKLE MODALI ====================
 
-function ManualAddModal({ xmlBrand, onClose, onDone }: { xmlBrand: string | null; onClose: () => void; onDone: () => void; }) {
+function ManualAddModal({ xmlBrand, xmlSourceId, marketplaceKey, onClose, onDone }: { xmlBrand: string | null; xmlSourceId: string; marketplaceKey: string; onClose: () => void; onDone: () => void; }) {
  const [name, setName] = useState(xmlBrand && xmlBrand !== '(Markasız)' ? xmlBrand : '');
  const [linkAfterCreate, setLinkAfterCreate] = useState(!!xmlBrand && xmlBrand !== '(Markasız)');
  const [saving, setSaving] = useState(false);
@@ -668,7 +671,7 @@ function ManualAddModal({ xmlBrand, onClose, onDone }: { xmlBrand: string | null
 
  if (linkAfterCreate && xmlBrand && xmlBrand !== '(Markasız)') {
  const matchRes = await apiFetch<{ matchedCount: number }>('/brands/match', {
- method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ xmlBrandName: xmlBrand, dgBrandId: newBrand.id }),
+ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ xmlBrandName: xmlBrand, dgBrandId: newBrand.id, xmlSourceId: xmlSourceId || undefined, marketplaceKey: marketplaceKey || undefined, brandSource: 'CUSTOMER' }),
  });
  if (matchRes.ok) {
  showToast('success', `? "${newBrand.name}" oluşturuldu ve "${xmlBrand}" ile eşleştirildi (${matchRes.data?.matchedCount ?? 0} ürün)`);

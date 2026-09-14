@@ -116,8 +116,16 @@ export function requestMarketplaceSync(marketplaceId: string): void {
 
 /**
  * Mevcut context ile tetikle (backward compatible).
+ *
+ * FIX(M9/BULGU-2): fromReadPath=true iken sync HIC tetiklenmez.
+ * GET (read) istekleri background sync üzerinden queueReconcileProductGates ->
+ * reconcileProductGates -> variant aile tespiti zinciriyle DB'ye state mutation
+ * (variantStatus/status yazması) üretiyordu. Salt-read path'te write üretmemek için
+ * GET tetikleyicileri artık no-op'tur. Yazma/aktive etme yalnız açık WRITE
+ * uçlarından (template CRUD, /recheck POST) gelir.
  */
-export function requestTemplateSync(context?: { xmlSourceIds?: string[]; marketplaceIds?: string[] }): void {
+export function requestTemplateSync(context?: { xmlSourceIds?: string[]; marketplaceIds?: string[] }, opts?: { fromReadPath?: boolean }): void {
+  if (opts?.fromReadPath) return; // READ = READ: GET yolu sync tetikleyemez
   if (context?.marketplaceIds?.length) {
     for (const mpId of context.marketplaceIds) {
       requestMarketplaceSync(mpId);
