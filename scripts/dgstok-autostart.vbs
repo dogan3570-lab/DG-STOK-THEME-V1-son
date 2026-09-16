@@ -46,13 +46,9 @@ If fso.FileExists(pm2Bin) Then
     End If
 End If
 
-' 5) Watchdog'i arka planda baslat (ezer - eski process varsa daha onu durdurur)
-If fso.FileExists(watchdogPs1) Then
-    ' Oncelikle eski watchdog process'lerini oldur
-    WshShell.Run "cmd /c powershell -Command ""Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { (Get-CimInstance Win32_Process -Filter 'ProcessId=' + `$_.Id).CommandLine -match 'dgstok-watchdog' } | Stop-Process -Force -ErrorAction SilentlyContinue""", 0, True
-    WScript.Sleep 2000
-    WshShell.Run "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & watchdogPs1 & """", 0, False
-End If
+' 5) Watchdog artik SADECE "DG-STOK Watchdog" Scheduled Task tarafindan baslatilir.
+'    FIX(WATCHDOG-SINGLETON): VBS'in de watchdog baslatmasi cift instance yaratiyordu.
+'    Ek guvence: dgstok-watchdog.ps1 named mutex ile ikinci kopyayi reddeder.
 
 Set WshShell = Nothing
 Set fso = Nothing

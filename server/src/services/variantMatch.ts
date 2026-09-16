@@ -297,6 +297,7 @@ export async function runVariantMatchFlow(input: {
   const where: Record<string, unknown> = {
     xmlSourceId: input.xmlSourceId,
     variantMatch: false,
+    matchedBy: { not: 'manual' },
     variantStatus: selected ? { in: ['WAITING_AI', 'MANUAL_REVIEW'] } : 'WAITING_AI',
   };
   // FIX(M10/CRASH): id.in(≥1000) + orderBy birlikte Prisma 5.22 SQLite engine'de
@@ -324,7 +325,7 @@ export async function runVariantMatchFlow(input: {
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   } else {
     products = await prisma.product.findMany({
-      where,
+      where: selected ? { ...where, id: { in: selected } } : where,
       take: selected ? selected.length : limit,
       orderBy: { updatedAt: 'desc' },
       select: { id: true, title: true, xmlKey: true, sku: true, description: true, categoryId: true, updatedAt: true },

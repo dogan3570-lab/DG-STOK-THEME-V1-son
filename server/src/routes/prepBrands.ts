@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/authMiddleware.ts';
 import {reconcileProductGates, 
@@ -59,24 +60,36 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
     // XML context isteğe bağlıdır: Brand ekranındaki context başlığı için XML-kapsamlı sayaçlar.
     const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : null;
     const xmlBrandName = req.query?.xmlBrandName ? String(req.query.xmlBrandName) : null;
-    const productWhere: Record<string, unknown> = { status: { not: 'DELETED' }, ...(xmlSourceId ? { xmlSourceId } : {}) };
-    if (xmlBrandName) productWhere.xmlBrandName = xmlBrandName;
-    const [totalSystemBrands, matchedProducts, unmatchedProducts, totalMappings, totalLogs, totalProducts, xmlBrandFallback, waitingProducts] = await Promise.all([
+    // FIX(PERF): 8 ayri COUNT + groupBy TEK raw SQL'e indirildi (sayaç anlamı AYNI).
+    const statRows = await prisma.$queryRaw<any[]>`
+      SELECT
+        COUNT(*) as totalProducts,
+        SUM(CASE WHEN brandMatch = 1 THEN 1 ELSE 0 END) as matchedProducts,
+        SUM(CASE WHEN brandMatch = 0 THEN 1 ELSE 0 END) as unmatchedProducts,
+        SUM(CASE WHEN brandMatch = 0 AND xmlBrandName IS NOT NULL THEN 1 ELSE 0 END) as xmlBrandFallback,
+        SUM(CASE WHEN brandMatch = 0 AND xmlBrandName IS NULL THEN 1 ELSE 0 END) as waitingProducts,
+        SUM(CASE WHEN brandUsageType = 'XML_BRAND' THEN 1 ELSE 0 END) as xmlBrandUsage,
+        SUM(CASE WHEN brandUsageType = 'DG_BRAND' THEN 1 ELSE 0 END) as dgBrandUsage,
+        SUM(CASE WHEN brandUsageType = 'CUSTOM' THEN 1 ELSE 0 END) as customBrandUsage
+      FROM Product
+      WHERE status != 'DELETED'
+      ${xmlSourceId ? Prisma.sql`AND xmlSourceId = ${xmlSourceId}` : Prisma.empty}
+      ${xmlBrandName ? Prisma.sql`AND xmlBrandName = ${xmlBrandName}` : Prisma.empty}
+    `;
+    const s = (statRows[0] || {}) as Record<string, unknown>;
+    const totalProducts = Number(s.totalProducts ?? 0);
+    const matchedProducts = Number(s.matchedProducts ?? 0);
+    const unmatchedProducts = Number(s.unmatchedProducts ?? 0);
+    const xmlBrandFallback = Number(s.xmlBrandFallback ?? 0);
+    const waitingProducts = Number(s.waitingProducts ?? 0);
+    const [totalSystemBrands, totalMappings, totalLogs] = await Promise.all([
       prisma.brand.count({ where: { isActive: true } }),
-      prisma.product.count({ where: { brandMatch: true, ...productWhere } }),
-      prisma.product.count({ where: { brandMatch: false, ...productWhere } }),
       prisma.brandMapping.count(),
       prisma.brandLog.count(),
-      prisma.product.count({ where: productWhere }),
-      prisma.product.count({ where: { brandMatch: false, xmlBrandName: { not: null }, ...productWhere } }),
-      prisma.product.count({ where: { brandMatch: false, xmlBrandName: null, ...productWhere } }),
     ]);
-    const brandUsageCounts = await prisma.product.groupBy({ by: ['brandUsageType'], where: productWhere, _count: { brandUsageType: true } });
-    const usageMap: Record<string, number> = {};
-    for (const u of brandUsageCounts) usageMap[u.brandUsageType] = u._count.brandUsageType;
     res.json({ totalSystemBrands, matchedProducts, unmatchedProducts, totalMappings, totalLogs,
       totalProducts, xmlBrandFallback, waitingProducts,
-      xmlBrandUsage: usageMap['XML_BRAND'] || 0, dgBrandUsage: usageMap['DG_BRAND'] || 0, customBrandUsage: usageMap['CUSTOM'] || 0,
+      xmlBrandUsage: Number(s.xmlBrandUsage ?? 0), dgBrandUsage: Number(s.dgBrandUsage ?? 0), customBrandUsage: Number(s.customBrandUsage ?? 0),
       prefixEnabledCount: await prisma.product.count({ where: { prefixEnabled: true } }) });
   } catch (error) { console.error('[brands] GET stats error:', error); res.status(500).json({ error: { code: 'DB_ERROR', message: 'İstatistikler alınamadı' } }); }
 });

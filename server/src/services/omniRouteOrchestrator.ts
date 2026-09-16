@@ -345,6 +345,40 @@ function calculateScore(state: ModelState, taskType: TaskType): number {
 
 // ==================== ROUTING ====================
 
+// Fix(pool-quality): üretici OLMAYAN free modeller (safety/guard/embed/rerank/asr/tts/vision...)
+// havuza alınıp Router tarafından genel görevlerde seçilirse modül çıktısı bozulur
+// (ör. content-safety modeli "User Safety: safe" döner). Havuz yalnızca üretici modelleri alır.
+const NON_GENERATIVE_MODEL_RE = /safety|guard|moderation|rerank|ranker|embed|asr\b|tts|whisper|parakeet|fastpitch|tacotron|flux|diffusion|calibration|detector|ocr\b|reward|judge|nemoguard|topic-control|allowlist|xlm-roberta|bge-|nv-embed|content-safety/i;
+function isPoolCandidate(m: OmniRouteModelEntry): boolean {
+  return m.free && !NON_GENERATIVE_MODEL_RE.test(m.id) && !NON_GENERATIVE_MODEL_RE.test(m.name || '');
+}
+
+/**
+ * Ortak Free Model Pool: OmniRoute registry'sindeki üretici free modeller
+ * + NVIDIA'nın GERÇEK /v1/models discovery'si ('nvidia/<id>'). Stale nvidia/* ID'leri
+ * yerine gerçek NVIDIA model kimlikleri kullanılır.
+ */
+async function buildPoolModels(): Promise<OmniRouteModelEntry[]> {
+  const registry = await getRegistry();
+  const base = registry.models.filter(isPoolCandidate);
+  const seen = new Set(base.map((m) => m.id));
+  const merged: OmniRouteModelEntry[] = [...base];
+  try {
+    const { discoverNvidiaModels } = await import('./nvidiaModels.ts');
+    for (const m of await discoverNvidiaModels()) {
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      merged.push({
+        id: m.id, name: m.name, provider: 'nvidia', contextWindow: null,
+        free: true, health: 'unknown', lastError: null, lastErrorCode: null,
+        lastLatencyMs: null, lastUsedAt: null, lastCheckedAt: null,
+        consecutiveFailures: 0, totalRequests: 0, successfulRequests: 0, failedRequests: 0,
+      });
+    }
+  } catch { /* NVIDIA discovery erişilemezse registry havuzu kullanılır */ }
+  return merged;
+}
+
 export async function routeRequest(
   taskType: TaskType = 'GENERAL',
   excludeModels: Set<string> = new Set()
@@ -352,7 +386,7 @@ export async function routeRequest(
   await loadState();
   const registry = await getRegistry();
 
-  const freeModels = registry.models.filter(m => m.free);
+  const freeModels = await buildPoolModels();
   if (freeModels.length === null) return null;
 
   const eligible: ModelState[] = [];
@@ -400,7 +434,7 @@ export async function dispatchRequest(
   taskType: TaskType = 'GENERAL',
   maxTokens: number = 500,
   temperature: number = 0.7
-): Promise<{ ok: boolean; content: string | null; model: string; error?: string }> {
+): Promise<{ ok: boolean; content: string | null; model: string; source?: string; error?: string }> {
   const excludeModels = new Set<string>();
   let lastError = '';
 
@@ -432,7 +466,7 @@ export async function dispatchRequest(
         }
         await saveState();
         await recordModelOutcome(modelId, true, undefined, undefined, result.latencyMs);
-        return { ok: true, content: result.content, model: modelId };
+        return { ok: true, content: result.content, model: modelId, source: providerSource(modelId) };
       }
 
       // Record failure
@@ -477,12 +511,93 @@ export async function dispatchRequest(
 
   orchestratorStats.totalFailed++;
   await saveState();
-  return { ok: false, content: null, model: '', error: `ALL_MODELS_FAILED: ${lastError}` };
+  return { ok: false, content: null, model: '', source: 'none', error: `ALL_MODELS_FAILED: ${lastError}` };
 }
 
 // ==================== MODEL CALL ====================
 
+// ==================== PROVIDER DISPATCH ====================
+// Router, seçilen adayı GERÇEK provider adaptörü üzerinden çalıştırır.
+// Provider kimliği model id ön ekiyle korunur: 'openrouter/...' | 'nvidia/...' | diğerleri → OmniRoute.
+const DIRECT_PROVIDER_BASE: Record<string, string> = {
+  openrouter: 'https://openrouter.ai/api/v1',
+  nvidia: 'https://integrate.api.nvidia.com/v1',
+};
+
+async function getProviderApiKey(provider: string): Promise<string | null> {
+  try {
+    const { decryptApiKey } = await import('./crypto.ts');
+    const p = await prisma.aIProviderConfig.findUnique({ where: { provider } });
+    if (!p?.apiKeyEncrypted || !p.apiKeyIv || !p.apiKeyTag) return null;
+    return decryptApiKey(p.apiKeyEncrypted, p.apiKeyIv, p.apiKeyTag);
+  } catch { return null; }
+}
+
+export function providerSource(modelId: string): 'openrouter' | 'nvidia' | 'omniroute' {
+  if (modelId.startsWith('openrouter/')) return 'openrouter';
+  if (modelId.startsWith('nvidia/')) return 'nvidia';
+  return 'omniroute';
+}
+
+async function callDirectProvider(
+  provider: 'openrouter' | 'nvidia',
+  modelId: string,
+  messages: { role: string; content: string }[],
+  maxTokens: number,
+  temperature: number
+): Promise<{ ok: boolean; content: string | null; error?: string; errorCode?: string; latencyMs?: number; headers?: Record<string, string> }> {
+  const startTime = Date.now();
+  const apiModel = modelId.slice(provider.length + 1); // 'openrouter/' | 'nvidia/' ön eki soyulur
+  const key = await getProviderApiKey(provider);
+  if (!key) {
+    return { ok: false, content: null, error: `${provider} API key yapılandırılmamış`, errorCode: 'AUTH_REQUIRED', latencyMs: 0 };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  try {
+    const res = await fetch(`${DIRECT_PROVIDER_BASE[provider]}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`,
+        ...(provider === 'openrouter' ? { 'HTTP-Referer': 'http://localhost:4000', 'X-Title': 'DG STOK' } : {}),
+      },
+      body: JSON.stringify({ model: apiModel, messages, max_tokens: maxTokens, temperature, stream: false }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    const latencyMs = Date.now() - startTime;
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      const errClass = classifyHttpError(res.status, errBody);
+      return { ok: false, content: null, error: errClass.errorMsg, errorCode: errClass.errorCode, latencyMs };
+    }
+    const data = await res.json() as any;
+    const content = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.message?.reasoning_content ?? null;
+    if (!content) return { ok: false, content: null, error: 'Empty response from model', errorCode: 'INVALID_RESPONSE', latencyMs };
+    return { ok: true, content, latencyMs };
+  } catch (err: any) {
+    clearTimeout(timeout);
+    const latencyMs = Date.now() - startTime;
+    if (err.name === 'AbortError') return { ok: false, content: null, error: 'Request timeout', errorCode: 'TIMEOUT', latencyMs };
+    return { ok: false, content: null, error: err.message || 'Connection failed', errorCode: 'CONNECTION_ERROR', latencyMs };
+  }
+}
+
 async function callModel(
+  modelId: string,
+  messages: { role: string; content: string }[],
+  maxTokens: number,
+  temperature: number
+): Promise<{ ok: boolean; content: string | null; error?: string; errorCode?: string; latencyMs?: number; headers?: Record<string, string> }> {
+  const src = providerSource(modelId);
+  if (src === 'openrouter' || src === 'nvidia') {
+    return callDirectProvider(src, modelId, messages, maxTokens, temperature);
+  }
+  return callOmniRoute(modelId, messages, maxTokens, temperature);
+}
+
+async function callOmniRoute(
   modelId: string,
   messages: { role: string; content: string }[],
   maxTokens: number,
@@ -501,9 +616,18 @@ async function callModel(
       stream: false,
     });
 
+    // Fix(auth): execution yolu da health/discovery ile AYNI kaynaktan (DB) key kullanır.
+    // Eski kod Authorization göndermiyordu → OmniRoute auth zorunlu olduğunda tutarsızlık.
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    try {
+      const { resolveApiKey } = await import('./omniRouteManager.ts');
+      const key = await resolveApiKey();
+      if (key) headers['Authorization'] = `Bearer ${key}`;
+    } catch { /* key yoksa auth'suz dene (mevcut davranış) */ }
+
     const res = await fetch(`${process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128'}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body,
       signal: controller.signal,
     });
@@ -557,7 +681,7 @@ function classifyHttpError(status: number, body: string): { errorCode: string; e
 export async function getOrchestratorStatus(): Promise<OrchestratorStatus> {
   await loadState();
   const registry = await getRegistry();
-  const freeModels = registry.models.filter(m => m.free);
+  const freeModels = await buildPoolModels();
 
   let healthy = 0, warning = 0, quotaLocked = 0, rateLimited = 0, unavailable = 0, disabled = 0;
 
@@ -592,7 +716,7 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatus> {
 export async function getModelStates(): Promise<ModelState[]> {
   await loadState();
   const registry = await getRegistry();
-  const freeModels = registry.models.filter(m => m.free);
+  const freeModels = await buildPoolModels();
   return freeModels.map(m => {
     const state = getOrCreateModelState(m.id);
     calculateScore(state, 'GENERAL');
@@ -650,8 +774,52 @@ export async function resetAllQuotas(): Promise<void> {
   await saveState();
 }
 
-// ==================== MASTER REQUEST EXECUTION (Config-2: Router → OmniRoute-2) ====================
-// Config-2: calls OmniRoute-2 (localhost:20128) via omniRouteManager.completeWithFreeModel
+// ==================== MASTER REQUEST EXECUTION ====================
+// Config-2: OmniRoute path (localhost:20128) via omniRouteManager.completeWithFreeModel
+// Config-2a: Backup AI Control Center via DG-STOK Adapter (BACKUP_AI_ADAPTER=1/true/FORCE)
+
+// ==================== MASTER TRACE / STATUS (gerçek runtime) ====================
+
+export interface MasterTraceEntry {
+  at: string;
+  module: string;
+  taskType: string;
+  source: string;
+  model: string;
+  ok: boolean;
+  latencyMs: number;
+  error?: string;
+  errorCode?: string;
+}
+
+const MASTER_TRACE_MAX = 100;
+const masterTrace: MasterTraceEntry[] = [];
+let lastExecution: MasterTraceEntry | null = null;
+
+function recordMasterTrace(entry: MasterTraceEntry): void {
+  masterTrace.unshift(entry);
+  if (masterTrace.length > MASTER_TRACE_MAX) masterTrace.length = MASTER_TRACE_MAX;
+  lastExecution = entry;
+}
+
+function traceFromResult(
+  r: { ok: boolean; source?: string; model: string; error?: string; errorCode?: string },
+  taskType: string,
+  moduleName: string,
+  startTime: number
+): MasterTraceEntry {
+  return {
+    at: new Date().toISOString(),
+    module: moduleName,
+    taskType,
+    source: r.source || 'omniroute',
+    model: r.model || 'none',
+    ok: !!r.ok,
+    latencyMs: Date.now() - startTime,
+    ...(r.error ? { error: r.error } : {}),
+    ...(r.errorCode ? { errorCode: r.errorCode } : {}),
+  };
+}
 
 export async function executeMasterRequest(opts: {
   taskType: TaskType;
@@ -673,34 +841,87 @@ export async function executeMasterRequest(opts: {
   const startTime = Date.now();
   
   const { taskType, messages, maxTokens = 500, temperature = 0.7, response_format, metadata } = opts;
+  const moduleName = String(metadata?.module || 'unknown');
   
   console.log(`[EXEC-01] executeMasterRequest taskType=${taskType} msgs=${messages.length} maxT=${maxTokens}`, new Date().toISOString());
+  
+  // Config-2: Adapter geçişi — DG-STOK → Backup AI Control Center → Master Router
+  const adapterEnabled = process.env.BACKUP_AI_ADAPTER === '1' || process.env.BACKUP_AI_ADAPTER === 'true';
+  const adapterForced = process.env.BACKUP_AI_ADAPTER === 'FORCE';
+
+  if (adapterEnabled || adapterForced) {
+    const { callBackupRouter } = await import('./dgStokAiAdapter.ts');
+    const adapterResult = await callBackupRouter({
+      taskType,
+      messages,
+      maxTokens,
+      temperature,
+      response_format,
+      metadata,
+    });
+    console.log(`[EXEC-03-ADAPTER] adapter ok=${adapterResult.ok} model=${adapterResult.model} source=${adapterResult.source} latency=${adapterResult.totalLatencyMs}`);
+    recordMasterTrace(traceFromResult(adapterResult, taskType, moduleName, startTime));
+    return adapterResult;
+  }
+
+  // Config-1 (DEFAULT): Direct OmniRoute (omniRouteManager.completeWithFreeModel)
+  // Config-1 is NEVER modified, disabled, or intercepted by the adapter.
   
   // Config-2: calls OmniRoute-2 via omniRouteManager (not OpenRouter cloud)
   const { completeWithFreeModel } = await import('./omniRouteManager.ts');
   console.log('[EXEC-02] completeWithFreeModel imported', new Date().toISOString());
   
-  const result = await completeWithFreeModel({
-    messages: opts.messages,
-    temperature: opts.temperature ?? 0.7,
-    max_tokens: opts.maxTokens ?? 500,
-    response_format: opts.response_format,
-  });
+  let result: { ok: boolean; content: string | null; model: string; source?: string; usage?: any; error?: string; errorCode?: string };
+  let execSource = 'omniroute';
+  // Router Orkestra → Free Model Pool → gerçek provider adaptörü
+  // (openrouter/*, nvidia/* → direkt provider; diğer modeller → OmniRoute).
+  try {
+    const routed = await dispatchRequest(opts.messages, taskType, maxTokens, temperature);
+    if (routed.ok && routed.content) {
+      result = { ok: true, content: routed.content, model: routed.model, source: routed.source || providerSource(routed.model) };
+      execSource = result.source || 'omniroute';
+      console.log(`[EXEC-03-ROUTER] pool ok model=${result.model} source=${execSource}`, new Date().toISOString());
+    } else {
+      result = { ok: false, content: null, model: routed.model || 'none', error: routed.error, errorCode: 'ROUTER_POOL_FAILED' };
+    }
+  } catch (err: any) {
+    result = { ok: false, content: null, model: 'none', error: err?.message || 'router exception', errorCode: 'ROUTER_EXCEPTION' };
+  }
   
   console.log(`[EXEC-03] completeWithFreeModel ok=${result.ok} model=${result.model} error=${result.error || 'none'}`, new Date().toISOString());
   
   const totalLatencyMs = Date.now() - startTime;
   
+  // Fallback: havuz boş/başarısızsa eski OmniRoute yolu (çalışan sistem korunur).
   if (!result.ok) {
-    return {
+    console.log('[EXEC-03-FALLBACK] router pool failed → completeWithFreeModel', result.error || '', new Date().toISOString());
+    try {
+      const fb = await completeWithFreeModel({
+        messages: opts.messages,
+        temperature: opts.temperature ?? 0.7,
+        max_tokens: opts.maxTokens ?? 500,
+        response_format: opts.response_format,
+      });
+      result = { ok: fb.ok, content: fb.content, model: fb.model, source: 'omniroute', usage: fb.usage, error: fb.error, errorCode: fb.errorCode };
+      execSource = 'omniroute';
+    } catch (err: any) {
+      console.error('[EXEC-03] completeWithFreeModel CRASH:', err?.message || err);
+      result = { ok: false, content: null, model: 'none', source: 'omniroute', error: `AI request crashed: ${err?.message || 'unknown'}`, errorCode: 'AI_REQUEST_CRASH' };
+    }
+  }
+
+  if (!result.ok) {
+    const failResult = {
       ok: false,
       content: null,
       model: result.model || 'none',
-      source: 'omniroute',
+      source: execSource,
       totalLatencyMs: Date.now() - startTime,
       error: result.error,
       errorCode: result.errorCode,
     };
+    recordMasterTrace(traceFromResult(failResult, taskType, moduleName, startTime));
+    return failResult;
   }
   
   // Try to parse JSON if response_format is json_object
@@ -720,27 +941,83 @@ export async function executeMasterRequest(opts: {
     }
   }
   
-  return {
+  const successResult = {
     ok: true,
     content: result.content,
     model: result.model,
-    source: 'omniroute',
+    source: result.source || execSource,
     totalLatencyMs: Date.now() - startTime,
     validatedJson,
   };
+  recordMasterTrace(traceFromResult(successResult, taskType, moduleName, startTime));
+  return successResult;
 }
 
-export function explainRouting(_taskType?: string, _modelId?: string, _capability?: string, _limit?: number): any[] {
-  console.warn('[omniRouteOrchestrator] explainRouting: stub called');
-  return [];
+/**
+ * Gerçek routing tablosu: taskType için canlı ModelState skorları ve seçim nedeni.
+ * Stub DEĞİL — routeRequest ile aynı skorlama kullanılır.
+ */
+export async function explainRouting(taskType: TaskType = 'GENERAL', _modelId?: string, _capability?: string, limit = 14): Promise<any> {
+  const routing = await routeRequest(taskType);
+  if (!routing) {
+    return { taskType, selected: null, selectedReason: 'NO_ELIGIBLE_FREE_MODEL', fallbackChain: [], table: [] };
+  }
+  const table = routing.allEligible.slice(0, Math.max(1, limit)).map((s, i) => ({
+    rank: i + 1,
+    modelId: s.modelId,
+    score: s.currentScore,
+    health: s.health,
+    capabilities: s.capabilities,
+    quotaPercent: s.quota.quotaPercent,
+    avgLatencyMs: Math.round(s.avgLatencyMs || 0),
+    qualityScore: s.qualityScore,
+    reliabilityScore: s.reliabilityScore,
+    taskFitScore: s.taskFitScore,
+    selected: i === 0,
+  }));
+  return {
+    taskType,
+    selected: routing.selected.modelId,
+    selectedReason: routing.reason,
+    fallbackChain: routing.fallbackChain.map(s => s.modelId),
+    table,
+  };
 }
 
+/**
+ * Gerçek runtime durumu: orchestrator health + son gerçek execution (aktif agent/provider/model).
+ */
 export async function getMasterStatus(): Promise<any> {
-  return { status: 'stub', models: [] };
+  const status = await getOrchestratorStatus();
+  return {
+    ...status,
+    status: 'active',
+    activeAgent: lastExecution
+      ? {
+          source: lastExecution.source,
+          model: lastExecution.model,
+          taskType: lastExecution.taskType,
+          module: lastExecution.module,
+          ok: lastExecution.ok,
+          latencyMs: lastExecution.latencyMs,
+          at: lastExecution.at,
+          error: lastExecution.error || null,
+        }
+      : null,
+  };
 }
 
-export function getMasterTrace(_limit?: number): any[] {
-  return [];
+/** Son gerçek AI çağrılarının döngüsel izi (module → router → source → model → sonuç). */
+export function getMasterTrace(limit = 25): MasterTraceEntry[] {
+  return masterTrace.slice(0, Math.max(1, Math.min(MASTER_TRACE_MAX, limit)));
+}
+
+/**
+ * AI Kontrol Merkezi görünürlüğü: son GERÇEK execution (provider/model/agent/latency).
+ * Config'ten TAHMİN EDİLMEZ — gerçek runtime trace'inden gelir.
+ */
+export function getLastExecution(): MasterTraceEntry | null {
+  return lastExecution;
 }
 
 export function notifyAvailabilitySignal(): void {
@@ -751,7 +1028,7 @@ export async function getAvailabilitySnapshot(): Promise<any> {
   try {
     await loadState();
     const registry = await getRegistry();
-    const freeModels = registry.models.filter(m => m.free);
+    const freeModels = await buildPoolModels();
     let active = 0;
     for (const model of freeModels) {
       const state = getOrCreateModelState(model.id);

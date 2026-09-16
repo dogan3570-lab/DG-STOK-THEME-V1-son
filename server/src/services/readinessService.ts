@@ -30,6 +30,32 @@ const _reconcileQueued = new Map<string, number>(); // productId → timestamp (
 const RECONCILE_COOLDOWN_MS = 30_000; // 30s cooldown before re-queue allowed
 let _reconcileActive = 0;
 
+/**
+ * FIX(PERF): Önceden HER ürün reconcile'ı sonunda `invalidateTitleIndex()` çalışıyor ve
+ * 25.457 kayıtlık başlık indeksi baştan yükleniyordu (~6-16s). Yoğun reconcile'da bu
+ * 1.751+ kez tetiklenip CPU/DB/event-loop'u doyuruyordu.
+ *
+ * Artık cache/index yenileme YALNIZCA kuyruk tamamen boşaldığında BİR KEZ yapılır
+ * (debounce + minimum aralık throttle). titleSearchIndex'in 5 dakikalık güvenlik
+ * reload davranışı DEĞİŞMEZ; reconcile mantığı/gate'ler DEĞİŞMEZ.
+ */
+const CACHE_FLUSH_DEBOUNCE_MS = 3_000;
+const CACHE_FLUSH_MIN_INTERVAL_MS = 60_000;
+let _cacheFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let _lastCacheFlushAt = 0;
+
+function scheduleCacheFlush(): void {
+  if (_cacheFlushTimer) return; // zaten planlı flush var
+  const sinceLast = Date.now() - _lastCacheFlushAt;
+  const delay = Math.max(CACHE_FLUSH_DEBOUNCE_MS, CACHE_FLUSH_MIN_INTERVAL_MS - sinceLast);
+  _cacheFlushTimer = setTimeout(() => {
+    _cacheFlushTimer = null;
+    _lastCacheFlushAt = Date.now();
+    try { invalidateProductsStats(); } catch { /* noop */ }
+    invalidateTitleIndex().catch(() => null);
+  }, delay);
+}
+
 function pumpReconcileQueue(): void {
   while (_reconcileActive < RECONCILE_CONCURRENCY && _reconcileQueue.length > 0) {
     if (_reconcileQueue.length > QUEUE_SOFT_LIMIT) {
@@ -45,10 +71,10 @@ function pumpReconcileQueue(): void {
       .catch(() => null)
       .finally(() => {
         _reconcileActive--;
-        // TASK313-R3: reconcile sonrası ürün havuzu KPI cache'i tazele (DB=API=UI parity)
-        try { invalidateProductsStats(); } catch { /* noop */ }
-        invalidateTitleIndex().catch(() => null); // non-blocking title index refresh
+        // FIX(PERF): per-ürün invalidateProductsStats()/invalidateTitleIndex() KALDIRILDI.
         pumpReconcileQueue();
+        // Kuyruk tamamen boşaldıysa cache/index'i TEK SEFER tazele (throttle'lı).
+        if (_reconcileActive === 0 && _reconcileQueue.length === 0) scheduleCacheFlush();
       });
   }
 }

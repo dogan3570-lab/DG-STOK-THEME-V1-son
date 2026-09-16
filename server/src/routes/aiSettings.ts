@@ -6,7 +6,7 @@ import { encryptApiKey } from '../services/crypto.ts';
 import { getAllProviders, testProvider, getOpenRouterFreeModels } from '../services/aiGateway.ts';
 import { getOpenRouterStatus, discoverAndPersist, getRegistry } from '../services/openRouterManager.ts';
 import { getOmniRouteStatus, discoverAndPersist as omniRouteDiscover, getRegistry as omniRouteGetRegistry, testModel as omniRouteTestModel, resetModelState as omniRouteResetModelState } from '../services/omniRouteManager.ts';
-import { getOrchestratorStatus, getModelStates, dispatchRequest, setModelQuota, resetModelHealth, resetAllQuotas, executeMasterRequest, explainRouting, getMasterStatus, getMasterTrace, notifyAvailabilitySignal, getAvailabilitySnapshot, invalidateCandidateCache, type TaskType } from '../services/omniRouteOrchestrator.ts';
+import { getOrchestratorStatus, getModelStates, dispatchRequest, setModelQuota, resetModelHealth, resetAllQuotas, executeMasterRequest, explainRouting, getMasterStatus, getMasterTrace, getLastExecution, notifyAvailabilitySignal, getAvailabilitySnapshot, invalidateCandidateCache, type TaskType } from '../services/omniRouteOrchestrator.ts';
 import { getMasterConfig, updateMasterConfig, redactMasterConfig, DEFAULT_MASTER_CONFIG } from '../services/masterConfig.ts';
 
 const router = Router();
@@ -91,28 +91,58 @@ const rows = await prisma.aIProviderConfig.findMany({
       { provider: 'deepseek', label: 'DeepSeek' },
       { provider: 'tokenrouter', label: 'TokenRouter' },
     ];
+    // Fix(naming): OpenCode Zen cloud session gerektirdiğinden AI Kontrol Merkezi'nin
+    // OpenCode yolu OmniRoute endpoint'ini kullanır. Etiket gerçek endpoint ile uyumlu olmalı.
+    const LABEL_OVERRIDE: Record<string, string> = { opencode: 'OpenCode (via OmniRoute)' };
 
     const providers = ORDER.map(({ provider, label }) => {
       const row = byProvider.get(provider);
       const active = !!row?.active;
       const hasKey = !!row?.apiKeyEncrypted;
+      const lastStatus = row?.lastStatus || 'configured';
+      // Fix: durum yalnız active+hasKey'den TÜRETİLMEZ. Kayıtlı SON GERÇEK test
+      // sonucu (connected/error) dikkate alınır; test edilmemişse 'Test edilmedi'.
+      let health: 'ok' | 'error' | 'untested' | 'off' | 'no_key';
+      let statusText: string;
+      if (!active) { health = 'off'; statusText = 'Kapalı'; }
+      else if (!hasKey) { health = 'no_key'; statusText = 'API Key gerekli'; }
+      else if (lastStatus === 'error') { health = 'error'; statusText = 'Bağlantı hatası'; }
+      else if (lastStatus === 'connected') { health = 'ok'; statusText = 'Kullanılabilir'; }
+      else { health = 'untested'; statusText = 'Test edilmedi'; }
       return {
         provider,
-        label: row?.displayName || label,
+        label: LABEL_OVERRIDE[provider] || row?.displayName || label,
         tier: 'FREE',
         active,
         hasKey,
-        // Basit kullanıcı durumu — teknik hata metni gösterilmez
-        statusText: !active ? 'Kapalı' : !hasKey ? 'API Key gerekli' : 'Kullanılabilir',
+        health,
+        lastStatus,
+        lastError: row?.lastError || null,
+        model: row?.model || '',
+        statusText,
       };
     });
 
-    // Gerçek aktif provider: aktif ve anahtarı olan ilk provider
-    const activeProvider = providers.find((p) => p.active && p.hasKey);
-    const available = !!activeProvider;
-    const currentAI = activeProvider
-      ? { provider: activeProvider.label, model: '', at: new Date().toISOString() }
-      : null;
+    // Görünürlük: son GERÇEK execution (runtime trace) — config'ten TAHMİN EDİLMEZ.
+    const last = getLastExecution();
+    const SOURCE_LABEL: Record<string, string> = { omniroute: 'OmniRoute', openrouter: 'OpenRouter', opencode: 'OpenCode', nvidia: 'NVIDIA' };
+    // Gerçek çalışan provider: son başarılı execution ya da gerçek test ile 'connected' olan üretici
+    const activeProvider = providers.find((p) => p.health === 'ok');
+    const available = (!!last && last.ok) || !!activeProvider;
+    const currentAI = last
+      ? {
+          provider: SOURCE_LABEL[last.source] || last.source, // gerçek kullanılan provider/agent
+          agent: SOURCE_LABEL[last.source] || last.source,
+          model: last.model,                                  // gerçek sunulan model
+          taskType: last.taskType,
+          module: last.module,
+          latencyMs: last.latencyMs,
+          ok: last.ok,
+          at: last.at,
+        }
+      : activeProvider
+        ? { provider: activeProvider.label, agent: activeProvider.provider, model: activeProvider.model || '', latencyMs: null, ok: null, at: null }
+        : null;
 
     res.json({
       ok: true,
@@ -312,7 +342,30 @@ router.get('/master/status', requireAuth, async (_req: Request, res: Response) =
   try {
     const status = await getMasterStatus();
     const cfg = await getMasterConfig();
-    res.json({ ok: true, status, config: redactMasterConfig(cfg) });
+    // Fix(7): config ↔ gerçek yürütme karşılaştırması. Router Orkestra'nın gerçek
+    // execution yolu OmniRoute'tur; diğer kaynaklar config'de enabled görünse de
+    // fiilen çağrılmaz. Bu görünüm ikisini tek yerde tutarlı raporlar.
+    const rows = await prisma.aIProviderConfig.findMany({ where: { provider: { in: ['omniroute', 'openrouter', 'nvidia', 'deepseek'] } } });
+    const executedSources = ['omniroute'];
+    const sources = rows.map((r) => ({
+      id: r.provider,
+      configEnabled: !!(cfg.SOURCES_ENABLED as Record<string, boolean>)[r.provider],
+      providerActive: r.active,
+      hasKey: !!r.apiKeyEncrypted,
+      executed: executedSources.includes(r.provider),
+      realStatus: r.lastStatus,
+    }));
+    res.json({
+      ok: true,
+      status,
+      config: redactMasterConfig(cfg),
+      runtime: {
+        executionPath: 'Router Orkestra → OmniRoute (auto/best-free + free registry)',
+        executedSources,
+        paidFallbackUsed: false,
+        sources,
+      },
+    });
   } catch (error) {
     console.error('[ai-settings] master/status error:', error);
     res.status(500).json({ ok: false, error: 'Master durum alınamadı' });
@@ -520,6 +573,11 @@ router.put('/:provider', requireAuth, requireRole(['ADMIN']), async (req: Reques
       if (active === true) {
         updateData.lastStatus = 'configured';
         updateData.lastError = null;
+        // Fix: TokenRouter ↔ DeepSeek karşılıklı dışlama — ikisi AYNI ANDA aktif olamaz.
+        const EXCLUSIVE: Record<string, string> = { tokenrouter: 'deepseek', deepseek: 'tokenrouter' };
+        if (EXCLUSIVE[provider]) {
+          await prisma.aIProviderConfig.updateMany({ where: { provider: EXCLUSIVE[provider] }, data: { active: false } });
+        }
       }
     }
     if (baseUrl !== undefined) updateData.baseUrl = baseUrl;

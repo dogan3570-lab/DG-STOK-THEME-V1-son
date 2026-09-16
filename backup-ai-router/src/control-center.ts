@@ -38,16 +38,21 @@ export async function handleRequest(req: http.IncomingMessage, res: http.ServerR
 
   if (path === '/api/route' && req.method === 'POST') {
     try {
+      console.log('[control-center] POST /api/route received');
       const body = await parseBody(req);
+      console.log('[control-center] Body parsed:', JSON.stringify(body).substring(0, 200));
       const request: CompletionRequest = {
         messages: body.messages || [{ role: 'user', content: 'Hello' }],
         model: body.model,
         max_tokens: body.max_tokens,
         temperature: body.temperature,
       };
+      console.log('[control-center] Calling routeRequest...');
       const result = await routeRequest(request);
+      console.log('[control-center] routeRequest returned:', result.ok, result.model, result.error);
       sendJson(res, result.ok ? 200 : 502, result);
     } catch (err: any) {
+      console.error('[control-center] ERROR:', err);
       sendJson(res, 400, { ok: false, error: err.message });
     }
     return true;

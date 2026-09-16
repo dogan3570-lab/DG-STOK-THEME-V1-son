@@ -579,7 +579,7 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
       const batchXmlKeys = batch.map(it => it.xmlKey);
       const existingProducts = await prisma.product.findMany({
         where: { xmlKey: { in: batchXmlKeys } },
-        select: { id: true, xmlKey: true, matchedBy: true, categoryMatch: true, status: true },
+        select: { id: true, xmlKey: true, matchedBy: true, categoryMatch: true, status: true, variantMatch: true, variantStatus: true },
       });
       const existingMap = new Map(existingProducts.map(p => [p.xmlKey, p]));
 
@@ -724,8 +724,8 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
                 xmlBrandName: item.brand || null,
                 supplierCategory,
                 brandMatch: true,
-                variantMatch: false,
-            variantStatus: shouldWaitForVariant ? 'WAITING_AI' : 'NOT_REQUIRED',
+                variantMatch: hasProtectedMatch ? existing.variantMatch : false,
+                variantStatus: hasProtectedMatch ? existing.variantStatus : (shouldWaitForVariant ? 'WAITING_AI' : 'NOT_REQUIRED'),
                 templateMatch: true,
                 status: 'XML',
                 xmlSourceId: sourceId,

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/authMiddleware.ts';
 import {
@@ -434,10 +435,30 @@ router.get('/:id/matching-products', requireAuth, async (req, res) => {
     const where: Record<string, unknown> = { status: { not: 'ERROR' } };
     if (template.categoryId) where.categoryId = template.categoryId;
     if (template.brandId) where.brandId = template.brandId;
-    const [total, items] = await Promise.all([
-      prisma.product.count({ where }),
-      prisma.product.findMany({ where, take: 50, orderBy: { updatedAt: 'desc' }, select: { id: true, title: true, xmlKey: true, sku: true, barcode: true, purchasePrice: true, salePrice: true, stock: true, status: true, categoryMatch: true, brandMatch: true, variantMatch: true } }),
-    ]);
+    // ADDITIVE (opsiyonel): mevcut çağrılar (parametresiz) AYNI davranışı korur.
+    // Parametre verilirse "gerçekten uygulanabilir ürün" kapsamı daraltılır:
+    //  - xmlSourceId: yalnız o XML kaynağındaki ürünler
+    //  - marketplaceId: yalnız o pazaryerine kalıcı kategori eşlemesi olan ürünler (GENEL/kategori şablonu için)
+    if (req.query.xmlSourceId) where.xmlSourceId = String(req.query.xmlSourceId);
+    const mpFilter = req.query.marketplaceId ? String(req.query.marketplaceId) : null;
+
+    // COUNT: pazaryeri kapsamı için RAW subquery (kategori ID listesi 4000+ olduğu için IN() parametre limiti aşılmasın).
+    const total = await (async () => {
+      if (!mpFilter || template.categoryId) return prisma.product.count({ where });
+      const conds: Prisma.Sql[] = [Prisma.sql`status <> 'ERROR'`];
+      conds.push(Prisma.sql`categoryId IN (SELECT categoryId FROM CategoryMapping WHERE marketplaceId = ${mpFilter} AND active = 1 AND externalId IS NOT NULL)`);
+      if (template.brandId) conds.push(Prisma.sql`brandId = ${template.brandId}`);
+      if (req.query.xmlSourceId) conds.push(Prisma.sql`xmlSourceId = ${String(req.query.xmlSourceId)}`);
+      const rows = await prisma.$queryRaw<Array<{ c: bigint | number }>>`SELECT COUNT(*) AS c FROM Product WHERE ${Prisma.join(conds, ' AND ')}`;
+      return Number(rows[0]?.c ?? 0);
+    })();
+
+    const items = await prisma.product.findMany({
+      where,
+      take: 50,
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, title: true, xmlKey: true, sku: true, barcode: true, purchasePrice: true, salePrice: true, stock: true, status: true, categoryMatch: true, brandMatch: true, variantMatch: true },
+    });
     return res.json({ items, total });
   } catch (error) { return res.status(500).json({ ok: false, error: String(error) }); }
 });

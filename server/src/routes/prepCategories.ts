@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth } from '../auth/authMiddleware.ts';
 import { matchCategoriesWithAI, type ProductForMatch, type CategoryCandidate } from '../services/aiGateway.ts';
@@ -8,6 +9,9 @@ import { loadTrendyolTree, invalidateTrendyolTreeCache, classifyByRule, buildAiC
 import { verifyCategorySafety, type SafetyGateInput, buildCategoryAuditMeta } from '../services/categorySafetyGate.ts';
 import { resolveCategoryCandidates, resolveCategoryCandidatesBatch, normalizeProductCore } from '../services/categoryCanonical.ts';
 import {reconcileReadiness, reconcileProductGates, queueReconcileProductGates} from '../services/readinessService.ts';
+import { getPersistedTrendyolAttributes } from '../services/trendyolAttributeDefaults.ts';
+import { runMarketplaceAttributeEngine, learnManualAttributeCorrection } from '../services/marketplaceAttributeEngine.ts';
+import { getMarketplaceAttributeCatalog } from '../services/marketplaceAttributeCatalog.ts';
 import { invalidateProductsStatsCache } from './products.ts';
 import { learnFromVerifiedDecision } from '../services/categoryKnowledgeV2.ts';
 import { deriveState, isAiEligible, computeEligibility, type ProductState } from '../services/categoryStateMachine.ts';
@@ -28,6 +32,30 @@ const router = Router();
 function readQueryValue(value: unknown): string | null {
   if (Array.isArray(value)) return value.length > 0 ? String(value[0]) : null;
   return value ? String(value) : null;
+}
+
+/**
+ * GLOBAL ATTRIBUTE ENGINE tetikleyicisi.
+ * Kategori eşleşmesinden SONRA seçili pazaryeri için gerçek attribute kataloğu +
+ * öğrenme ile kalıcı kayıt üretir. Hata kategori akışını BOZMAZ (yakalanır).
+ * marketplaceId yoksa fail-closed (hiç yazmaz).
+ */
+async function runAttributeEngineSafe(
+  productIds: string[],
+  marketplaceId: string | null | undefined,
+  actorUserId?: string | null,
+): Promise<void> {
+  if (!marketplaceId || !Array.isArray(productIds) || productIds.length === 0) return;
+  try {
+    const res = await runMarketplaceAttributeEngine({ productIds, marketplaceId, actorUserId: actorUserId ?? null });
+    if (!res.ok) {
+      console.log(`[attribute-engine] skipped key=${res.marketplaceKey ?? '?'} reason=${res.reason ?? '?'}`);
+    } else {
+      console.log(`[attribute-engine] key=${res.marketplaceKey} products=${res.products} written=${res.written} learned=${res.learned} aiUsed=${res.aiUsed}`);
+    }
+  } catch (e: any) {
+    console.error('[attribute-engine] trigger failed:', e?.message || e);
+  }
 }
 
 // ==================== LIST (AUTH REQUIRED) ====================
@@ -84,24 +112,43 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
       mpId = ttMp?.id ?? null;
     }
 
-    const [totalXmlCategories, totalProducts, matched, unmatched, aiSuggested, aiMatched, manualMatched, errorCategories, totalSystemCategories, manualReview, integrityReview, insufficientInput, staleUnmatched] = await Promise.all([
-      prisma.product.findMany({ where: { ...where, supplierCategory: { not: null } }, select: { supplierCategory: true }, distinct: ['supplierCategory'] }),
-      prisma.product.count({ where }),
-      prisma.product.count({ where: { ...where, categoryMatch: true } }),
-      prisma.product.count({ where: { ...where, categoryMatch: false } }),
-      // TASK316 FIX: categoryId!=null olanlar state machine'e gore INTEGRITY_REVIEW'dir;
-      // AI_SUGGESTED sadece gercek bekleyen onerileri sayar (frontend liste mantigiyla birebir).
-      prisma.product.count({ where: { ...where, categoryMatch: false, categoryId: null, aiSuggestedCategoryId: { not: null } } }),
-      prisma.product.count({ where: { ...where, categoryMatch: true, matchedBy: 'ai' } }),
-      prisma.product.count({ where: { ...where, categoryMatch: true, matchedBy: 'manual' } }),
-      prisma.product.count({ where: { ...where, errorMessage: { not: null }, categoryMatch: false } }),
-      prisma.category.count(),
-      // State machine populations (categoryStateMachine.deriveState ile birebir)
-      prisma.product.count({ where: { ...where, categoryMatch: false, matchedBy: null, categoryId: null, supplierCategory: { not: '' } } }),
-      prisma.product.count({ where: { ...where, categoryMatch: false, categoryId: { not: null } } }),
-      prisma.product.count({ where: { ...where, categoryMatch: false, matchedBy: null, categoryId: null, OR: [{ supplierCategory: null }, { supplierCategory: '' }] } }),
-      prisma.product.count({ where: { ...where, categoryMatch: false, matchedBy: { not: null } } }),
-    ]);
+    // FIX(PERF): 13 ayri COUNT + 1 distinct findMany TEK raw SQL'e indirildi.
+    // Sayaç anlami ve where semantigi (status!=DELETED + opsiyonel xmlSourceId) AYNEN korundu.
+    // TASK316 NOT: categoryId!=null olanlar INTEGRITY_REVIEW; AI_SUGGESTED yalniz bekleyen oneriler.
+    const statRows = await prisma.$queryRaw<any[]>`
+      SELECT
+        COUNT(*) as totalProducts,
+        SUM(CASE WHEN categoryMatch = 1 THEN 1 ELSE 0 END) as matched,
+        SUM(CASE WHEN categoryMatch = 0 THEN 1 ELSE 0 END) as unmatched,
+        SUM(CASE WHEN categoryMatch = 0 AND categoryId IS NULL AND aiSuggestedCategoryId IS NOT NULL THEN 1 ELSE 0 END) as aiSuggested,
+        SUM(CASE WHEN categoryMatch = 1 AND matchedBy = 'ai' THEN 1 ELSE 0 END) as aiMatched,
+        SUM(CASE WHEN categoryMatch = 1 AND matchedBy = 'manual' THEN 1 ELSE 0 END) as manualMatched,
+        SUM(CASE WHEN errorMessage IS NOT NULL AND categoryMatch = 0 THEN 1 ELSE 0 END) as errorCategories,
+        SUM(CASE WHEN categoryMatch = 0 AND matchedBy IS NULL AND categoryId IS NULL AND supplierCategory IS NOT NULL AND supplierCategory != '' THEN 1 ELSE 0 END) as manualReview,
+        SUM(CASE WHEN categoryMatch = 0 AND categoryId IS NOT NULL THEN 1 ELSE 0 END) as integrityReview,
+        SUM(CASE WHEN categoryMatch = 0 AND matchedBy IS NULL AND categoryId IS NULL AND (supplierCategory IS NULL OR supplierCategory = '') THEN 1 ELSE 0 END) as insufficientInput,
+        SUM(CASE WHEN categoryMatch = 0 AND matchedBy IS NOT NULL THEN 1 ELSE 0 END) as staleUnmatched,
+        COUNT(DISTINCT CASE WHEN supplierCategory IS NOT NULL THEN supplierCategory END) as totalXmlCategories,
+        SUM(CASE WHEN status = 'READY' AND categoryMatch = 1 THEN 1 ELSE 0 END) as readyForSend
+      FROM Product
+      WHERE status != 'DELETED'
+      ${xmlSourceId ? Prisma.sql`AND xmlSourceId = ${xmlSourceId}` : Prisma.empty}
+    `;
+    const sr = (statRows[0] || {}) as Record<string, unknown>;
+    const totalProducts = Number(sr.totalProducts ?? 0);
+    const matched = Number(sr.matched ?? 0);
+    const unmatched = Number(sr.unmatched ?? 0);
+    const aiSuggested = Number(sr.aiSuggested ?? 0);
+    const aiMatched = Number(sr.aiMatched ?? 0);
+    const manualMatched = Number(sr.manualMatched ?? 0);
+    const errorCategories = Number(sr.errorCategories ?? 0);
+    const manualReview = Number(sr.manualReview ?? 0);
+    const integrityReview = Number(sr.integrityReview ?? 0);
+    const insufficientInput = Number(sr.insufficientInput ?? 0);
+    const staleUnmatched = Number(sr.staleUnmatched ?? 0);
+    const totalXmlCategories = { length: Number(sr.totalXmlCategories ?? 0) };
+    const totalSystemCategories = await prisma.category.count();
+    const readyForSend = Number(sr.readyForSend ?? 0);
 
     // Operational mapping: eslesmis urunlerin categoryId'leri icin aktif CategoryMapping var mi?
     const catGroups = await prisma.product.groupBy({
@@ -131,8 +178,6 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
       if (opMappedSet.has(g.categoryId as string)) operationallyMapped += g._count.id;
       else blockedCategory += g._count.id;
     }
-
-    const readyForSend = await prisma.product.count({ where: { ...where, status: 'READY', categoryMatch: true } });
 
     res.json({
       // ---- LEGACY KEYS (geriye donuk uyumluluk; artik canonical tanima bagli) ----
@@ -330,7 +375,7 @@ router.get('/tree', requireAuth, async (req: Request, res: Response) => {
 
 router.post('/ai-match', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { productIds, xmlSourceId } = req.body;
+    const { productIds, xmlSourceId, marketplaceId: requestedMarketplaceId } = req.body;
 
     // RULE 6 + RULE 10: AI eligibility gate
     const where: any = {
@@ -370,6 +415,7 @@ router.post('/ai-match', requireAuth, async (req: Request, res: Response) => {
     let manualCount = 0;
     const matchResults: Array<{ productId: string; productName: string; suggestedCategory: string | null; confidence: number; reason: string }> = [];
 
+    const matchedProductIds: string[] = [];
     for (const p of products) {
       // URUN BASINA bagimsiz candidate resolution (grup cache'i YASAK - kaldirildi)
       const result = resolveCategoryCandidates(
@@ -424,6 +470,7 @@ router.post('/ai-match', requireAuth, async (req: Request, res: Response) => {
           where: { id: p.id },
           data: { categoryId: result.topCandidate.id, categoryMatch: true, matchedBy: 'auto', lastMatchDate: new Date(), aiSuggestedCategoryId: result.topCandidate.id, aiScore: finalConfidence },
         });
+        matchedProductIds.push(p.id);
         queueReconcileProductGates(p.id);
         // SELF-LEARNING: Learn from verified decision (confidence >= 0.95)
         if (finalConfidence >= 0.95) {
@@ -473,6 +520,9 @@ router.post('/ai-match', requireAuth, async (req: Request, res: Response) => {
     }
     invalidateProductsStatsCache();
 
+    // GLOBAL ATTRIBUTE ENGINE — /ai-match sonrası tetikle (seçili pazaryeri; yoksa tt).
+    await runAttributeEngineSafe(matchedProductIds, requestedMarketplaceId ?? marketplaceId, (req as any).actor?.userId || null);
+
     await prisma.auditLog.create({
       data: {
         action: 'CANONICAL_CATEGORY_MATCH',
@@ -503,7 +553,7 @@ const autoMatchState: { running: boolean; status: string; processedProducts: num
   running: false, status: 'idle', processedProducts: 0, totalProducts: 0, matchedCount: 0, lastError: null,
 };
 
-async function runAutoMatch(xmlSourceId: string | null = null) {
+async function runAutoMatch(xmlSourceId: string | null = null, marketplaceId: string | null = null) {
   try {
     autoMatchState.status = 'running';
 
@@ -533,6 +583,17 @@ async function runAutoMatch(xmlSourceId: string | null = null) {
     autoMatchState.processedProducts = result.totalEvaluated;
     autoMatchState.matchedCount = result.productMutations;
     if (autoMatchState.matchedCount > 0) invalidateProductsStatsCache();
+
+    // GLOBAL ATTRIBUTE ENGINE — auto-match sonrası tetikle (seçili pazaryeri; yoksa tt).
+    const matchedIds = result.decisions.filter((d) => d.isAuto && d.newCategoryId).map((d) => d.productId);
+    if (matchedIds.length > 0) {
+      let engineMpId = marketplaceId;
+      if (!engineMpId) {
+        const ttMp = await prisma.marketplace.findUnique({ where: { key: 'tt' }, select: { id: true } });
+        engineMpId = ttMp?.id ?? null;
+      }
+      await runAttributeEngineSafe(matchedIds, engineMpId, null);
+    }
     autoMatchState.status = 'completed';
   } catch (error) {
     autoMatchState.status = 'error';
@@ -549,8 +610,8 @@ router.post('/auto-match-all/start', requireAuth, async (req: Request, res: Resp
     autoMatchState.processedProducts = 0;
     autoMatchState.matchedCount = 0;
     autoMatchState.lastError = null;
-    const { xmlSourceId } = (req.body || {}) as { xmlSourceId?: string };
-    void runAutoMatch(xmlSourceId || null);
+    const { xmlSourceId, marketplaceId } = (req.body || {}) as { xmlSourceId?: string; marketplaceId?: string };
+    void runAutoMatch(xmlSourceId || null, marketplaceId || null);
     return res.json({ ok: true, message: 'Otomatik eşleştirme başlatıldı', progress: { ...autoMatchState } });
   } catch (error) {
     return res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Otomatik eşleştirme başlatılamadı' } });
@@ -583,6 +644,7 @@ const aiMatchState: {
 const BATCH_SIZE = 10;
 
 async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | null) {
+  const appliedProductIds: string[] = [];
   try {
     aiMatchState.status = 'running';
     aiMatchState.startedAt = new Date();
@@ -656,10 +718,16 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
       const candidatesByProduct = new Map<string, CategoryCandidate[]>();
       for (const p of batch) {
         const rule = classifyByRule(p, tree);
-        const cands = buildAiCandidates(p, tree, rule.candidates, 25);
+        const cands = buildAiCandidates(p, tree, rule.candidates, 10);
         candidatesByProduct.set(p.id, cands);
       }
-      const aiResult = await matchCategoriesWithAI(batch, candidatesByProduct, marketplaceName);
+      let aiResult: Awaited<ReturnType<typeof matchCategoriesWithAI>>;
+      try {
+        aiResult = await matchCategoriesWithAI(batch, candidatesByProduct, marketplaceName);
+      } catch (err: any) {
+        console.error('[prepCategories] matchCategoriesWithAI CRASH:', err?.message || err);
+        aiResult = { ok: false, provider: 'none', model: 'none', matches: [], latencyMs: 0, error: `AI crashed: ${err?.message || 'unknown'}`, errorCode: 'AI_CRASH' };
+      }
 
       if (aiResult.ok && aiResult.matches.length > 0) {
         aiMatchState.provider = aiResult.provider;
@@ -773,6 +841,7 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
                 },
               });
               queueReconcileProductGates(match.productId);
+              appliedProductIds.push(match.productId);
               // P0: Standart audit log — /ai-match-ai per-product
               await prisma.auditLog.create({
                 data: {
@@ -955,6 +1024,15 @@ async function runAiMatch(xmlSourceId: string | null, marketplaceId: string | nu
     }
 
     invalidateProductsStatsCache();
+
+    // GLOBAL ATTRIBUTE ENGINE — AI eşleştirme sonrası tetikle (seçili pazaryeri; yoksa tt).
+    let engineMpId = marketplaceId;
+    if (!engineMpId) {
+      const ttMp = await prisma.marketplace.findUnique({ where: { key: 'tt' }, select: { id: true } });
+      engineMpId = ttMp?.id ?? null;
+    }
+    await runAttributeEngineSafe(appliedProductIds, engineMpId, null);
+
     aiMatchState.status = 'completed';
 
     await prisma.auditLog.create({
@@ -1065,7 +1143,7 @@ router.get('/ai-match-ai/errors', requireAuth, async (req: Request, res: Respons
 // ==================== BULK OPERATIONS ====================
 router.post('/bulk-match', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { matches } = req.body;
+    const { matches, marketplaceId } = req.body;
     if (!Array.isArray(matches) || matches.length === 0) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'matches array is required' } });
 
     // CATEGORY CORE V2 GUARD: supplierCategory -> tek categoryId -> N ürün propagation YASAK.
@@ -1097,6 +1175,13 @@ router.post('/bulk-match', requireAuth, async (req: Request, res: Response) => {
         for (const pid of productIds) {
           queueReconcileProductGates(pid);
         }
+        // GLOBAL ATTRIBUTE ENGINE (bulk): seçili pazaryeri için gerçek katalog + öğrenme.
+        let bulkMpId: string | null = typeof marketplaceId === 'string' ? marketplaceId : null;
+        if (!bulkMpId) {
+          const ttMp = await prisma.marketplace.findUnique({ where: { key: 'tt' }, select: { id: true } });
+          bulkMpId = ttMp?.id ?? null;
+        }
+        if (bulkMpId) await runAttributeEngineSafe(productIds, bulkMpId, (req as any).actor?.userId || null);
         const systemCat = await prisma.category.findUnique({ where: { id: systemCategoryId } });
         totalMatched += products.length;
         results.push({ xmlCategory: xmlCategoryPath, systemCategory: systemCat?.name || 'Bilinmeyen', count: products.length });
@@ -1203,7 +1288,7 @@ router.get('/products', requireAuth, async (req: Request, res: Response) => {
 // ==================== MATCH / UNMATCH ====================
 router.post('/match', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { categoryId, productIds } = req.body;
+    const { categoryId, productIds, marketplaceId } = req.body;
     // HARDENING(312): tip doğrulaması — object/array categoryId Prisma 500 üretiyordu.
     if (typeof categoryId !== 'string' || !categoryId.trim() || !Array.isArray(productIds) || productIds.length === 0 || !productIds.every((x: unknown) => typeof x === 'string' && x.trim())) {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'categoryId (string) and productIds (string[]) are required' } });
@@ -1222,12 +1307,191 @@ router.post('/match', requireAuth, async (req: Request, res: Response) => {
       queueReconcileProductGates(pid);
     }
 
+    // GLOBAL ATTRIBUTE ENGINE: kategori eşleşmesinden sonra seçili pazaryeri için
+    // gerçek attribute kataloğu + öğrenme ile kalıcı kayıt üretir (tt kuralları korunur).
+    // HB/N11 kataloğu yoksa fail-closed (hiç yazmaz). Mapping yoksa MISSING.
+    let seededAttributes = 0;
+    let engineMpId: string | null = typeof marketplaceId === 'string' ? marketplaceId : null;
+    if (!engineMpId) {
+      const ttMp = await prisma.marketplace.findUnique({ where: { key: 'tt' }, select: { id: true } });
+      engineMpId = ttMp?.id ?? null;
+    }
+    try {
+      if (engineMpId) {
+        const engineRes = await runMarketplaceAttributeEngine({
+          productIds,
+          marketplaceId: engineMpId,
+          actorUserId: (req as any).actor?.userId || null,
+        });
+        seededAttributes = engineRes.written;
+      }
+    } catch (e) { console.error('[categories/match] attribute engine failed:', e); }
+
     await prisma.auditLog.create({ data: { action: 'CATEGORY_MATCH', entity: 'category', entityId: categoryId, details: `${result.count} ürün "${category.name}" kategorisine eşleştirildi`, actorUserId: (req as any).actor?.userId || null } });
     invalidateProductsStatsCache();
-    res.json({ matchedCount: result.count, message: `${result.count} ürün eşleştirildi` });
+    res.json({ matchedCount: result.count, seededAttributes, message: `${result.count} ürün eşleştirildi` });
   } catch (error) {
     console.error('Error matching products:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to match products' } });
+  }
+});
+
+// ==================== TRENDYOL KALICI ATTRIBUTE OKUMA ====================
+// UI: kategori altında ürün açıldığında değerler GERÇEK DB kaydından dolu görünür.
+router.get('/trendyol-attributes', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const raw = readQueryValue(req.query?.productIds) ?? '';
+    const single = readQueryValue(req.query?.productId);
+    const ids = (raw ? raw.split(',') : single ? [single] : []).map((s) => s.trim()).filter(Boolean);
+    if (ids.length === 0) return res.json({ ok: true, items: [] });
+    const items = await getPersistedTrendyolAttributes(ids);
+    return res.json({
+      ok: true,
+      items: items.map((a) => ({
+        id: a.id,
+        productId: a.productId,
+        categoryExternalId: a.categoryExternalId,
+        attributeId: a.attributeId,
+        attributeName: a.attributeName,
+        attributeValueId: a.attributeValueId,
+        attributeValue: a.attributeValue,
+        source: a.source,
+      })),
+    });
+  } catch (error) {
+    console.error('Error fetching trendyol attributes:', error);
+    res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch trendyol attributes' } });
+  }
+});
+
+// ==================== GLOBAL ATTRIBUTE OKUMA (seçili pazaryeri izole) ====================
+// UI: seçili pazaryerinin GERÇEK ürün attribute kayıtları + öğrenilmiş mapping'ler.
+// Başka pazaryerinin kaydı ASLA dönmez (marketplaceKey izolasyonu).
+router.get('/attributes', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const raw = readQueryValue(req.query?.productIds) ?? '';
+    const single = readQueryValue(req.query?.productId);
+    const ids = (raw ? raw.split(',') : single ? [single] : []).map((s) => s.trim()).filter(Boolean);
+    const marketplaceId = readQueryValue(req.query?.marketplaceId);
+    if (ids.length === 0 || !marketplaceId) {
+      return res.json({ ok: true, supported: false, marketplaceKey: null, items: [], learnedMappings: [] });
+    }
+    const mp = await prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { key: true, name: true } });
+    if (!mp) return res.status(404).json({ ok: false, error: { code: 'MARKETPLACE_NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+
+    const catalog = getMarketplaceAttributeCatalog(mp.key);
+    const items = await getPersistedTrendyolAttributes(ids, mp.key);
+    const catExts = [...new Set(items.map((i) => i.categoryExternalId))];
+    const learned = catExts.length
+      ? await prisma.marketplaceAttributeLearning.findMany({
+          where: { marketplaceKey: mp.key, categoryExternalId: { in: catExts } },
+          orderBy: [{ categoryExternalId: 'asc' }, { attributeId: 'asc' }],
+        })
+      : [];
+    return res.json({
+      ok: true,
+      supported: catalog.supported,
+      reason: catalog.reason,
+      marketplaceKey: mp.key,
+      marketplaceName: mp.name,
+      items: items.map((a) => ({
+        id: a.id,
+        productId: a.productId,
+        categoryExternalId: a.categoryExternalId,
+        attributeId: a.attributeId,
+        attributeName: a.attributeName,
+        attributeValueId: a.attributeValueId,
+        attributeValue: a.attributeValue,
+        source: a.source,
+        confidence: a.confidence,
+        reason: a.reason,
+      })),
+      learnedMappings: learned.map((l) => ({
+        attributeId: l.attributeId,
+        attributeName: l.attributeName,
+        attributeValueId: l.attributeValueId,
+        attributeValue: l.attributeValue,
+        sourceType: l.sourceType,
+        sourceKey: l.sourceKey,
+        sourceValue: l.sourceValue,
+        verified: l.verified,
+        successCount: l.successCount,
+        createdBy: l.createdBy,
+      })),
+    });
+  } catch (error) {
+    console.error('Error fetching marketplace attributes:', error);
+    res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch attributes' } });
+  }
+});
+
+// Kullanıcı MISSING/eksik attribute'u gerçek value ile doldurur → kalıcı kayıt + ÖĞRENME.
+// Yalnızca gerçek katalogta bulunan attribute/value kabul edilir (uydurma YOK).
+router.post('/attributes/manual', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const productId = String(req.body?.productId ?? '');
+    const marketplaceId = String(req.body?.marketplaceId ?? '');
+    const attributeId = Number(req.body?.attributeId ?? 0);
+    const attributeValueId = Number(req.body?.attributeValueId ?? 0);
+    const sourceName = typeof req.body?.sourceName === 'string' ? req.body.sourceName : null;
+    const sourceValue = typeof req.body?.sourceValue === 'string' ? req.body.sourceValue : null;
+    if (!productId || !marketplaceId || !Number.isInteger(attributeId) || attributeId <= 0 || !Number.isInteger(attributeValueId) || attributeValueId <= 0) {
+      return res.status(400).json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'productId, marketplaceId, attributeId, attributeValueId zorunludur' } });
+    }
+    const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true, categoryId: true } });
+    if (!product) return res.status(404).json({ ok: false, error: { code: 'PRODUCT_NOT_FOUND', message: 'Ürün bulunamadı' } });
+    const mp = await prisma.marketplace.findUnique({ where: { id: marketplaceId }, select: { key: true } });
+    if (!mp) return res.status(404).json({ ok: false, error: { code: 'MARKETPLACE_NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
+    const catalog = getMarketplaceAttributeCatalog(mp.key);
+    if (!catalog.supported) return res.status(400).json({ ok: false, error: { code: 'MARKETPLACE_ATTRIBUTE_NOT_SUPPORTED', message: 'Bu pazaryeri için gerçek attribute kataloğu yok' } });
+    if (!product.categoryId) return res.status(400).json({ ok: false, error: { code: 'CATEGORY_MAPPING_NOT_FOUND', message: 'Ürün kategorisi yok' } });
+
+    const mapping = await prisma.categoryMapping.findFirst({
+      where: { categoryId: product.categoryId, marketplaceId, active: true, externalId: { not: null } },
+      select: { externalId: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const catExt = Number(mapping?.externalId ?? NaN);
+    if (!Number.isInteger(catExt) || catExt <= 0) return res.status(400).json({ ok: false, error: { code: 'CATEGORY_MAPPING_NOT_FOUND', message: 'Kategori mapping yok' } });
+
+    const attrs = await catalog.getCategoryAttributes(catExt);
+    const attrDef = attrs.find((a) => a.attributeId === attributeId);
+    if (!attrDef) return res.status(400).json({ ok: false, error: { code: 'INVALID_ATTRIBUTE', message: 'Attribute gerçek kategori ağacında yok' } });
+    const values = await catalog.getAttributeValues(catExt, attributeId);
+    const valueHit = values.find((v) => v.attributeValueId === attributeValueId);
+    if (!valueHit) return res.status(400).json({ ok: false, error: { code: 'INVALID_VALUE', message: 'Değer gerçek value listesinde yok' } });
+
+    await prisma.trendyolProductAttribute.upsert({
+      where: {
+        productId_marketplaceKey_categoryExternalId_attributeId: {
+          productId, marketplaceKey: mp.key, categoryExternalId: catExt, attributeId,
+        },
+      },
+      create: {
+        productId, marketplaceKey: mp.key, categoryExternalId: catExt, attributeId,
+        attributeName: attrDef.attributeName, attributeValueId, attributeValue: valueHit.attributeValue,
+        source: 'manual', confidence: 1.0, reason: 'MANUAL_USER_INPUT',
+      },
+      update: {
+        attributeName: attrDef.attributeName, attributeValueId, attributeValue: valueHit.attributeValue,
+        source: 'manual', confidence: 1.0, reason: 'MANUAL_USER_INPUT',
+      },
+    });
+    await learnManualAttributeCorrection({
+      marketplaceKey: mp.key, categoryExternalId: catExt, attributeId,
+      attributeName: attrDef.attributeName, attributeValueId, attributeValue: valueHit.attributeValue,
+      sourceName: sourceName ?? attrDef.attributeName, sourceValue: sourceValue ?? valueHit.attributeValue,
+    });
+    await prisma.auditLog.create({ data: { action: 'ATTRIBUTE_MANUAL_SET', entity: 'product', entityId: productId, meta: JSON.stringify({ marketplaceKey: mp.key, categoryExternalId: catExt, attributeId, attributeValueId }), details: `Manuel attribute: ${attrDef.attributeName}=${valueHit.attributeValue}`, actorUserId: (req as any).actor?.userId || null } });
+
+    return res.json({
+      ok: true, productId, marketplaceKey: mp.key, categoryExternalId: catExt,
+      attributeId, attributeName: attrDef.attributeName, attributeValueId,
+      attributeValue: valueHit.attributeValue, source: 'manual', learned: true,
+    });
+  } catch (error) {
+    console.error('[categories] attributes/manual error:', error);
+    return res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Manuel attribute kaydedilemedi' } });
   }
 });
 
@@ -1929,11 +2193,8 @@ router.get('/not-going', requireAuth, async (req: Request, res: Response) => {
     const search = (req.query.search as string || '').trim();
     const gateFilter = (req.query.gateFilter as string || '').trim();
 
-    // xmlSourceId zorunlu — tüm filtreleme xmlSourceId kapsamindaki ürünlerde yapilir
-    if (!xmlSourceId) {
-      return res.json({ ok: true, items: [], stats: { total: 0, ready: 0, notReady: 0, byGate: { category: 0, brand: 0, variant: 0, template: 0, marketplace: 0, price: 0, stock: 0 }, multiMissing: 0 }, pagination: { page: 1, limit, total: 0, totalPages: 0, hasNext: false, hasPrevious: false } });
-    }
-
+    // F6: xmlSourceId OPSİYONEL. Seçim yoksa TÜM kaynaklardaki gerçek ERROR kayıtları döner
+    // (kullanıcı seçimi varsa ona uyulur). Kaynak yalnızca ProductMarketplaceState.status='ERROR'.
     // EXCLUSION: kullanıcı bu ekrandan çıkardığı ürünler görünmez (ürün kaydı silinmez)
     const excluded = await getNotGoingExcludedSet();
 
@@ -1941,7 +2202,7 @@ router.get('/not-going', requireAuth, async (req: Request, res: Response) => {
     // ProductMarketplaceState'de status = 'ERROR' olan kayıtları bul
     const pmsWhere: any = {
       status: 'ERROR',
-      product: { xmlSourceId, status: { not: 'DELETED' } },
+      product: { ...(xmlSourceId ? { xmlSourceId } : {}), status: { not: 'DELETED' } },
     };
     if (marketplaceId) {
       pmsWhere.marketplaceId = marketplaceId;
@@ -1963,7 +2224,7 @@ router.get('/not-going', requireAuth, async (req: Request, res: Response) => {
           select: {
             id: true, title: true, sku: true, barcode: true, stock: true,
             salePrice: true, purchasePrice: true, images: true,
-            categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
+            categoryMatch: true, brandMatch: true, variantMatch: true, variantStatus: true, templateMatch: true,
             categoryId: true, brandId: true, updatedAt: true,
             category: { select: { id: true, name: true } },
             brand: { select: { id: true, name: true } },
@@ -1985,13 +2246,15 @@ router.get('/not-going', requireAuth, async (req: Request, res: Response) => {
       const gates = {
         category:  { ok: !!p.categoryId, gate: 'category' },
         brand:     { ok: !!p.brandId, gate: 'brand' },
-        variant:   { ok: !!p.variantMatch, gate: 'variant' },
+        variant:   { ok: !!(p.variantMatch || p.variantStatus === 'NOT_REQUIRED'), gate: 'variant' },
         template:  { ok: !!p.templateMatch, gate: 'template' },
         marketplace: { ok: false, gate: 'marketplace' },
         price:     { ok: !!p.salePrice && p.salePrice > 0, gate: 'price' },
         stock:     { ok: p.stock > 0, gate: 'stock' },
       };
-      const isReady = p.categoryMatch && p.brandMatch && p.variantMatch && p.templateMatch;
+      // readiness.ts ile birebir: NOT_REQUIRED (varyantsız) ürün varyant eşleşmiş sayılır.
+      const variantOk = !!(p.variantMatch || p.variantStatus === 'NOT_REQUIRED');
+      const isReady = p.categoryMatch && p.brandMatch && variantOk && p.templateMatch;
       if (isReady) readyCount++;
 
       // Eksik gate sayilari
@@ -2010,7 +2273,7 @@ router.get('/not-going', requireAuth, async (req: Request, res: Response) => {
         brandName: p.brand?.name || null, categoryName: p.category?.name || null,
         xmlSourceName: p.xmlSource?.name || null, imageUrl: (p.images || '').split(',')[0]?.trim() || null,
         isReady, gates,
-        primaryReason: !p.categoryId ? 'Kategori eksik' : !p.brandId ? 'Marka eksik' : !p.variantMatch ? 'Varyant eksik' : !p.templateMatch ? 'Şablon eksik' : 'Diğer',
+        primaryReason: !p.categoryId ? 'Kategori eksik' : !p.brandId ? 'Marka eksik' : !variantOk ? 'Varyant eksik' : !p.templateMatch ? 'Şablon eksik' : 'Diğer',
         updatedAt: p.updatedAt?.toISOString?.() || p.updatedAt,
         marketplaceId: pms.marketplaceId,
         marketplaceKey: pms.marketplace?.key || null,
@@ -2228,9 +2491,13 @@ router.get('/filtered', requireAuth, async (req: Request, res: Response) => {
     const xmlSourceId = readQueryValue(req.query?.xmlSourceId);
     const marketplaceId = readQueryValue(req.query?.marketplaceId);
     const page = Math.max(1, parseInt(String(req.query.page || '1')) || 1);
-    const pageSize = Math.min(200, Math.max(1, parseInt(String(req.query.pageSize || '50')) || 50));
+    // FIX: UI 50/100/200/500/1000 sunuyor; backend artık aynı sayıda gerçek ürün döndürür (sessiz clamp YOK).
+    const pageSize = Math.min(1000, Math.max(1, parseInt(String(req.query.pageSize || '50')) || 50));
     const sortByRaw = String(req.query.sortBy || 'priority');
     const search = String(req.query.search || '').trim();
+    // FIX: eşleşme filtresi artık SERVER-SIDE (Tümü/Eşleşmiş/Eşleşmemiş) — total/totalPages tutarlı.
+    const matchFilterRaw = String(req.query.matchFilter || 'all');
+    const matchFilter = ['all', 'matched', 'unmatched'].includes(matchFilterRaw) ? matchFilterRaw : 'all';
 
     if (!xmlSourceId || !marketplaceId) {
       return res.status(400).json({ ok: false, error: { code: 'CONTEXT_REQUIRED', message: 'xmlSourceId ve marketplaceId zorunludur' } });
@@ -2244,31 +2511,77 @@ router.get('/filtered', requireAuth, async (req: Request, res: Response) => {
     if (!src) return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'XML kaynağı bulunamadı' } });
     if (!mp) return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'Pazaryeri bulunamadı' } });
 
-    const where: any = { xmlSourceId, status: { not: 'DELETED' } };
+    const baseWhere: any = { xmlSourceId, status: { not: 'DELETED' } };
+    const where: any = { ...baseWhere };
+    if (matchFilter === 'matched') where.categoryMatch = true;
+    else if (matchFilter === 'unmatched') where.categoryMatch = false;
     if (search) where.OR = [{ title: { contains: search } }, { xmlKey: { contains: search } }, { sku: { contains: search } }, { barcode: { contains: search } }];
 
-    let orderBy: any = { createdAt: 'desc' };
-    if (sortByRaw === 'name') orderBy = { title: 'asc' };
-    else if (sortByRaw === 'name-desc') orderBy = { title: 'desc' };
-
-    const [products, total] = await Promise.all([
-      prisma.product.findMany({
-        where,
-        select: {
-          id: true, xmlKey: true, title: true, supplierCategory: true, xmlBrandName: true,
-          sku: true, barcode: true, stock: true, salePrice: true, purchasePrice: true,
-          status: true, categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
-          categoryId: true, brandId: true, aiScore: true, matchedBy: true, aiSuggestedCategoryId: true,
-          images: true, description: true, createdAt: true, updatedAt: true,
-          category: { select: { id: true, name: true } },
-          brand: { select: { id: true, name: true } },
-        },
-        orderBy,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      prisma.product.count({ where }),
-    ]);
+    let products: any[];
+    let total: number;
+    if (sortByRaw === 'priority') {
+      // FIX: priority sıralaması GERÇEK ve server-side (UI kuralının birebir aynısı) —
+      // sayfalama toplamları ve sıralama tutarlı olur.
+      const conds: Prisma.Sql[] = [Prisma.sql`status <> 'DELETED'`, Prisma.sql`xmlSourceId = ${xmlSourceId}`];
+      if (matchFilter === 'matched') conds.push(Prisma.sql`categoryMatch = 1`);
+      else if (matchFilter === 'unmatched') conds.push(Prisma.sql`categoryMatch = 0`);
+      if (search) {
+        const like = `%${search}%`;
+        conds.push(Prisma.sql`(title LIKE ${like} OR xmlKey LIKE ${like} OR sku LIKE ${like} OR barcode LIKE ${like})`);
+      }
+      const whereSql = Prisma.join(conds, ' AND ');
+      const [cntRows, idRows] = await Promise.all([
+        prisma.$queryRaw<Array<{ c: bigint | number }>>`SELECT COUNT(*) AS c FROM Product WHERE ${whereSql}`,
+        prisma.$queryRaw<Array<{ id: string }>>`SELECT id FROM Product WHERE ${whereSql} ORDER BY CASE
+            WHEN categoryMatch = 0 THEN 1
+            WHEN categoryMatch = 1 AND matchedBy IS NULL AND categoryId IS NULL THEN 3
+            WHEN categoryMatch = 1 AND matchedBy = 'manual' THEN 4
+            WHEN categoryMatch = 1 AND aiScore IS NOT NULL AND aiScore < 0.85 THEN 5
+            WHEN categoryMatch = 1 AND matchedBy = 'ai' THEN 2
+            WHEN categoryMatch = 1 AND matchedBy IS NULL THEN 3
+            ELSE 6 END ASC, createdAt DESC LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
+      ]);
+      total = Number(cntRows[0]?.c ?? 0);
+      const ids = idRows.map((r) => r.id);
+      const list = ids.length
+        ? await prisma.product.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true, xmlKey: true, title: true, supplierCategory: true, xmlBrandName: true,
+              sku: true, barcode: true, stock: true, salePrice: true, purchasePrice: true,
+              status: true, categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
+              categoryId: true, brandId: true, aiScore: true, matchedBy: true, aiSuggestedCategoryId: true,
+              images: true, description: true, createdAt: true, updatedAt: true,
+              category: { select: { id: true, name: true } },
+              brand: { select: { id: true, name: true } },
+            },
+          })
+        : [];
+      const byId = new Map(list.map((p) => [p.id, p]));
+      products = ids.map((id) => byId.get(id)).filter(Boolean) as any[];
+    } else {
+      const orderBy: any = sortByRaw === 'name' ? { title: 'asc' } : sortByRaw === 'name-desc' ? { title: 'desc' } : { createdAt: 'desc' };
+      const [list, cnt] = await Promise.all([
+        prisma.product.findMany({
+          where,
+          select: {
+            id: true, xmlKey: true, title: true, supplierCategory: true, xmlBrandName: true,
+            sku: true, barcode: true, stock: true, salePrice: true, purchasePrice: true,
+            status: true, categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
+            categoryId: true, brandId: true, aiScore: true, matchedBy: true, aiSuggestedCategoryId: true,
+            images: true, description: true, createdAt: true, updatedAt: true,
+            category: { select: { id: true, name: true } },
+            brand: { select: { id: true, name: true } },
+          },
+          orderBy,
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        prisma.product.count({ where }),
+      ]);
+      products = list;
+      total = cnt;
+    }
 
     // Her urun icin SECILI pazaryerinin gercek kategori mapping bilgisi (externalId/externalName/externalPath)
     const categoryIds = Array.from(new Set(products.map(p => p.categoryId).filter(Boolean) as string[]));
@@ -2300,13 +2613,17 @@ router.get('/filtered', requireAuth, async (req: Request, res: Response) => {
       };
     });
 
+    // FIX: totalPages = filtrelenmiş total / istenen pageSize (backend ile UI birebir).
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    // Özet her zaman CONTEXT (filtre/arama bağımsız) matched/unmatched dağılımını verir.
     const summary = {
-      total, matched: await prisma.product.count({ where: { ...where, categoryMatch: true } }),
-      unmatched: await prisma.product.count({ where: { ...where, categoryMatch: false } }),
+      total: await prisma.product.count({ where: baseWhere }),
+      matched: await prisma.product.count({ where: { ...baseWhere, categoryMatch: true } }),
+      unmatched: await prisma.product.count({ where: { ...baseWhere, categoryMatch: false } }),
     };
 
-    return res.json({ ok: true, items, pagination: { page, limit: pageSize, total, totalPages, hasNext: page < totalPages, hasPrevious: page > 1 }, summary });
+    // `pages` alias: eski UI `pages` okuyordu; `totalPages` ile aynı değeri döndürüp uyumsuzluğu kapatıyoruz.
+    return res.json({ ok: true, items, pagination: { page, limit: pageSize, total, totalPages, pages: totalPages, hasNext: page < totalPages, hasPrevious: page > 1 }, summary });
   } catch (error) {
     console.error('Error fetching filtered products:', error);
     return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch filtered products' } });
@@ -2328,7 +2645,7 @@ router.get('/:productId', requireAuth, async (req: Request, res: Response) => {
       select: {
         id: true, xmlKey: true, title: true, supplierCategory: true, xmlBrandName: true,
         description: true, sku: true, barcode: true, stock: true, salePrice: true, purchasePrice: true,
-        status: true, categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
+        status: true, categoryMatch: true, brandMatch: true, variantMatch: true, variantStatus: true, templateMatch: true,
         categoryId: true, matchedBy: true, aiScore: true, aiSuggestedCategoryId: true,
         images: true, createdAt: true, updatedAt: true,
         category: { select: { id: true, name: true, externalId: true } },
@@ -2365,15 +2682,17 @@ router.get('/:productId', requireAuth, async (req: Request, res: Response) => {
     }
 
     // Safety gate — mevcut gercek gate verilerinden uretilir (uydurma yok)
+    // readiness.ts ile birebir: NOT_REQUIRED (varyantsız) ürün varyant eşleşmiş sayılır.
+    const variantOk = product.variantMatch === true || product.variantStatus === 'NOT_REQUIRED';
     const safetyGate = {
-      passed: product.categoryMatch && product.brandMatch && product.variantMatch && product.templateMatch,
+      passed: product.categoryMatch && product.brandMatch && variantOk && product.templateMatch,
       categoryMatch: product.categoryMatch,
       brandMatch: product.brandMatch,
-      variantMatch: product.variantMatch,
+      variantMatch: variantOk,
       templateMatch: product.templateMatch,
       reason: !product.categoryMatch ? 'Kategori eşleşmesi eksik'
         : !product.brandMatch ? 'Marka eşleşmesi eksik'
-        : !product.variantMatch ? 'Varyant eşleşmesi eksik'
+        : !variantOk ? 'Varyant eşleşmesi eksik'
         : !product.templateMatch ? 'Şablon eşleşmesi eksik'
         : null,
     };

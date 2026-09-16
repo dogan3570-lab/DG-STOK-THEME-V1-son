@@ -8,6 +8,7 @@ export function getPool(): AgentPool {
 }
 
 export async function routeRequest(request: CompletionRequest): Promise<CompletionResponse> {
+  console.log('[router] routeRequest called');
   return pool.routeRequest(request);
 }
 

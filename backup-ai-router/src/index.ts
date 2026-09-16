@@ -79,6 +79,7 @@ loadEnv();
 registerAgents();
 
 const server = http.createServer(async (req, res) => {
+  console.log(`[server] ${req.method} ${req.url}`);
   try {
     const handled = await handleRequest(req, res);
     if (!handled) {
@@ -86,7 +87,7 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: 'Not found' }));
     }
   } catch (err: any) {
-    console.error('[server] Error:', err.message);
+    console.error('[server] Error:', err.message, err.stack);
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Internal server error' }));
   }

@@ -26,12 +26,41 @@
     <link rel="stylesheet" href="/theme.css">
     <script>
         (function(){
-            var v = 'v20260911-fix';
+            var v = 'v20260916-fix2';
             var s = localStorage.getItem('_build_v');
             if(s && s !== v){ localStorage.removeItem('_build_v'); location.reload(true); }
             else { localStorage.setItem('_build_v', v); }
         })();
     </script>
+    <style>
+        /* === FİLTRE BUTONLARI (Tümü / Eşleşmiş / Eşleşmemiş): net buton + belirgin seçili/disabled durumu === */
+        #cat-match-filter .cat-filter-btn { background: transparent; color: #475569; border: 1px solid #cbd5e1; border-radius: 10px; cursor: pointer; transition: all .15s ease; }
+        #cat-match-filter .cat-filter-btn:hover { background: rgba(100,116,139,.10); }
+        #cat-match-filter .cat-filter-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); box-shadow: 0 2px 6px rgba(79,70,229,.35); }
+        #cat-match-filter .cat-filter-btn:disabled { opacity: .45; cursor: not-allowed; }
+        html.dark #cat-match-filter .cat-filter-btn { color: #cbd5e1; border-color: #334155; }
+        html.dark #cat-match-filter .cat-filter-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+        /* === VARYANT FİLTRE BUTONLARI (Tümü / Eşleşmiş / Eşleşmemiş) === */
+        #var-match-filter .var-filter-btn { background: transparent; color: #475569; border: 1px solid #cbd5e1; border-radius: 10px; cursor: pointer; transition: all .15s ease; font-size: 11px; font-weight: 700; padding: 6px 12px; }
+        #var-match-filter .var-filter-btn:hover { background: rgba(100,116,139,.10); border-color: #94a3b8; }
+        #var-match-filter .var-filter-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); box-shadow: 0 2px 6px rgba(79,70,229,.35); }
+        #var-match-filter .var-filter-btn:disabled { opacity: .45; cursor: not-allowed; }
+        html.dark #var-match-filter .var-filter-btn { color: #cbd5e1; border-color: #334155; }
+        html.dark #var-match-filter .var-filter-btn:hover { background: rgba(100,116,139,.15); border-color: #475569; }
+        html.dark #var-match-filter .var-filter-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+        /* === SAYFA BOYUTU BUTONLARI (50/100/200/500/1000): belirgin seçili durum === */
+        #prep-page-size-group .cat-size-btn { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 9px; cursor: pointer; transition: all .15s ease; }
+        #prep-page-size-group .cat-size-btn:hover { background: #e2e8f0; }
+        #prep-page-size-group .cat-size-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); box-shadow: 0 2px 6px rgba(79,70,229,.35); font-weight: 700; }
+        html.dark #prep-page-size-group .cat-size-btn { background: #1e293b; color: #cbd5e1; border-color: #334155; }
+        html.dark #prep-page-size-group .cat-size-btn:hover { background: #273549; }
+        html.dark #prep-page-size-group .cat-size-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+        #prep-page-size-group .cat-size-btn:disabled { opacity: .45; cursor: not-allowed; }
+        /* Ürün satırı aksiyonu her zaman görünür kalsın */
+        #prep-product-list .row-manual-btn { white-space: nowrap; }
+        /* F7: 1000 satırda main-thread blokajını azalt — ekranda olmayan satırların render'ı ertelenir */
+        #rts-tbody tr { content-visibility: auto; contain-intrinsic-size: auto 44px; }
+    </style>
 </head>
 <body class="bg-slate-100 dark:bg-darkBg text-slate-700 dark:text-slate-100 transition-colors duration-300 antialiased overflow-hidden">
 
@@ -891,21 +920,7 @@
                         </div>
                     </div>
 
-                    <!-- PROGRESS INDICATOR (visible when loading) -->
-                    <div id="prep-progress" class="panel-theme rounded-2xl p-4 sm:p-5 hidden">
-                        <div class="flex items-center gap-4">
-                            <div class="flex-1 min-w-0">
-                                <div class="mb-1.5 flex items-center justify-between text-xs">
-                                    <span id="prep-progress-label" class="font-semibold text-slate-700 dark:text-slate-300">Eşleştirme İşlemi</span>
-                                    <span id="prep-progress-pct" class="font-bold text-slate-800 dark:text-white">%0 (0/0)</span>
-                                </div>
-                                <div class="h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
-                                    <div id="prep-progress-bar" class="h-full rounded-full transition-all duration-700" style="width: 0%; background: linear-gradient(to right, var(--primary-color), var(--primary-hover));"></div>
-                                </div>
-                                <div id="prep-progress-running" class="hidden mt-1.5 text-[10px] text-primary font-medium">Arka planda işlem devam ediyor, sayfayi kapatmayın...</div>
-                            </div>
-                        </div>
-                    </div>
+                    <!-- KALDIRILDI: ikinci (yanıltıcı) progress bar. Tek gerçek progress: aşağıdaki "Genel Eşleştirme İlerlemesi". -->
 
                     <!-- MAIN CONTENT AREA (tab content goes here) -->
                     <div id="prep-categorize-content" class="panel-theme rounded-2xl p-5">
@@ -934,7 +949,7 @@
                         </div>
 
                         <!-- İSTATİSTİK ÖZETİ — gerçek /categories/stats verisinden (TASK312-R2 canonical KPI) -->
-                        <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
+                        <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 mb-2">
                             <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Toplam Ürün</div><div id="prep-stat-total" class="text-lg font-extrabold text-slate-900 dark:text-white">-</div></div>
                             <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Eşleşen</div><div id="prep-stat-matched" class="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">-</div></div>
                             <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Eşleşmeyen</div><div id="prep-stat-unmatched" class="text-lg font-extrabold text-red-600 dark:text-red-400">-</div></div>
@@ -944,7 +959,7 @@
                         </div>
 
                         <!-- TOOLBAR: Tümünü Seç (Bu Sayfa) + Arama + Yenile + Page Size -->
-                        <div id="prep-list-toolbar" class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                        <div id="prep-list-toolbar" class="flex flex-wrap items-center justify-between gap-2 mb-2">
                             <div class="flex flex-wrap items-center gap-3">
                                 <label class="flex items-center gap-2 cursor-pointer select-none">
                                     <input type="checkbox" id="prep-select-page" onchange="catTogglePageProducts(this.checked)" class="h-4 w-4 cursor-pointer rounded border-slate-300 text-primary focus:ring-primary/50"/>
@@ -952,10 +967,10 @@
                                     <span id="prep-selected-count" class="hidden text-[11px] font-bold text-primary"></span>
                                 </label>
                                 <!-- EŞLEŞME FİLTRESİ -->
-                                <div class="flex items-center rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden" id="cat-match-filter">
-                                    <button type="button" onclick="catSetMatchFilter('all')" data-filter="all" class="cat-filter-btn px-3 py-1.5 text-[11px] font-bold bg-primary/10 text-primary border-r border-slate-200 dark:border-slate-700">Tümü</button>
-                                    <button type="button" onclick="catSetMatchFilter('matched')" data-filter="matched" class="cat-filter-btn px-3 py-1.5 text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/40 border-r border-slate-200 dark:border-slate-700">Eşleşmiş</button>
-                                    <button type="button" onclick="catSetMatchFilter('unmatched')" data-filter="unmatched" class="cat-filter-btn px-3 py-1.5 text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/40">Eşleşmemiş</button>
+                                <div class="flex items-center gap-1" id="cat-match-filter">
+                                    <button type="button" onclick="catSetMatchFilter('all')" data-filter="all" class="cat-filter-btn active px-3 py-1.5 text-[11px] font-bold">Tümü</button>
+                                    <button type="button" onclick="catSetMatchFilter('matched')" data-filter="matched" class="cat-filter-btn px-3 py-1.5 text-[11px] font-bold">Eşleşmiş</button>
+                                    <button type="button" onclick="catSetMatchFilter('unmatched')" data-filter="unmatched" class="cat-filter-btn px-3 py-1.5 text-[11px] font-bold">Eşleşmemiş</button>
                                 </div>
                                 <div class="relative">
                                     <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
@@ -965,19 +980,20 @@
                             </div>
                             <div class="flex items-center gap-2">
                                 <span class="text-[11px] font-bold text-slate-600 dark:text-slate-400">Sayfada Gösterilecek Ürün Sayısı</span>
-                                <select id="prep-page-size" onchange="catSetProductPageSize(parseInt(this.value, 10))" class="field-input rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300">
-                                    <option value="50">50</option>
-                                    <option value="100" selected>100</option>
-                                    <option value="200">200</option>
-                                    <option value="500">500</option>
-                                    <option value="1000">1000</option>
-                                </select>
+                                <div class="flex items-center gap-1" id="prep-page-size-group">
+                                    <button type="button" data-size="50" onclick="catSetProductPageSize(50)" class="cat-size-btn px-2.5 py-1 text-[11px] font-semibold">50</button>
+                                    <button type="button" data-size="100" onclick="catSetProductPageSize(100)" class="cat-size-btn active px-2.5 py-1 text-[11px] font-semibold">100</button>
+                                    <button type="button" data-size="200" onclick="catSetProductPageSize(200)" class="cat-size-btn px-2.5 py-1 text-[11px] font-semibold">200</button>
+                                    <button type="button" data-size="500" onclick="catSetProductPageSize(500)" class="cat-size-btn px-2.5 py-1 text-[11px] font-semibold">500</button>
+                                    <button type="button" data-size="1000" onclick="catSetProductPageSize(1000)" class="cat-size-btn px-2.5 py-1 text-[11px] font-semibold">1000</button>
+                                </div>
                             </div>
                         </div>
-                        <div id="prep-pagination-top" class="flex flex-wrap items-center justify-between gap-3 mb-4 text-xs text-slate-500 dark:text-slate-400"></div>
+                        <!-- Üst pagination kaldırıldı (alt pagination yeterli) — dikey alan ürün listesine bırakıldı. -->
+                        <div id="prep-pagination-top" class="hidden"></div>
 
                         <!-- SORTING -->
-                        <div class="flex flex-wrap items-center gap-3 mb-4">
+                        <div class="flex flex-wrap items-center gap-2 mb-2">
                             <span class="text-[10px] text-slate-500 dark:text-slate-400">Siralama:</span>
                             <div class="relative">
                                 <select id="prep-sort-by" onchange="catRefreshProducts()" class="field-input relative w-40 text-xs px-3 py-2.5 rounded-xl focus:outline-none focus:ring-primary/50 bg-white dark:bg-slate-800/40">
@@ -990,7 +1006,7 @@
                         </div>
 
                         <!-- PRODUCT LIST -->
-                        <div id="prep-product-list" class="divide-y divide-slate-100 dark:divide-slate-800/60 overflow-y-auto max-h-[600px] border border-slate-100 dark:border-slate-800/60 rounded-xl">
+                        <div id="prep-product-list" class="divide-y divide-slate-100 dark:divide-slate-800/60 overflow-y-auto border border-slate-100 dark:border-slate-800/60 rounded-xl" style="min-height: 160px;">
                             <!-- Products rendered by JS -->
                         </div>
 
@@ -1279,7 +1295,7 @@
                             <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Varyantsız</div><div id="var-none" class="text-xl font-extrabold text-slate-500 dark:text-slate-400">-</div></div>
                             <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Otomatik Eşleşti</div><div id="var-auto" class="text-xl font-extrabold text-emerald-600 dark:text-emerald-400">-</div></div>
                             <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">AI ile Eşleşti</div><div id="var-ai" class="text-xl font-extrabold text-blue-600 dark:text-blue-400">-</div></div>
-                            <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Manuel Bekliyor</div><div id="var-manual" class="text-xl font-extrabold text-amber-600 dark:text-amber-400">-</div></div>
+                             <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">Manuel İnceleme</div><div id="var-manual" class="text-xl font-extrabold text-amber-600 dark:text-amber-400">-</div></div>
                             <div class="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3"><div class="text-[10px] font-bold text-slate-400 uppercase">AI Bekliyor</div><div id="var-waiting" class="text-xl font-extrabold text-indigo-600 dark:text-indigo-400">-</div></div>
                         </div>
                         <div id="var-action-hint" class="mb-4 rounded-xl px-4 py-3 text-sm font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20"></div>
@@ -1301,10 +1317,11 @@
                                     <span id="var-selection-count" class="hidden text-[11px] font-bold text-primary"></span>
                                 </label>
                                 <!-- EŞLEŞME FİLTRESİ -->
-                                <div class="flex items-center rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden" id="var-match-filter">
-                                    <button type="button" onclick="varSetMatchFilter('all')" data-filter="all" class="var-filter-btn active px-3 py-1.5 text-[11px] font-bold bg-primary/10 text-primary border-r border-slate-200 dark:border-slate-700">Tümü</button>
-                                    <button type="button" onclick="varSetMatchFilter('matched')" data-filter="matched" class="var-filter-btn px-3 py-1.5 text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/40 border-r border-slate-200 dark:border-slate-700">Eşleşmiş</button>
-                                    <button type="button" onclick="varSetMatchFilter('unmatched')" data-filter="unmatched" class="var-filter-btn px-3 py-1.5 text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/40">Eşleşmemiş</button>
+                                <div class="flex items-center gap-2" id="var-match-filter">
+                                    <button type="button" onclick="varSetMatchFilter('all')" data-filter="all" class="var-filter-btn active">Tümü</button>
+                                    <button type="button" onclick="varSetMatchFilter('matched')" data-filter="matched" class="var-filter-btn">Eşleşmiş</button>
+                                    <button type="button" onclick="varSetMatchFilter('unmatched')" data-filter="unmatched" class="var-filter-btn">Eşleşmemiş</button>
+                                    <button type="button" onclick="varSetMatchFilter('manual')" data-filter="manual" class="var-filter-btn">Manuel</button>
                                 </div>
                                 <div class="relative">
                                     <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
@@ -1383,7 +1400,7 @@
                             </div>
                             <div class="mt-5 flex items-center justify-between">
                                 <button onclick="varCloseDetail()" class="px-4 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition">Kapat</button>
-                                <button id="var-detail-manual-btn" onclick="varDetailOpenManual()" class="px-4 py-2 text-xs font-bold rounded-xl bg-amber-600 hover:bg-amber-700 text-white transition hidden">Manuel Eşleştir</button>
+                                <button id="var-detail-manual-btn" onclick="varOpenManualFromDetail(varDetailState.productId)" class="px-4 py-2 text-xs font-bold rounded-xl bg-amber-600 hover:bg-amber-700 text-white transition hidden">Manuel Eşleştir</button>
                             </div>
                         </div>
                     </div>
@@ -1430,7 +1447,7 @@
                                 </div>
                                 <div>
                                     <label class="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Trendyol Değeri</label>
-                                    <select id="var-manual-value" class="field-input w-full rounded-xl px-3 py-2.5 text-sm mt-1" disabled>
+                                    <select id="var-manual-value" onchange="if(this.value){document.getElementById('var-manual-save').disabled=false;}" class="field-input w-full rounded-xl px-3 py-2.5 text-sm mt-1" disabled>
                                         <option value="">Önce varyant seçiniz...</option>
                                     </select>
                                 </div>
@@ -1572,8 +1589,43 @@
                         </button>
                     </div>
 
+                    <!-- YENİ ŞABLON MODALI (prompt() yerine) -->
+                    <div id="li-template-modal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                        <div class="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl panel-theme shadow-2xl p-5">
+                            <div class="flex items-start justify-between gap-3 mb-4">
+                                <div>
+                                    <h3 class="font-bold text-base text-slate-900 dark:text-white"><i class="fa-solid fa-plus text-primary mr-1"></i> Yeni Şablon</h3>
+                                    <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Şablon, ürünün pazaryerine <b>nasıl gönderileceğini</b> belirler. Fiyat hesabı <b>Fiyat Kuralları</b> sekmesindedir.</p>
+                                </div>
+                                <button type="button" onclick="prepListTemplateClose()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">✕</button>
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div class="sm:col-span-2"><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Şablon Adı *</label><input id="li-tpl-name" type="text" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Pazaryeri *</label><select id="li-tpl-mp" class="field-input w-full text-xs px-3 py-2 rounded-xl"></select></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Kapsam</label><select id="li-tpl-scope" onchange="prepListTemplateScopeChange()" class="field-input w-full text-xs px-3 py-2 rounded-xl"><option value="GENERAL">Genel (tüm ürünler)</option><option value="CATEGORY">Kategori</option><option value="PRODUCT">Tek Ürün</option><option value="BRAND">Marka</option></select></div>
+                                <div id="li-tpl-cat-wrap" class="hidden sm:col-span-2"><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Kategori</label><select id="li-tpl-cat" class="field-input w-full text-xs px-3 py-2 rounded-xl"></select></div>
+                                <div id="li-tpl-prod-wrap" class="hidden sm:col-span-2"><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Ürün</label><select id="li-tpl-prod" class="field-input w-full text-xs px-3 py-2 rounded-xl"></select></div>
+                                <div id="li-tpl-brand-wrap" class="hidden sm:col-span-2"><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Marka</label><select id="li-tpl-brand" class="field-input w-full text-xs px-3 py-2 rounded-xl"></select></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Fiyat Çarpanı</label><input id="li-tpl-mult" type="number" step="0.01" value="1" oninput="prepListTemplatePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Kâr (%)</label><input id="li-tpl-margin" type="number" value="25" oninput="prepListTemplatePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Sabit Ek (TL)</label><input id="li-tpl-fixed" type="number" value="0" oninput="prepListTemplatePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"></div>
+                                <div><label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Yuvarlama</label><select id="li-tpl-rounding" onchange="prepListTemplatePreview()" class="field-input w-full text-xs px-3 py-2 rounded-xl"><option value="none">Yuvarlama Yok</option><option value="0.90">,90</option><option value="9.90">9,90</option><option value="nearest">En Yakın Tam</option></select></div>
+                                <div class="sm:col-span-2 flex items-center gap-2"><input id="li-tpl-active" type="checkbox" checked class="h-4 w-4"><label for="li-tpl-active" class="text-xs font-semibold text-slate-600 dark:text-slate-300">Aktif</label></div>
+                            </div>
+                            <div id="li-tpl-preview" class="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-xs text-slate-600 dark:text-slate-300"></div>
+                            <div class="mt-4 flex items-center gap-2">
+                                <button type="button" onclick="prepListTemplateSave()" class="px-4 py-2 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold">Kaydet</button>
+                                <button type="button" onclick="prepListTemplateClose()" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold">İptal</button>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- ŞABLONLAR PANELİ -->
                     <div id="li-panel-templates" class="space-y-4">
+                        <div class="rounded-2xl border border-blue-500/20 bg-blue-500/5 px-4 py-3 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                            <b class="text-slate-800 dark:text-slate-100">Şablon nedir?</b> Ürünün pazaryerine <b>nasıl gönderileceğini</b> (başlık, açıklama, görsel, stok, komisyon) belirler.
+                            Fiyatın nasıl hesaplanacağını <b>belirlemez</b> — o iş <b>Fiyat Kuralları</b> sekmesindedir.
+                        </div>
                         <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm">
                             <div class="overflow-x-auto">
                                 <table class="w-full text-left border-collapse">
@@ -1581,10 +1633,10 @@
                                         <tr class="border-b border-slate-100 dark:border-slate-700 text-slate-400 dark:text-slate-500 text-[11px] font-bold uppercase tracking-wider bg-slate-50/50 dark:bg-slate-700/30">
                                             <th class="py-4 px-6">Şablon Adı</th>
                                             <th class="py-4 px-6">Pazaryeri</th>
-                                            <th class="py-4 px-6">Fiyat Kaynağı</th>
-                                            <th class="py-4 px-6">Çarpan</th>
-                                            <th class="py-4 px-6">Komisyon</th>
-                                            <th class="py-4 px-6">Kurallar</th>
+                                            <th class="py-4 px-6">Kapsam</th>
+                                            <th class="py-4 px-6">Hedef</th>
+                                            <th class="py-4 px-6">Uygulanan Ürün</th>
+                                            <th class="py-4 px-6">Fiyat Davranışı</th>
                                             <th class="py-4 px-6">Durum</th>
                                             <th class="py-4 px-6 text-right">İşlemler</th>
                                         </tr>
@@ -1640,13 +1692,22 @@
                     <!-- FİYAT KURALLARI PANELİ -->
                     <div id="li-panel-rules" class="space-y-4 hidden">
                         <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 shadow-sm">
-                            <div class="flex items-center justify-between mb-4">
-                                <h3 class="font-bold text-base flex items-center gap-2 text-slate-900 dark:text-white"><i class="fa-solid fa-coins text-primary"></i> Fiyat Kuralları (V2 Motor)</h3>
-                                <div class="flex items-center gap-2">
-                                    <select id="li-rules-mp" class="field-input text-xs px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></select>
-                                    <button onclick="prepListNewRule()" class="px-3 py-2 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
-                                        <i class="fa-solid fa-plus"></i> Yeni Kural
-                                    </button>
+                            <div class="mb-4">
+                                <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                                    <div>
+                                        <h3 class="font-bold text-base flex items-center gap-2 text-slate-900 dark:text-white"><i class="fa-solid fa-coins text-primary"></i> Fiyat Kuralları</h3>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                                            XML kaynağından gelen <b>alış fiyatının</b> seçilen <b>pazaryerinde</b> nasıl <b>satış fiyatına</b> dönüşeceğini belirler.
+                                            Kapsam önceliği: <b>Ürün &gt; Kategori &gt; Genel</b>. Gönderim gate'i bu kuralları kullanır.
+                                        </p>
+                                    </div>
+                                    <div class="flex flex-wrap items-center gap-2 shrink-0">
+                                        <select id="li-rules-xml" class="field-input text-xs px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></select>
+                                        <select id="li-rules-mp" class="field-input text-xs px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"></select>
+                                        <button onclick="prepListNewRule()" class="px-3 py-2 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
+                                            <i class="fa-solid fa-plus"></i> Yeni Kural
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                             <div id="li-rules-table" class="overflow-x-auto">
@@ -1854,8 +1915,8 @@
                     <div class="flex items-center justify-between flex-wrap gap-3">
                         <div>
                             <h2 class="text-lg font-bold tracking-tight text-slate-900 dark:text-white">GÖNDERİME HAZIR</h2>
-                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Pazaryerlerine gönderime uygun ürünlerin durumu · Toplam <span id="rts-total" class="font-bold text-slate-800 dark:text-white">0</span> ürün</p>
-                            <p id="rts-universe-line" class="mt-1 text-xs text-slate-400 dark:text-slate-500">Ana ürün havuzu · Pazaryeri state hesaplanıyor…</p>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Pazaryerlerine gönderime uygun ürünlerin durumu · <span class="font-semibold text-slate-600 dark:text-slate-300">Ana ürün havuzu</span> <span id="rts-total" class="font-bold text-slate-800 dark:text-white">0</span> ürün</p>
+                            <p id="rts-universe-line" class="mt-1 text-xs text-slate-400 dark:text-slate-500">Ana ürün havuzu: tüm aktif ürünler · (liste kapsamı aşağıdaki stok aralığıyla sınırlıdır)</p>
                         </div>
                         <div class="flex items-center gap-2">
                             <button type="button" onclick="rtsRecheck()" class="px-3 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all flex items-center gap-2 shrink-0">
@@ -2031,6 +2092,7 @@
                         </div>
                         <div class="flex items-center gap-4">
                             <span id="rts-range-line" class="text-[10px] text-slate-400"></span>
+                            <span class="text-[10px] text-amber-600 dark:text-amber-400" title="Liste yalnızca hazırlama stok aralığındaki (stockAuto.prepMin–prepMax) ürünleri gösterir. Üstteki 'Ana ürün havuzu' sayısı TÜM ürünleri sayar.">Liste kapsamı: stok aralığı</span>
                             <label class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">Sayfada
                                 <select id="rts-page-size" onchange="rtsSetSize(parseInt(this.value,10))" class="field-input text-xs px-2 py-1.5 rounded-lg">
                                     <option value="50">50</option>
@@ -2807,6 +2869,7 @@
                             <span class="text-[10px] uppercase tracking-wider font-bold text-slate-500 dark:text-slate-400">Şu Anda Kullanılan AI</span>
                             <span id="aictl-current-ai" class="text-sm font-extrabold text-slate-900 dark:text-white">—</span>
                             <span id="aictl-current-model" class="text-[11px] font-mono text-slate-400"></span>
+                            <span id="aictl-runtime" class="text-[11px] text-slate-500 dark:text-slate-400"></span>
                         </div>
                     </div>
 
@@ -2998,7 +3061,7 @@
                 </div>
                 <div>
                     <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">�?ifre</label>
-                    <input type="password" id="login-password" value="Admin1234!" class="field-input w-full mt-1 text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">
+                    <input type="password" id="login-password" class="field-input w-full mt-1 text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all">
                 </div>
                 <div id="login-error" class="hidden text-xs font-semibold text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"></div>
                 <button type="button" onclick="doLogin()" class="w-full py-3 bg-primary hover:bg-primaryHover text-white rounded-xl text-xs font-bold shadow-lg shadow-primary/25 transition-all flex items-center justify-center gap-2">
@@ -3748,7 +3811,8 @@ function syncModuleContextState() {
                 showToast('Giriş başarılı, veriler yükleniyor...', 'success');
                 loadApp();
             } catch (e) {
-                errBox.textContent = e.message || 'Giriş başarısız.';
+                /* FIX: yalnızca LOGIN 401'i için kullanıcı-dostu mesaj; genel authenticated 401 davranışı korunur. */
+                errBox.textContent = (e && e.status === 401) ? 'E-posta veya şifre hatalı' : (e.message || 'Giriş başarısız.');
                 errBox.classList.remove('hidden');
             }
         }
@@ -5563,7 +5627,7 @@ function syncModuleContextState() {
                 h += '<div class="flex items-center gap-3">'
                     + '<div class="w-14 h-14 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-center">' + poolThumb(p) + '</div>'
                     + '<div class="flex-1 min-w-0"><div class="text-sm font-bold text-slate-900 dark:text-white leading-snug">' + escapeHtml(p.title || p.xmlKey) + '</div>'
-                    + '<div class="flex flex-wrap gap-1.5 mt-2">' + poolStatusBadge(p.status) + poolMatchBadge(!!p.categoryMatch) + poolMatchBadge(!!p.brandMatch) + poolMatchBadge(!!p.variantMatch) + poolMatchBadge(!!p.templateMatch) + '</div></div></div>';
+                    + '<div class="flex flex-wrap gap-1.5 mt-2">' + poolStatusBadge(p.status) + poolMatchBadge(!!p.categoryMatch) + poolMatchBadge(!!p.brandMatch) + poolMatchBadge(!!p.variantMatch || p.variantStatus === 'NOT_REQUIRED') + poolMatchBadge(!!p.templateMatch) + '</div></div></div>';
                 h += poolDSec('Hazırlık');
                 if (score != null) {
                     h += '<div class="flex items-center gap-2 mt-1"><div class="flex-1 h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden"><div class="h-full rounded-full bg-emerald-500" style="width:' + Math.max(0, Math.min(100, score)) + '%"></div></div><span class="text-xs font-bold text-slate-700 dark:text-slate-300">%' + score + '</span></div>';
@@ -5600,7 +5664,7 @@ function syncModuleContextState() {
             } else if (poolDetailTab === 'varyant') {
                 var vs = p.variants || [];
                 h += poolDSec('Varyant');
-                h += poolDrow('Eşleşme', poolMatchBadge(!!p.variantMatch));
+                h += poolDrow('Eşleşme', poolMatchBadge(!!p.variantMatch || p.variantStatus === 'NOT_REQUIRED'));
                 if (vs.length) {
                     h += '<div class="mt-2 space-y-2">' + vs.map(function (v) {
                         return '<div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700"><i class="fa-solid fa-shapes text-slate-400"></i><span class="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase">' + escapeHtml(v.name) + '</span><span class="text-xs font-semibold text-slate-600 dark:text-slate-400">' + escapeHtml(v.value) + '</span></div>';
@@ -5711,35 +5775,17 @@ function syncModuleContextState() {
             if (errEl) errEl.classList.add('hidden');
             if (noResEl) noResEl.classList.add('hidden');
             if (listEl) listEl.innerHTML = '';
+            // F6: bağlam (XML/pazaryeri) YOKSA rastgele ilk kaydı SEÇME. Boş bırak →
+            // backend TÜM kaynak/pazaryerlerdeki gerçek ProductMarketplaceState.status='ERROR' kayıtlarını döndürür.
             var xmlSourceId = contextState?.xmlSourceIds?.[0] || '';
             var marketplaceId = contextState?.marketplaceIds?.[0] || '';
-            if (!xmlSourceId) {
-                try {
-                    var xs = await api('/xml-sources');
-                    if (xs && xs.items && xs.items.length > 0) xmlSourceId = xs.items[0].id;
-                } catch(e) {}
-            }
-            if (!marketplaceId) {
-                try {
-                    var mp = await api('/marketplaces');
-                    if (mp && mp.items && mp.items.length > 0) marketplaceId = mp.items[0].id;
-                } catch(e) {}
-            }
             if (loadingEl) loadingEl.classList.add('hidden');
-            if (!xmlSourceId) {
-                if (errEl) {
-                    document.getElementById('ng-error-msg').textContent = 'XML Kaynağı bulunamadı. Önce bir XML kaynağı ekleyin.';
-                    errEl.classList.remove('hidden');
-                }
-                ngState.loading = false;
-                return;
-            }
             try {
                 var params = new URLSearchParams({
-                    xmlSourceId: xmlSourceId,
                     page: String(ngState.page),
                     limit: String(ngState.pageSize)
                 });
+                if (xmlSourceId) params.append('xmlSourceId', xmlSourceId);
                 if (marketplaceId) params.append('marketplaceId', marketplaceId);
                 if (ngState.search) params.append('search', ngState.search);
                 if (ngState.gateFilter && ngState.gateFilter !== 'all') params.append('gateFilter', ngState.gateFilter);
@@ -6609,18 +6655,26 @@ function syncModuleContextState() {
         async function rtsLoad() {
             // Always load content, disable actions when context missing
             var hasContext = contextState.xmlSourceIds.length > 0 && contextState.marketplaceIds.length > 0;
-            rtsLoadStats();
+            // F2/F3: stats artık burada ÇAĞRILMAZ. Stats yalnızca bağlam (XML/pazaryeri) değişiminde
+            // yenilenir (rtsInit + rtsOnSourceChange/rtsOnMarketplaceChange). Filtre/sayfa/arama/sıralama
+            // stats'ı etkilemez → gereksiz tekrar hesaplama ve duplicate çağrı önlenir.
             var tbody = document.getElementById('rts-tbody');
             var search = (document.getElementById('rts-search').value || '').trim();
-            var filter = document.getElementById('rts-filter').value;
-            var missing = document.getElementById('rts-missing').value;
+            var filterSel = document.getElementById('rts-filter').value;
+            var missingSel = (document.getElementById('rts-missing').value || '').trim();
+            // F5: backend `filter` yalnız all|ready|waiting|blocked tanır. Durum select'inin
+            // reason değerleri (category/brand/variant/template/error/pms_missing) missingReason'a bağlanır.
+            var REASON_FILTERS = ['pms_missing', 'category', 'brand', 'variant', 'template', 'error', 'image', 'barcode', 'price', 'stock'];
+            var backendFilter = (filterSel === 'ready') ? 'ready' : (filterSel === 'waiting') ? 'waiting' : 'all';
+            var backendMissing = missingSel;
+            if (!backendMissing && REASON_FILTERS.indexOf(filterSel) !== -1) backendMissing = filterSel;
 
             var url = '/ready-to-ship?page=' + rtsState.page + '&limit=' + rtsState.limit;
             if (contextState.xmlSourceIds.length) url += '&xmlSourceIds=' + contextState.xmlSourceIds.map(encodeURIComponent).join(',');
             if (contextState.marketplaceIds.length) url += '&marketplaceIds=' + contextState.marketplaceIds.map(encodeURIComponent).join(',');
             if (search) url += '&search=' + encodeURIComponent(search);
-            if (filter) url += '&filter=' + filter;
-            if (missing) url += '&missingReason=' + missing;
+            if (backendFilter) url += '&filter=' + backendFilter;
+            if (backendMissing) url += '&missingReason=' + backendMissing;
 
             try {
                 var data = await api(url);
@@ -8032,8 +8086,21 @@ function syncModuleContextState() {
                 ? 'Istekler acik ve kullanilabilir saglayicilara yonlendiriliyor (yalniz FREE modeller).'
                 : 'Asagidan en az bir saglayiciyi acin ve API key girin.';
             // Gercek son basarili completion'dan gelen provider — tahmin YOK
-            if (curEl) curEl.textContent = ai.currentAI ? ai.currentAI.provider : '\u2014';
-            if (curModel) curModel.textContent = ai.currentAI ? ai.currentAI.model : '';
+            var c = ai.currentAI;
+            if (curEl) curEl.textContent = c ? c.provider : '\u2014';
+            if (curModel) curModel.textContent = c ? c.model : '';
+            // Gercek runtime bilgisi (runtime trace) — config'ten TAHMIN degil
+            var rtEl = document.getElementById('aictl-runtime');
+            if (rtEl) {
+                if (c && c.at) {
+                    var lat = (c.latencyMs != null) ? ' · ' + (Math.round(c.latencyMs / 100) / 10) + 's' : '';
+                    rtEl.textContent = 'Agent: ' + (c.agent || c.provider) + ' · Durum: ' + (c.ok ? 'Başarılı' : 'Hata') + lat;
+                } else if (c) {
+                    rtEl.textContent = 'Henüz gerçek istek yok';
+                } else {
+                    rtEl.textContent = '';
+                }
+            }
         }
 
         function aiRenderCards(providers) {
@@ -8045,7 +8112,11 @@ function syncModuleContextState() {
             }
             cards.innerHTML = providers.map(function (p) {
                 var meta = AI_CARD_META[p.provider] || { icon: 'fa-robot', tint: 'text-slate-500' };
-                var statusCls = !p.active ? 'text-slate-400' : !p.hasKey ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400';
+                // Gerçek health'e göre renk (active+hasKey yeterli değil)
+                var statusCls = p.health === 'ok' ? 'text-emerald-600 dark:text-emerald-400'
+                    : p.health === 'error' ? 'text-red-500'
+                    : p.health === 'untested' ? 'text-amber-500'
+                    : 'text-slate-400';
                 return '<div class="panel-theme rounded-2xl p-5 flex flex-col gap-4" id="aictl-card-' + p.provider + '">'
                     + '<div class="flex items-center justify-between">'
                     + '<div class="flex items-center gap-3">'
@@ -9147,6 +9218,15 @@ function syncModuleContextState() {
         async function prepCategoriesLoad() {
             await catLoadSelectOptions();
             catRenderGuardWarn();
+            /* FIX: refresh sonrası XML + Pazaryeri bağlamı korunur (yalnızca GERÇEK seçenekler arasında). */
+            try {
+                var _sx = localStorage.getItem('dg_cat_xml') || '';
+                var _smp = localStorage.getItem('dg_cat_mp') || '';
+                var _xsel = document.getElementById('cat-xml-source');
+                if (_sx && _xsel && Array.prototype.some.call(_xsel.options, function (o) { return o.value === _sx; })) { _xsel.value = _sx; catState.xmlSupplierId = _sx; }
+                var _msel = document.getElementById('cat-marketplace');
+                if (_smp && _msel && Array.prototype.some.call(_msel.options, function (o) { return o.value === _smp; })) { _msel.value = _smp; catState.marketplaceId = _smp; }
+            } catch (e) { /* localStorage yoksa sessiz */ }
             /* RTS→PREP: nav context geldiyse eksik ürün filtresini uygula */
             if (prepNavContext && prepNavContext.filter === 'missingCategory') {
                 catState.problemFilter = 'manual';
@@ -9228,6 +9308,7 @@ function syncModuleContextState() {
         function catOnXmlSourceChange() {
             var sel = document.getElementById('cat-xml-source');
             catState.xmlSupplierId = sel ? sel.value : '';
+            try { localStorage.setItem('dg_cat_xml', catState.xmlSupplierId || ''); } catch (e) { /* */ }
             // Eski polling/operation yeni context'e sonuç yazmamalı.
             if (catState.pollTimer) { clearInterval(catState.pollTimer); catState.pollTimer = null; }
             if (catState.aiPollTimer) { clearInterval(catState.aiPollTimer); catState.aiPollTimer = null; }
@@ -9257,6 +9338,7 @@ function syncModuleContextState() {
         function catOnMarketplaceChange() {
             var sel = document.getElementById('cat-marketplace');
             catState.marketplaceId = sel ? sel.value : '';
+            try { localStorage.setItem('dg_cat_mp', catState.marketplaceId || ''); } catch (e) { /* */ }
             // Eski polling/operation yeni context'e sonuç yazmamalı.
             if (catState.pollTimer) { clearInterval(catState.pollTimer); catState.pollTimer = null; }
             if (catState.aiPollTimer) { clearInterval(catState.aiPollTimer); catState.aiPollTimer = null; }
@@ -9400,7 +9482,9 @@ function syncModuleContextState() {
             var unmatchedCount = st && st.UNMATCHED != null ? st.UNMATCHED : catState.products.filter(function (p) { return p.categoryMatch === false; }).length;
 
             var matchedProductCount = autoCount;
-            var percent = catState.products.length > 0 ? Math.round((matchedProductCount / catState.products.length) * 100) : 0;
+            /* FIX: yüzde CONTEXT toplamı üzerinden (catState.products artık sayfa boyutu olabilir). */
+            var _totalForPct = (st && st.TOTAL_PRODUCTS > 0) ? st.TOTAL_PRODUCTS : catState.products.length;
+            var percent = _totalForPct > 0 ? Math.round((matchedProductCount / _totalForPct) * 100) : 0;
 
             // TASK317 FIX: stepper bir AKSIYON dizisidir — rozet "islenecek bekleyen" sayisini gosterir.
             // Step-1 (Otomatik) tum categoryMatch=false urunleri isler; MATCHED sayisi ozet panelinde kalir.
@@ -9458,6 +9542,7 @@ function syncModuleContextState() {
                 container.innerHTML = '';
                 if (noResults) noResults.classList.remove('hidden');
                 catRenderProductPagination();
+                try { catFitListHeight(); } catch (e) { /* */ }
                 return;
             }
 
@@ -9477,18 +9562,33 @@ function syncModuleContextState() {
                     catLine = '<span class="text-[11px] text-primary font-semibold"><i class="fa-solid fa-folder-tree text-[9px] mr-1"></i>' + escapeHtml(mpPath) + '</span>';
                 } else {
                     catLine = '<span class="text-[11px] text-slate-400 dark:text-slate-500"><i class="fa-solid fa-box-open text-[9px] mr-1 text-amber-500"></i>' + escapeHtml(p.supplierCategory || 'Kategori bilgisi yok') + '</span>';
-                    if (p.categoryMatch === false) catLine += ' <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400">eşleşmedi</span>';
                 }
-
-                /* Durum göstergesi — küçük renkli nokta */
+                /* Pazaryeri kategori bilgisi (gerçek mapping varsa) */
+                var mpCat = (p.marketplaceCategory && (p.marketplaceCategory.externalPath || p.marketplaceCategory.externalName))
+                    ? '<span class="text-[10px] text-slate-500 dark:text-slate-400"><i class="fa-solid fa-store text-[9px] mr-1"></i>' + escapeHtml(p.marketplaceCategory.externalPath || p.marketplaceCategory.externalName) + '</span>'
+                    : '';
+                /* Eşleşme durumu rozeti */
+                var statusBadge = p.categoryMatch
+                    ? '<span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[9px] font-bold text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-check text-[8px]"></i> Eşleşti</span>'
+                    : '<span class="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] font-bold text-amber-600 dark:text-amber-400"><i class="fa-solid fa-clock text-[8px]"></i> Eşleşmedi</span>';
                 var dotColor = p.categoryMatch ? 'bg-emerald-500' : 'bg-amber-400';
 
                 h += '<div class="flex items-start gap-3 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors duration-100 cursor-pointer' + (sel ? ' bg-primary/5' : '') + '" onclick="catOpenProductDetail(\'' + pIdJs + '\')">'
                     + '<div class="flex items-center pt-0.5 shrink-0" onclick="event.stopPropagation()"><input type="checkbox" ' + (sel ? 'checked' : '') + ' onchange="catToggleProductSelect(\'' + pIdJs + '\', this.checked)" class="h-4 w-4 cursor-pointer rounded border-slate-300 text-primary focus:ring-primary/50" title="Bu ürünü seç"/></div>'
                     + '<span class="mt-1.5 h-2 w-2 rounded-full shrink-0 ' + dotColor + '"></span>'
                     + '<div class="flex-1 min-w-0">'
-                    + '<div class="text-sm font-medium text-slate-800 dark:text-slate-200 leading-snug" title="' + (p.title || '') + '">' + (p.title || 'Başlık yok') + '</div>'
+                    + '<div class="flex items-center gap-2 min-w-0">'
+                    + '<div class="text-sm font-medium text-slate-800 dark:text-slate-200 leading-snug truncate" title="' + escapeHtml(p.title || '') + '">' + escapeHtml(p.title || 'Başlık yok') + '</div>'
+                    + statusBadge
+                    + '</div>'
+                    + '<div class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">'
+                    + '<span class="text-[10px] text-slate-500 dark:text-slate-400">SKU: <b class="text-slate-700 dark:text-slate-300">' + escapeHtml(p.sku || '-') + '</b></span>'
+                    + mpCat
+                    + '</div>'
                     + '<div class="mt-0.5">' + catLine + '</div>'
+                    + '</div>'
+                    + '<div class="shrink-0 pt-0.5" onclick="event.stopPropagation()">'
+                    + '<button type="button" onclick="catOpenProductMatch(\'' + pIdJs + '\')" class="row-manual-btn inline-flex items-center gap-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-2.5 py-1.5 text-[10px] font-bold transition-colors" title="Bu ürün için gerçek kategori seç ve kaydet"><i class="fa-solid fa-hand-pointer text-[9px]"></i> Manuel Eşleştir</button>'
                     + '</div>'
                     + '</div>';
             }
@@ -9497,6 +9597,7 @@ function syncModuleContextState() {
             if (noResults) noResults.classList.add('hidden');
             catRenderProductPagination();
             catRenderProductSelectionInfo();
+            try { catFitListHeight(); } catch (e) { /* */ }
         }
 
         /* Ürün seçimi — gerçek state (catState.productSelectedIds), ürün ID bazlı */
@@ -9545,6 +9646,11 @@ function syncModuleContextState() {
             var allowed = [50, 100, 200, 500, 1000];
             catState.productPageSize = allowed.indexOf(sz) !== -1 ? sz : 100;
             catState.productPage = 1;
+            /* FIX: seçili sayfa boyutu görsel olarak belirgin (buton grubu) */
+            var btns = document.querySelectorAll('#prep-page-size-group .cat-size-btn');
+            Array.prototype.forEach.call(btns, function (b) {
+                b.classList.toggle('active', parseInt(b.getAttribute('data-size'), 10) === catState.productPageSize);
+            });
             catRefreshProducts();
         }
 
@@ -9552,6 +9658,23 @@ function syncModuleContextState() {
             if (p < 1 || p > catState.productTotalPages) return;
             catState.productPage = p;
             catRefreshProducts();
+        }
+
+        /* FIX: ürün havuzu kullanılabilir DİKEY alanı doldurur (sabit 600px iç scroll kaldırıldı).
+           Liste yüksekliği viewport ve liste üst konumuna göre dinamik hesaplanır → tek scroll. */
+        function catFitListHeight() {
+            var list = document.getElementById('prep-product-list');
+            if (!list || list.offsetParent === null) return;
+            var top = list.getBoundingClientRect().top;
+            var reserve = 72; /* alt pagination + boşluk (pagination ~40 + margin) */
+            var h = Math.max(160, Math.floor(window.innerHeight - top - reserve));
+            list.style.height = h + 'px';
+            list.style.maxHeight = h + 'px';
+        }
+        if (!window.__catFitListBound) {
+            window.__catFitListBound = true;
+            window.addEventListener('resize', function () { try { catFitListHeight(); } catch (e) { /* */ } });
+            window.addEventListener('load', function () { try { catFitListHeight(); } catch (e) { /* */ } });
         }
 
         /* Pagination UI — üst ve alt konteyner aynı render'ı alır */
@@ -9626,7 +9749,7 @@ function syncModuleContextState() {
         }
 
         // ==================== NEW: FETCH FILTERED PRODUCTS ====================
-        async function catFetchFilteredProducts(xmlSourceId, marketplaceId, page, pageSize, sortBy, search) {
+        async function catFetchFilteredProducts(xmlSourceId, marketplaceId, page, pageSize, sortBy, search, matchFilter) {
             try {
                 var params = new URLSearchParams({
                     xmlSourceId: xmlSourceId,
@@ -9636,6 +9759,8 @@ function syncModuleContextState() {
                     sortBy: sortBy || 'priority'
                 });
                 if (search) params.append('search', search);
+                /* FIX: eşleşme filtresi SERVER-SIDE — total/totalPages/gösterilen tutarlı */
+                if (matchFilter && matchFilter !== 'all') params.append('matchFilter', matchFilter);
                 var response = await api('/categories/filtered?' + params.toString());
                 if (!response || response.ok === false) return { items: [], pagination: null, summary: null };
                 return { items: response.items || [], pagination: response.pagination || null, summary: response.summary || null };
@@ -9779,7 +9904,10 @@ function syncModuleContextState() {
                     '    </div>' +
                     '    <div class="border-t border-slate-100 dark:border-slate-800/60 p-4 mt-3 flex items-center justify-between">' +
                     '      <span class="text-[10px] text-slate-500 dark:text-slate-400">Durum: ' + (product.status || '—') + '</span>' +
-                    '      <button onclick="catCloseProductDetail()" class="text-[11px] font-bold text-primary hover:text-primary/80 transition-colors">Kapat</button>' +
+                    '      <div class="flex items-center gap-2">' +
+                    '        <button onclick="catCloseProductDetail();catOpenProductMatch(\'' + product.id + '\')" class="text-[11px] font-bold rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 transition-colors">Manuel Eşleştir</button>' +
+                    '        <button onclick="catCloseProductDetail()" class="text-[11px] font-bold text-primary hover:text-primary/80 transition-colors">Kapat</button>' +
+                    '      </div>' +
                     '    </div>' +
                     '  </div>' +
                     '</div>';
@@ -9817,19 +9945,20 @@ function syncModuleContextState() {
             }
 
             document.getElementById('prep-guard-warn').classList.add('hidden');
-            document.getElementById('prep-progress').classList.remove('hidden');
 
             var sortBy = document.getElementById('prep-sort-by') ? document.getElementById('prep-sort-by').value : 'priority';
             var searchVal = document.getElementById('prep-search') ? document.getElementById('prep-search').value.trim() : '';
-            /* GERÇEK BACKEND PAGINATION: page + pageSize (+ search) /categories/filtered'a gider */
-            var res = await catFetchFilteredProducts(xmlSourceId, marketplaceId, catState.productPage, catState.productPageSize, sortBy, searchVal);
+            /* GERÇEK BACKEND PAGINATION: page + pageSize (+ search + matchFilter) /categories/filtered'a gider */
+            var res = await catFetchFilteredProducts(xmlSourceId, marketplaceId, catState.productPage, catState.productPageSize, sortBy, searchVal, catState.matchFilter || 'all');
             /* Sıra koruması: bu fetch'ten sonra daha yeni bir istek başladıysa sonucu at (eski veri yeni listeyi ezmesin) */
             if (mySeq !== _catRefreshSeq) return;
             var items = res.items || [];
             var pg = res.pagination || null;
             if (pg && pg.total != null) {
                 catState.productTotal = pg.total;
-                catState.productTotalPages = Math.max(1, pg.pages || Math.ceil(pg.total / catState.productPageSize));
+                /* FIX: backend totalPages'i (filtrelenmiş total / İSTENEN pageSize) esas al —
+                   UI ile backend birebir aynı sayfa sayısını görsün (500/1000 clamp tutarsızlığı yok). */
+                catState.productTotalPages = Math.max(1, pg.totalPages || pg.pages || Math.ceil(pg.total / catState.productPageSize));
                 /* Güvenli sayfa sınırı: backend toplamı azaldıysa aktif sayfayı kampa */
                 if (catState.productPage > catState.productTotalPages) {
                     catState.productPage = catState.productTotalPages;
@@ -9880,16 +10009,18 @@ function syncModuleContextState() {
             prioritized = catSortProductsByPriority(prioritized, sortBy);
 
             catState.productItems = prioritized;
-            // Eşleme filtresi uygula (client-side)
-            var filtered = prioritized;
-            if (catState.matchFilter === 'matched') {
-                filtered = prioritized.filter(function (p) { return p.categoryMatch === true; });
-            } else if (catState.matchFilter === 'unmatched') {
-                filtered = prioritized.filter(function (p) { return p.categoryMatch === false || p.categoryMatch === null || p.categoryMatch === undefined; });
-            }
-            catRenderProductList(filtered);
+            /* FIX: grup tabanlı fonksiyonlar + manuel eşleştirme için ürün state'i doldurulur
+               (daha önce hiç atanmıyordu → catState.groups boş kalıyordu ve manuel eşleştirme kırılıyordu). */
+            catState.products = prioritized;
+            /* Eşleşme filtresi artık SERVER-SIDE; burada tekrar filtreleme YOK. */
+            catRenderProductList(prioritized);
             catRenderProductStats();
-            document.getElementById('prep-progress').classList.add('hidden');
+            /* FIX: Genel Eşleştirme İlerlemesi boşta GERÇEK oranı göstersin (stats üzerinden). */
+            var _st = catState.stats || {};
+            var _pct = (_st.TOTAL_PRODUCTS > 0) ? Math.round((_st.MATCHED / _st.TOTAL_PRODUCTS) * 100) : 0;
+            catRenderProgress(_pct, _st.MATCHED != null ? _st.MATCHED : 0);
+            /* Layout oturduktan sonra liste yüksekliğini yeniden hesapla (KPI/başlık yükseklikleri değişebilir). */
+            setTimeout(function () { try { catFitListHeight(); } catch (e) { /* */ } }, 200);
         }
 
         // ==================== NOT-GOING (eski prep tab'ı) — kaldırıldı: bağımsız sayfa var ====================
@@ -9972,7 +10103,8 @@ function syncModuleContextState() {
                 if (ringFg) { var c = 2 * Math.PI * 27; ringFg.setAttribute('stroke-dasharray', c); ringFg.setAttribute('stroke-dashoffset', c * (1 - livePct / 100)); }
             } else {
                 livePctVal = percent;
-                if (pctEl) pctEl.textContent = '%' + percent + ' (' + matchedCount + '/' + catState.products.length + ')';
+                var _totPct = (catState.stats && catState.stats.TOTAL_PRODUCTS) ? catState.stats.TOTAL_PRODUCTS : catState.products.length;
+                if (pctEl) pctEl.textContent = '%' + percent + ' (' + matchedCount + '/' + _totPct + ')';
                 if (barEl) barEl.style.width = percent + '%';
                 if (ringPct) ringPct.textContent = '%' + percent;
                 if (ringFg) { var c2 = 2 * Math.PI * 27; ringFg.setAttribute('stroke-dasharray', c2); ringFg.setAttribute('stroke-dashoffset', c2 * (1 - percent / 100)); }
@@ -10233,20 +10365,13 @@ function syncModuleContextState() {
             catState.currentPage = 1;
             if (typeof catRenderAll === 'function') catRenderAll();
         }
-        /* Eşleme filtresi: Tümü / Eşleşmiş / Eşleşmemiş — sadece client-side re-render, fetch yok */
+        /* Eşleme filtresi: Tümü / Eşleşmiş / Eşleşmemiş — FIX: SERVER-SIDE (total/totalPages/gösterilen tutarlı) */
         function catSetMatchFilter(f) {
             catState.matchFilter = f;
-            /* Buton aktif durumunu güncelle */
+            catState.productPage = 1;
             var btns = document.querySelectorAll('#cat-match-filter .cat-filter-btn');
             btns.forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-filter') === f); });
-            /* Zaten yüklü veriyi filtrele ve yeniden render et (API çağrısı YOK — çok hızlı) */
-            var items = catState.productItems;
-            if (f === 'matched') {
-                items = items.filter(function (p) { return p.categoryMatch === true; });
-            } else if (f === 'unmatched') {
-                items = items.filter(function (p) { return p.categoryMatch === false || p.categoryMatch === null || p.categoryMatch === undefined; });
-            }
-            catRenderProductList(items);
+            catRefreshProducts();
         }
         // TASK318: kart içi OTOMASYON butonları — sistemin çözebildiğini kullanıcıya bırakma
         var _catAutoResolveBusy = false;
@@ -10483,14 +10608,23 @@ function syncModuleContextState() {
             catState.aiRunning = false;
         }
 
-        /* --- MANUAL MATCH (BULK) --- */
+        /* --- MANUAL MATCH (ürün bazlı: seçili ürünler veya sayfadaki eşleşmemişler) --- */
         function catManualMatch() {
             if (!catRequireMarketplace()) return;
-            var manualGroups = (catState.groups || []).filter(function (g) { return g.status === 'manual_required'; });
-            if (manualGroups.length === 0) { showToast('Manuel eşleştirme gereken kategori yok.', 'info'); return; }
-            catState.selectedGroups = new Set(manualGroups.map(function (g) { return g.xmlPath; }));
-            catState.modalGroup = null;
-            catState.modalBulk = true;
+            var selected = Array.from(catState.productSelectedIds || []);
+            var targets = selected.length
+                ? selected
+                : (catState.productItems || []).filter(function (p) { return p.categoryMatch !== true; }).map(function (p) { return p.id; });
+            if (targets.length === 0) {
+                showToast('Manuel eşleştirilecek ürün yok — listeden eşleşmemiş ürün seçin', 'info');
+                return;
+            }
+            /* FIX: grup state'ine bağımlılık kaldırıldı; hedefler doğrudan ürün ID'leri.
+               Picker onayında bu ID'ler tek tek /categories/match'e (marketplaceId ile) yazılır. */
+            catState.modalGroup = { xmlPath: '', total: targets.length, matchedCount: 0, productIds: targets, aiProductIds: [] };
+            catState.modalBulk = false;
+            catState.modalSingleProductId = '';
+            catPickerState.checkedIds = new Set(targets);
             catOpenPickerModal();
         }
 
@@ -10504,13 +10638,15 @@ function syncModuleContextState() {
 
         /* Ürün bazlı Manuel Eşleştir: hangi satırdaki ürünse onun Product ID'si gönderilir. */
         function catOpenProductMatch(productId) {
-            var p = (catState.products || []).find(function (x) { return x.id === productId; });
-            if (!p) return;
+            var p = (catState.products || []).find(function (x) { return x.id === productId; })
+                 || (catState.productItems || []).find(function (x) { return x.id === productId; });
+            if (!p) { showToast('Ürün listede bulunamadı — listeyi yenileyin', 'error'); return; }
             var xmlPath = (p.supplierCategory || 'Kategorisiz').trim();
-            var group = (catState.groups || []).find(function (g) { return g.xmlPath === xmlPath; });
-            catState.modalGroup = group || { xmlPath: xmlPath, total: 1, matchedCount: 0, productIds: [p.id] };
+            catState.modalGroup = { xmlPath: xmlPath, total: 1, matchedCount: 0, productIds: [p.id], aiProductIds: [] };
             catState.modalBulk = false;
             catState.modalSingleProductId = p.id;
+            catPickerState.checkedIds = new Set();
+            catPickerState.expandedPid = null;
             catOpenPickerModal();
         }
 
@@ -10727,12 +10863,12 @@ function syncModuleContextState() {
                 if (!window.confirm(totalCount + ' ürüne "' + catPickerState.selectedCatName + '" kategorisi uygulanacak. Onaylıyor musunuz?')) return;
                 catPickerState.saving = true;
                 try {
-                    var resB = await api('/categories/bulk-match', { method: 'POST', body: { matches: matches, xmlSourceId: catGetXmlSourceId() } });
+                    var resB = await api('/categories/bulk-match', { method: 'POST', body: { matches: matches, xmlSourceId: catGetXmlSourceId(), marketplaceId: catPickerState.activeMpId || catGetMarketplaceId() } });
                     if (resB && (resB.ok !== false || resB.matchedCount != null)) {
                         showToast(totalCount + ' ürüne uygulandı', 'success');
                         catClosePicker(); catFetchAll();
                     } else showToast((resB && resB.message) || 'Toplu eşleştirme başarısız', 'error');
-} catch (e) { stopBrIndeterminate(); prepBrandState.status = 'FAILED'; renderBrProgress(); showToast(e.message, 'error'); }
+                } catch (e) { showToast((e && e.message) || 'Toplu eşleştirme başarısız', 'error'); }
                 catPickerState.saving = false;
                 return;
             }
@@ -10746,7 +10882,7 @@ function syncModuleContextState() {
             var oldText = confirmBtn ? confirmBtn.textContent : '';
             if (confirmBtn) confirmBtn.textContent = 'Kaydediliyor...';
             try {
-                var resM = await api('/categories/match', { method: 'POST', body: { categoryId: catPickerState.selectedCatId, productIds: targetIds, xmlSourceId: catGetXmlSourceId() } });
+                var resM = await api('/categories/match', { method: 'POST', body: { categoryId: catPickerState.selectedCatId, productIds: targetIds, xmlSourceId: catGetXmlSourceId(), marketplaceId: catPickerState.activeMpId || catGetMarketplaceId() } });
                 if (resM && (resM.ok !== false || resM.matchedCount != null)) {
                     var fullPathName = catResolvePath(catPickerState.selectedCatId, catState.flatMap) || catPickerState.selectedCatName;
                     showToast(targetIds.length + ' ürün kaydedildi → ' + fullPathName, 'success');
@@ -10866,6 +11002,23 @@ function syncModuleContextState() {
                 if (p.stock != null) html += '<span>Stok: <b>' + p.stock + '</b></span>';
                 if (p.link) html += '<a href="' + escapeHtml(p.link) + '" target="_blank" rel="noopener" class="underline text-primary">rn sayfas</a>';
                 html += '</div></div></div>';
+                // DG: Trendyol'a ÖZEL KALICI zorunlu özellikler — GERÇEK DB kaydından (sayfa yenilenince korunur).
+                // Yalnızca Trendyol (tt) kayıtları okunur; HB/N11 verisi burada GÖSTERİLMEZ.
+                try {
+                    var _mpId = (typeof catPickerState !== 'undefined' && catPickerState.activeMpId) ? catPickerState.activeMpId : ((typeof catGetMarketplaceId === 'function') ? catGetMarketplaceId() : ((typeof catState !== 'undefined' && catState.marketplaceId) || ''));
+                    var _mpName = '';
+                    if (typeof catState !== 'undefined' && catState.marketplaces) { var _mp = catState.marketplaces.find(function (m) { return m.id === _mpId; }); _mpName = _mp ? _mp.name : ''; }
+                    var ta = _mpId ? await api('/categories/attributes?productId=' + encodeURIComponent(pid) + '&marketplaceId=' + encodeURIComponent(_mpId)) : null;
+                    if (ta && ta.ok && ta.supported === false) {
+                        html += '<div class="mt-1 text-[9px] text-amber-600 dark:text-amber-400">' + escapeHtml(_mpName || 'Bu pazaryeri') + ' icin gerek attribute katalogu entegre degil.</div>';
+                    } else if (ta && ta.ok && ta.items && ta.items.length) {
+                        html += '<div class="mt-1 flex flex-wrap items-center gap-1"><span class="text-[9px] font-bold text-slate-500 dark:text-slate-400"><i class="fa-solid fa-tag"></i> ' + escapeHtml(_mpName || 'Zorunlu') + ' Ozellik:</span>';
+                        ta.items.forEach(function (a) {
+                            html += '<span class="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700 dark:text-emerald-400">' + escapeHtml(a.attributeName) + ': ' + escapeHtml(a.attributeValue || '') + '<span class="opacity-60 font-normal">[' + escapeHtml(a.source || '') + ']</span></span>';
+                        });
+                        html += '</div>';
+                    }
+                } catch (e3) { /* okuma hatası kartı bozmaz */ }
                 wrap.innerHTML = html;
             } catch (e) { if (wrap && wrap.isConnected) wrap.innerHTML = '<span class="text-[10px] text-slate-400">rn detay yklenemedi</span>'; }
         }
@@ -12150,11 +12303,11 @@ async function prepVariantFetchDashboard() {
         varState.dashboard = d;
         var set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v == null ? '-' : fmt(v); };
         set('var-total', d.totalProducts || 0);
-        set('var-has', d.hasVariants || 0);
-        set('var-none', d.noVariants || 0);
+        set('var-has', d.hasVariant || 0);
+        set('var-none', d.notRequired || 0);
         set('var-auto', d.autoMatched || 0);
         set('var-ai', d.aiMatched || 0);
-        set('var-manual', d.manual || 0);
+        set('var-manual', d.manualReview || 0);
         set('var-waiting', d.waitingAi || 0);
         var matched = (d.autoMatched || 0) + (d.aiMatched || 0);
         var bar = document.getElementById('var-overall-bar');
@@ -12170,11 +12323,11 @@ function varRenderStats() {
     if (!d) return;
     var set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v == null ? '-' : fmt(v); };
     set('var-total', d.totalProducts || 0);
-    set('var-has', d.hasVariants || 0);
-    set('var-none', d.noVariants || 0);
+    set('var-has', d.hasVariant || 0);
+    set('var-none', d.notRequired || 0);
     set('var-auto', d.autoMatched || 0);
     set('var-ai', d.aiMatched || 0);
-    set('var-manual', d.manual || 0);
+    set('var-manual', d.manualPending || 0);
     set('var-waiting', d.waitingAi || 0);
 }
 
@@ -12189,7 +12342,8 @@ async function prepVariantLoadProducts() {
         var params = new URLSearchParams({
             page: String(varState.currentPage),
             limit: String(varState.pageSize),
-            xmlSourceId: varState.xmlSourceId
+            xmlSourceId: varState.xmlSourceId,
+            matchFilter: varState.matchFilter || 'all'
         });
         if (searchVal) params.append('search', searchVal);
         var res = await api('/variants/products?' + params.toString());
@@ -12232,6 +12386,11 @@ function varRenderProductList() {
         var reasonHtml = '';
         if (p.reason) { reasonHtml = '<span class="text-[10px] ' + statusClass + ' ml-2">(' + escapeHtml(p.reason) + ')</span>'; }
         var manualBtn = (p.status === 'MANUAL') ? ' <button onclick="event.stopPropagation();prepVariantOpenManual(\'' + pIdJs + '\')" class="inline-flex items-center gap-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white px-2 py-0.5 text-[10px] font-bold cursor-pointer transition-all">Manuel Eşleştir</button>' : '';
+        var decisionBtns = '';
+        if (p.variantMatch === false && (p.variantStatus === 'MANUAL_REVIEW' || p.variantStatus === 'WAITING_AI' || p.variantStatus === 'FAILED')) {
+            decisionBtns = ' <button onclick="event.stopPropagation();varManualDecision(\'' + pIdJs + '\',\'VARYANTLI\')" class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-0.5 text-[10px] font-bold cursor-pointer transition-all">Varyantlı</button>'
+                + ' <button onclick="event.stopPropagation();varManualDecision(\'' + pIdJs + '\',\'VARYANTSIZ\')" class="inline-flex items-center gap-1 rounded-lg bg-slate-500 hover:bg-slate-600 text-white px-2 py-0.5 text-[10px] font-bold cursor-pointer transition-all">Varyantsız</button>';
+        }
         var variants = p.variants || [];
         var variantHtml = '';
         if (variants.length > 0) {
@@ -12258,7 +12417,7 @@ function varRenderProductList() {
             + imgHtml
             + '<div class="flex-1 min-w-0">'
             + '<div class="text-sm font-medium text-slate-800 dark:text-slate-200 leading-snug cursor-pointer hover:text-primary dark:hover:text-primary transition-colors" onclick="event.stopPropagation();varOpenDetail(\'' + pIdJs + '\')" title="' + escapeHtml(p.title || p.xmlKey || '') + '">' + escapeHtml(p.title || p.xmlKey || 'Başlık yok') + '</div>'
-            + '<div class="mt-0.5 text-[11px] ' + statusClass + ' font-semibold">' + statusLabel + reasonHtml + manualBtn + '</div>'
+            + '<div class="mt-0.5 text-[11px] ' + statusClass + ' font-semibold">' + statusLabel + reasonHtml + manualBtn + decisionBtns + '</div>'
             + variantHtml
             + '</div>'
             + '</div>';
@@ -12342,12 +12501,34 @@ function prepVariantSelectAll(checked) {
     varSyncSelectAll();
 }
 
-/* Eşleme filtresi: Tümü / Eşleşmiş / Eşleşmemiş — client-side */
+/* Eşleme filtresi: Tümü / Eşleşmiş / Eşleşmemiş */
 function varSetMatchFilter(f) {
     varState.matchFilter = f;
+    varState.currentPage = 1;
     var btns = document.querySelectorAll('#var-match-filter .var-filter-btn');
     btns.forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-filter') === f); });
-    varRenderProductList();
+    prepVariantLoadProducts();
+}
+
+/* VARYANTLI / VARYANTSIZ kararı */
+function varManualDecision(productId, decision) {
+    if (decision === 'VARYANTLI') {
+        varState.currentManualProductId = productId;
+        prepVariantOpenManual(productId);
+        return;
+    }
+    if (!confirm('Bu ürün VARYANTSIZ olarak işaretlenecek. Emin misiniz?')) return;
+    api('/variants/manual-decision', { method: 'POST', body: { productId: productId, decision: 'VARYANTSIZ' } })
+        .then(function (r) {
+            if (r && r.ok) {
+                showToast('✓ Varyantsız olarak işaretlendi', 'success');
+                prepVariantLoadProducts();
+                prepVariantFetchDashboard();
+            } else {
+                showToast('⚠ İşlem başarısız: ' + (r.error || 'Bilinmeyen hata'), 'error');
+            }
+        })
+        .catch(function (e) { showToast('⚠ Hata: ' + e.message, 'error'); });
 }
 
 function varSearchDebounced() {
@@ -12696,18 +12877,41 @@ async function prepListStats() {
         document.getElementById('li-stat-total').textContent = fmt(s.total || 0);
         document.getElementById('li-stat-active').textContent = fmt(s.active || 0);
         document.getElementById('li-stat-inactive').textContent = fmt(s.inactive || 0);
-        document.getElementById('li-stat-rules').textContent = fmt((s.byMarketplace || []).length);
     } catch (e) { console.error('prepListStats error:', e); }
     try {
+        /* FIX: "FİYAT KURALI" KPI = gerçek MarketplacePricingRule toplamı (pazaryeri sayısı DEĞİL) */
+        var r = await api('/listing-v2/rules');
+        document.getElementById('li-stat-rules').textContent = fmt((r.items || []).length);
+    } catch (e) { console.error('prepListRules KPI error:', e); }
+    try {
         var l = await api('/listing-v2/logs');
-        document.getElementById('li-stat-logs').textContent = fmt((l.items || []).length);
+        var logTotal = (l && l.pagination && l.pagination.total != null) ? l.pagination.total : (l.items || []).length;
+        document.getElementById('li-stat-logs').textContent = fmt(logTotal);
     } catch (e) { console.error('prepListLogs error:', e); }
+}
+
+function _prepListPriceSourceLabel(src) {
+    switch (String(src || 'XML_PURCHASE')) {
+        case 'XML_PURCHASE': return 'XML Alış Fiyatı';
+        case 'PURCHASE': return 'Alış Fiyatı';
+        case 'SALE': return 'Satış Fiyatı';
+        default: return String(src || 'XML Alış Fiyatı');
+    }
 }
 
 async function prepListTable() {
     try {
         var d = await api('/listings');
         prepListState.templates = d.items || [];
+        /* Kapsamı kullanıcı dilinde gösterebilmek için kategori/marka adları (tek seferlik cache) */
+        if (!prepListState.catMap) {
+            prepListState.catMap = {};
+            try { var c = await api('/categories/all'); (c.items || []).forEach(function (x) { prepListState.catMap[x.id] = x.name; }); } catch (e) { }
+        }
+        if (!prepListState.brandMap) {
+            prepListState.brandMap = {};
+            try { var b = await api('/brands'); var bl = b.items || (Array.isArray(b) ? b : []); bl.forEach(function (x) { prepListState.brandMap[x.id] = x.name; }); } catch (e) { }
+        }
         var el = document.getElementById('li-tbody');
         // TASK324: pazaryeri seçiliyse o pazaryerinin şablonları ÖNE alınsın (default-first UX)
         var selMp = prepListState.marketplaceId || '';
@@ -12728,23 +12932,42 @@ async function prepListTable() {
         var html = '';
         ordered.forEach(function (t) {
             var rules = [];
-            try { rules = JSON.parse(t.priceRangeRules || '[]'); } catch(e) {}
-            var ruleCount = rules.length;
+            try { rules = JSON.parse(t.priceRangeRules || '[]'); } catch (e) { }
+            /* KAPSAM (kullanıcı dilinde) */
+            var scopeType = t.productId ? 'Ürün' : t.categoryId ? 'Kategori' : t.brandId ? 'Marka' : 'Genel';
+            var scopeTarget = t.productId ? 'Tek ürün' : t.categoryId ? (prepListState.catMap[t.categoryId] || 'Kategori') : t.brandId ? (prepListState.brandMap[t.brandId] || 'Marka') : 'Tüm ürünler';
+            var scopeBadge = scopeType === 'Genel'
+                ? '<span class="text-xs font-semibold text-slate-500 dark:text-slate-400">Genel</span>'
+                : '<span class="text-xs font-semibold text-indigo-600 dark:text-indigo-400">' + escapeHtml(scopeType) + '</span>';
+            /* FİYAT DAVRANIŞI (şablon içi — önizleme/apply-all; gönderim gate'i DEĞİL) */
+            var priceBehavior = rules.length > 0
+                ? '<span title="Şablon içi fiyat bandı: yalnızca Fiyat Önizleme ve apply-all için kullanılır.">Bantlı kâr × ' + rules.length + ' <span class="text-[10px] text-slate-400">(önizleme)</span></span>'
+                : '<span title="Şablon içi çarpan: yalnızca Fiyat Önizleme ve apply-all için kullanılır.">Çarpan x' + t.priceMultiplier + ' <span class="text-[10px] text-slate-400">(önizleme)</span></span>';
+            var mpName = (t.marketplace && t.marketplace.name) || 'Tüm pazaryerleri';
             html += '<tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30 transition-all">'
-                + '<td class="py-4 px-6 font-semibold text-slate-900 dark:text-white">' + escapeHtml(t.name) + '</td>'
-                + '<td class="py-4 px-6 text-sm text-slate-500 dark:text-slate-400">' + escapeHtml((t.marketplace && t.marketplace.name) || 'Tümü') + '</td>'
-                + '<td class="py-4 px-6 text-sm text-slate-500 dark:text-slate-400 font-mono text-xs">' + (t.priceSource || 'XML_PURCHASE') + '</td>'
-                + '<td class="py-4 px-6 font-bold text-slate-900 dark:text-white">x' + t.priceMultiplier + '</td>'
-                + '<td class="py-4 px-6 text-slate-400 dark:text-slate-500">' + (t.commissionRate != null ? '%' + t.commissionRate : '—') + '</td>'
-                + '<td class="py-4 px-6 text-sm text-slate-500 dark:text-slate-400">' + ruleCount + ' kural</td>'
+                + '<td class="py-4 px-6"><div class="font-semibold text-slate-900 dark:text-white">' + escapeHtml(t.name) + '</div><div class="text-[10px] text-slate-400">' + escapeHtml(mpName) + ' · ' + escapeHtml(scopeType) + '</div></td>'
+                + '<td class="py-4 px-6 text-sm text-slate-500 dark:text-slate-400">' + escapeHtml(mpName) + '</td>'
+                + '<td class="py-4 px-6">' + scopeBadge + '</td>'
+                + '<td class="py-4 px-6 text-sm text-slate-600 dark:text-slate-300">' + escapeHtml(scopeTarget) + '</td>'
+                + '<td class="py-4 px-6 text-sm text-slate-600 dark:text-slate-300" id="li-appcount-' + t.id + '"><span class="text-slate-400">…</span></td>'
+                + '<td class="py-4 px-6 text-sm text-slate-500 dark:text-slate-400">' + priceBehavior + '</td>'
                 + '<td class="py-4 px-6">' + (t.active ? '<span class="bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-semibold text-xs px-3 py-1 rounded-full border border-emerald-200/60 dark:border-emerald-500/20">Aktif</span>' : '<span class="bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 font-semibold text-xs px-3 py-1 rounded-full">Pasif</span>') + '</td>'
                 + '<td class="py-4 px-6 text-right space-x-1.5">'
-                + '<button onclick="prepListApplyAll(\'' + t.id + '\')" title="Tüm ürünlere uygula" class="w-8 h-8 rounded-xl bg-primary/10 text-primary hover:bg-primary/20 inline-flex items-center justify-center transition-all text-xs"><i class="fa-solid fa-wand-magic-sparkles"></i></button> '
+                + '<button onclick="prepListApplyAll(\'' + t.id + '\')" title="Şablon içi fiyat kurallarını seçili XML ürünlerine uygula" class="w-8 h-8 rounded-xl bg-primary/10 text-primary hover:bg-primary/20 inline-flex items-center justify-center transition-all text-xs"><i class="fa-solid fa-wand-magic-sparkles"></i></button> '
                 + '<button onclick="prepListDup(\'' + t.id + '\')" title="Kopyala" class="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 inline-flex items-center justify-center transition-all text-xs"><i class="fa-solid fa-copy"></i></button> '
                 + '<button onclick="prepListDel(\'' + t.id + '\')" title="Sil" class="w-8 h-8 rounded-xl bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-500/20 inline-flex items-center justify-center transition-all text-xs"><i class="fa-solid fa-trash"></i></button>'
                 + '</td></tr>';
         });
         el.innerHTML = html;
+        /* GERÇEK "uygulanan ürün" sayısı — template pazaryeri + seçili XML ile daraltılır (yanlış genel havuz yok) */
+        ordered.forEach(function (t) {
+            var spanBox = document.getElementById('li-appcount-' + t.id);
+            if (!spanBox) return;
+            var q = '/listings/' + t.id + '/matching-products?marketplaceId=' + encodeURIComponent(t.marketplaceId || '')
+                + (prepListState.xmlSourceId ? ('&xmlSourceId=' + encodeURIComponent(prepListState.xmlSourceId)) : '');
+            api(q).then(function (r) { spanBox.textContent = fmt(r.total || 0) + ' ürün'; })
+                .catch(function () { spanBox.textContent = '—'; });
+        });
     } catch (e) { showToast(e.message, 'error'); }
 }
 
@@ -12781,17 +13004,75 @@ async function prepListNew() {
         showToast('XML Kaynağı ve Pazaryeri seçiniz', 'warning');
         return;
     }
-    var name = prompt('Şablon adı:', 'Pazaryeri Şablonu');
-    if (!name) return;
-    var mult = prompt('Fiyat çarpanı (örn: 1.35):', '1.35');
-    var margin = prompt('Kâr marjı % (örn: 25):', '25');
     try {
-        await api('/listings', {
-            method: 'POST',
-            body: { name: name, marketplaceId: prepListState.marketplaceId || null, priceMultiplier: Number(mult) || 1, priceRangeRules: JSON.stringify([{ minPrice: 0, maxPrice: 0, profitMargin: Number(margin) || 0, fixedAmount: 0, rounding: '0.90' }]) }
-        });
+        var mpSel = document.getElementById('li-tpl-mp');
+        var mh = ''; (prepListState.marketplaces || []).forEach(function (m) { mh += '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>'; });
+        mpSel.innerHTML = mh;
+        mpSel.value = prepListState.marketplaceId || '';
+        if (!prepListState.catMap) { prepListState.catMap = {}; try { var c = await api('/categories/all'); (c.items || []).forEach(function (x) { prepListState.catMap[x.id] = x.name; }); } catch (e) { } }
+        if (!prepListState.brandMap) { prepListState.brandMap = {}; try { var b = await api('/brands'); (b.items || (Array.isArray(b) ? b : [])).forEach(function (x) { prepListState.brandMap[x.id] = x.name; }); } catch (e) { } }
+        var catSel = document.getElementById('li-tpl-cat'); var co = '<option value="">Kategori seçin...</option>'; Object.keys(prepListState.catMap).forEach(function (id) { co += '<option value="' + id + '">' + escapeHtml(prepListState.catMap[id]) + '</option>'; }); catSel.innerHTML = co;
+        var brandSel = document.getElementById('li-tpl-brand'); var bo = '<option value="">Marka seçin...</option>'; Object.keys(prepListState.brandMap).forEach(function (id) { bo += '<option value="' + id + '">' + escapeHtml(prepListState.brandMap[id]) + '</option>'; }); brandSel.innerHTML = bo;
+        var q = '/products?limit=100' + (prepListState.xmlSourceId ? '&xmlSourceId=' + encodeURIComponent(prepListState.xmlSourceId) : '');
+        var d = await api(q);
+        var po = '<option value="">Ürün seçin...</option>';
+        (d.items || []).forEach(function (p) { po += '<option value="' + p.id + '">' + escapeHtml(p.title || p.sku || p.xmlKey) + '</option>'; });
+        document.getElementById('li-tpl-prod').innerHTML = po;
+        document.getElementById('li-tpl-name').value = 'Şablon ' + new Date().toLocaleDateString('tr-TR');
+        document.getElementById('li-tpl-scope').value = 'GENERAL';
+        document.getElementById('li-tpl-mult').value = '1';
+        document.getElementById('li-tpl-margin').value = '25';
+        document.getElementById('li-tpl-fixed').value = '0';
+        document.getElementById('li-tpl-rounding').value = '0.90';
+        document.getElementById('li-tpl-active').checked = true;
+        prepListTemplateScopeChange();
+        prepListTemplatePreview();
+        document.getElementById('li-template-modal').classList.remove('hidden');
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+function prepListTemplateClose() { document.getElementById('li-template-modal').classList.add('hidden'); }
+function prepListTemplateScopeChange() {
+    var s = document.getElementById('li-tpl-scope').value;
+    document.getElementById('li-tpl-cat-wrap').classList.toggle('hidden', s !== 'CATEGORY');
+    document.getElementById('li-tpl-prod-wrap').classList.toggle('hidden', s !== 'PRODUCT');
+    document.getElementById('li-tpl-brand-wrap').classList.toggle('hidden', s !== 'BRAND');
+}
+function prepListTemplatePreview() {
+    var m = Number(document.getElementById('li-tpl-margin').value) || 0;
+    var f = Number(document.getElementById('li-tpl-fixed').value) || 0;
+    var mult = Number(document.getElementById('li-tpl-mult').value) || 1;
+    var el = document.getElementById('li-tpl-preview');
+    if (el) el.innerHTML = '<b>Örnek (100 TL alış):</b> kâr %' + m + (f ? ' + ' + fmt(f) + ' TL' : '') + ' · çarpan x' + mult
+        + '<br><span class="text-[10px] text-slate-500 dark:text-slate-400">Bu değerler yalnızca <b>Fiyat Önizleme</b> ve <b>apply-all</b> içindir; gönderim fiyatı <b>Fiyat Kuralları</b> ile hesaplanır.</span>';
+}
+async function prepListTemplateSave() {
+    var name = (document.getElementById('li-tpl-name').value || '').trim();
+    if (!name) { showToast('Şablon adı gerekli', 'error'); return; }
+    var mpId = document.getElementById('li-tpl-mp').value;
+    if (!mpId) { showToast('Pazaryeri seçin', 'error'); return; }
+    var scope = document.getElementById('li-tpl-scope').value;
+    var body = {
+        name: name,
+        marketplaceId: mpId,
+        productId: scope === 'PRODUCT' ? (document.getElementById('li-tpl-prod').value || null) : null,
+        categoryId: scope === 'CATEGORY' ? (document.getElementById('li-tpl-cat').value || null) : null,
+        brandId: scope === 'BRAND' ? (document.getElementById('li-tpl-brand').value || null) : null,
+        active: document.getElementById('li-tpl-active').checked === true,
+        priceMultiplier: Number(document.getElementById('li-tpl-mult').value) || 1,
+        priceSource: 'XML_PURCHASE',
+        vatMode: 'INCLUDED',
+        priceFixedAmount: Number(document.getElementById('li-tpl-fixed').value) || 0,
+        priceRangeRules: JSON.stringify([{ minPrice: 0, maxPrice: 0, profitMargin: Number(document.getElementById('li-tpl-margin').value) || 0, fixedAmount: Number(document.getElementById('li-tpl-fixed').value) || 0, rounding: document.getElementById('li-tpl-rounding').value }])
+    };
+    if (scope === 'PRODUCT' && !body.productId) { showToast('Ürün seçin', 'error'); return; }
+    if (scope === 'CATEGORY' && !body.categoryId) { showToast('Kategori seçin', 'error'); return; }
+    if (scope === 'BRAND' && !body.brandId) { showToast('Marka seçin', 'error'); return; }
+    try {
+        await api('/listings', { method: 'POST', body: body });
         showToast('Şablon oluşturuldu', 'success');
-        prepListingsLoad();
+        prepListTemplateClose();
+        prepListingsLoadData();
     } catch (e) { showToast(e.message, 'error'); }
 }
 
@@ -12862,34 +13143,70 @@ async function prepListLoadMarketplaces() {
 }
 
 // Price Rules V2
+function _prepRoundingLabel(r) {
+    var m = { none: 'Yuvarlama Yok', '0.90': ',90', '0.95': ',95', '0.99': ',99', '9.90': '9,90', '49.90': '49,90', '99.90': '99,90', nearest: 'En Yakın Tam', ceil: 'Yukarı Yuvarla', floor: 'Aşağı Yuvarla' };
+    return m[r] || r || 'Yuvarlama Yok';
+}
+function _prepSamplePurchase(r) {
+    var min = Number(r.minPrice) || 0;
+    var max = Number(r.maxPrice) || 0;
+    var s = 100;
+    if (s < min) s = min;
+    if (max > 0 && s > max) s = max;
+    if (s <= 0) s = 100;
+    return s;
+}
 async function prepListLoadRules() {
-    var mpId = (document.getElementById('li-rules-mp') || {}).value || '';
+    var mpEl = document.getElementById('li-rules-mp');
+    var xmlEl = document.getElementById('li-rules-xml');
+    var mpId = (mpEl || {}).value || '';
+    var xmlId = (xmlEl || {}).value || '';
     try {
-        var url = '/listing-v2/rules' + (mpId ? '?marketplaceId=' + mpId : '');
-        var d = await api(url);
-        prepListState.rules = d.items || [];
         var xsD = await api('/xml-sources');
         var xsMap = {}; (xsD.items || []).forEach(function (s) { xsMap[s.id] = s.name; });
+        /* FIX: XML Kaynağı filtresi seçenekleri (Tüm XML + kaynaklar) — mevcut seçim korunur */
+        if (xmlEl) {
+            var prev = xmlEl.value;
+            var xo = '<option value="">Tüm XML Kaynakları</option>';
+            (xsD.items || []).forEach(function (s) { xo += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; });
+            xmlEl.innerHTML = xo;
+            if (prev) xmlEl.value = prev;
+        }
+        var url = '/listing-v2/rules?';
+        if (mpId) url += 'marketplaceId=' + encodeURIComponent(mpId) + '&';
+        if (xmlId) url += 'xmlSourceId=' + encodeURIComponent(xmlId) + '&';
+        var d = await api(url);
+        prepListState.rules = d.items || [];
         var el = document.getElementById('li-rules-table');
-        if (prepListState.rules.length === 0) { el.innerHTML = '<p class="text-xs text-slate-400 text-center py-8">Henüz fiyat kuralı yok</p>'; return; }
-        var html = '<table class="w-full text-sm"><thead><tr class="border-b border-slate-100 dark:border-slate-700 text-slate-400 dark:text-slate-500 text-[11px] font-bold uppercase tracking-wider bg-slate-50/50 dark:bg-slate-700/30"><th class="py-3 px-4">Pazaryeri</th><th class="py-3 px-4">Hedef</th><th class="py-3 px-4">XML</th><th class="py-3 px-4 text-right">Min ₺</th><th class="py-3 px-4 text-right">Max ₺</th><th class="py-3 px-4 text-right">Sabit ₺</th><th class="py-3 px-4 text-right">Kar %</th><th class="py-3 px-4">Yuvarlama</th><th class="py-3 px-4">Durum</th><th class="py-3 px-4 text-center">İşlem</th></tr></thead><tbody class="divide-y divide-slate-100 dark:divide-slate-700">';
+        if (prepListState.rules.length === 0) { el.innerHTML = '<p class="text-xs text-slate-400 text-center py-8">Bu filtrede fiyat kuralı yok — sağ üstten "Yeni Kural" ile ekleyin.</p>'; return; }
+        var html = '<table class="w-full text-sm"><thead><tr class="border-b border-slate-100 dark:border-slate-700 text-slate-400 dark:text-slate-500 text-[11px] font-bold uppercase tracking-wider bg-slate-50/50 dark:bg-slate-700/30"><th class="py-3 px-4">XML Kaynağı</th><th class="py-3 px-4">Pazaryeri</th><th class="py-3 px-4">Kapsam</th><th class="py-3 px-4">Kural</th><th class="py-3 px-4">Hesaplama</th><th class="py-3 px-4">Örnek Sonuç</th><th class="py-3 px-4">Durum</th><th class="py-3 px-4 text-center">İşlem</th></tr></thead><tbody class="divide-y divide-slate-100 dark:divide-slate-700">';
         prepListState.rules.forEach(function (r) {
-            var mp = (prepListState.marketplaces || []).find(function(m) { return m.id === r.marketplaceId; });
+            var mp = (prepListState.marketplaces || []).find(function (m) { return m.id === r.marketplaceId; });
+            var scope = r.productId ? 'Ürün' : r.categoryId ? 'Kategori' : 'Genel';
+            var fixedTxt = (Number(r.fixedAmount) > 0) ? ' + ' + fmt(r.fixedAmount) + ' ₺' : '';
+            var hesaplama = '+' + r.profitMargin + '%' + fixedTxt + ((r.rounding && r.rounding !== 'none') ? ' · yuv. ' + _prepRoundingLabel(r.rounding) : '');
             html += '<tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30 transition-all">'
-                + '<td class="py-3 px-4 text-xs">' + (mp ? mp.name : r.marketplaceId.slice(0, 8)) + '</td>'
-                + '<td class="py-3 px-4 text-xs">' + (r.productId ? 'Ürün' : r.categoryId ? 'Kategori' : 'Genel') + '</td>'
-                + '<td class="py-3 px-4 text-xs">' + (r.xmlSourceId ? (xsMap[r.xmlSourceId] || r.xmlSourceId.slice(0, 8)) : 'Tümü') + '</td>'
-                + '<td class="py-3 px-4 text-xs text-right">' + r.minPrice + '</td>'
-                + '<td class="py-3 px-4 text-xs text-right">' + (r.maxPrice >= 999999 || r.maxPrice === 0 ? '∞' : r.maxPrice) + '</td>'
-                + '<td class="py-3 px-4 text-xs text-right">' + (r.fixedAmount || 0) + '</td>'
-                + '<td class="py-3 px-4 text-xs text-right font-bold">' + r.profitMargin + '%</td>'
-                + '<td class="py-3 px-4 text-xs">' + r.rounding + '</td>'
+                + '<td class="py-3 px-4 text-xs font-semibold text-slate-700 dark:text-slate-200">' + (r.xmlSourceId ? escapeHtml(xsMap[r.xmlSourceId] || 'XML') : '<span class="text-slate-400 font-normal">Tüm XML</span>') + '</td>'
+                + '<td class="py-3 px-4 text-xs">' + (mp ? escapeHtml(mp.name) : '—') + '</td>'
+                + '<td class="py-3 px-4 text-xs">' + scope + '</td>'
+                + '<td class="py-3 px-4 text-xs">Kâr %' + r.profitMargin + (Number(r.fixedAmount) > 0 ? ' + Sabit' : '') + '</td>'
+                + '<td class="py-3 px-4 text-xs">' + hesaplama + '</td>'
+                + '<td class="py-3 px-4 text-xs font-semibold text-emerald-700 dark:text-emerald-400" id="li-rule-ex-' + r.id + '"><span class="text-slate-400 font-normal">…</span></td>'
                 + '<td class="py-3 px-4 text-xs">' + (r.active ? '<span class="bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-semibold text-xs px-2 py-0.5 rounded-full border border-emerald-200/60 dark:border-emerald-500/20">Aktif</span>' : '<span class="bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 font-semibold text-xs px-2 py-0.5 rounded-full">Pasif</span>') + '</td>'
-                + '<td class="py-3 px-4 text-xs text-center whitespace-nowrap"><button onclick="prepListRuleEdit(\'' + r.id + '\')" class="w-7 h-7 rounded-lg bg-blue-50 dark:bg-blue-500/10 text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-500/20 inline-flex items-center justify-center transition-all"><i class="fa-solid fa-pen text-xs"></i></button> <button onclick="prepListDelRule(\'' + r.id + '\')" class="w-7 h-7 rounded-lg bg-rose-50 dark:bg-rose-500/10 text-rose-500 hover:bg-rose-100 dark:hover:bg-rose-500/20 inline-flex items-center justify-center transition-all"><i class="fa-solid fa-trash text-xs"></i></button></td>'
+                + '<td class="py-3 px-4 text-xs text-center whitespace-nowrap"><button onclick="prepListRuleEdit(\'' + r.id + '\')" title="Düzenle" class="w-7 h-7 rounded-lg bg-blue-50 dark:bg-blue-500/10 text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-500/20 inline-flex items-center justify-center transition-all"><i class="fa-solid fa-pen text-xs"></i></button> <button onclick="prepListDelRule(\'' + r.id + '\')" title="Sil" class="w-7 h-7 rounded-lg bg-rose-50 dark:bg-rose-500/10 text-rose-500 hover:bg-rose-100 dark:hover:bg-rose-500/20 inline-flex items-center justify-center transition-all"><i class="fa-solid fa-trash text-xs"></i></button></td>'
                 + '</tr>';
         });
         html += '</tbody></table>';
         el.innerHTML = html;
+        /* Örnek Sonuç: GERÇEK backend hesabı (/listing-v2/calculate) — sahte örnek YOK */
+        prepListState.rules.forEach(function (r) {
+            var box = document.getElementById('li-rule-ex-' + r.id);
+            if (!box) return;
+            var sample = _prepSamplePurchase(r);
+            api('/listing-v2/calculate', { method: 'POST', body: { vatIncludedPurchase: sample, profitMargin: r.profitMargin, fixedAmount: r.fixedAmount || 0, rounding: r.rounding || 'none' } })
+                .then(function (res) { box.textContent = fmt(sample) + ' ₺ → ' + fmt(res.finalPrice) + ' ₺'; })
+                .catch(function () { box.textContent = '—'; });
+        });
     } catch (e) { }
 }
 
@@ -12916,7 +13233,7 @@ async function prepListRuleLoadMarketplaces() {
 async function prepListRuleLoadProducts() {
     try {
         var xs = document.getElementById('li-rule-xml').value;
-        var q = '/products?limit=200';
+        var q = '/products?limit=100';
         if (xs) q += '&xmlSourceId=' + encodeURIComponent(xs);
         var d = await api(q);
         var opts = '<option value="">Ürün seçin...</option>';
@@ -13147,6 +13464,8 @@ document.getElementById('li-match-template').addEventListener('change', function
 
 // Rules mp change
 document.getElementById('li-rules-mp').addEventListener('change', function() { prepListLoadRules(); });
+var _liRulesXmlEl = document.getElementById('li-rules-xml');
+if (_liRulesXmlEl) _liRulesXmlEl.addEventListener('change', function() { prepListLoadRules(); });
 document.getElementById('global-search-input').addEventListener('keydown', function (e) {
             if (e.key === 'Enter') globalSearch();
         });

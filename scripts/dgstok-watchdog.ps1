@@ -1,17 +1,38 @@
 <#  DG-STOK Watchdog – ASLA ÇÖKMEZ, tüm hataları yakalar  #>
 $ErrorActionPreference = 'Continue'
+
+# FIX(WATCHDOG-SINGLETON): Ayni script Scheduled Task ve VBS olmak uzere iki
+# farkli launcher'dan baslatiliyordu -> iki watchdog ayni anda pm2 restart atiyordu.
+# Named mutex ile tek instance zorunlu; ikinci kopya hemen cikar.
+$watchdogMutex = New-Object -TypeName System.Threading.Mutex -ArgumentList $false, 'Local\DgStokWatchdogSingleton'
+if (-not $watchdogMutex.WaitOne(0)) {
+    Write-Warning "Baska bir DG-STOK watchdog instance zaten calisiyor. Bu instance kapatiliyor."
+    exit 0
+}
+
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 
 $pm2 = "C:\Users\Dogan\AppData\Roaming\npm\pm2.cmd"
 
 function Test-PortListening($port) {
-    try {
-        $result = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-        return ($null -ne $result -and $result.Count -gt 0)
-    } catch {
-        return $false
+    # FIX(WATCHDOG-PORTFLAKE): Get-NetTCPConnection araliklarla bos donuyor ve
+    # watchdog portu kapali sanip pm2 restart atiyordu (restart loop). Gercek TCP
+    # baglanti denemesi kullan; IPv4 ve IPv6 (node :: bind) ayri ayri denenir.
+    foreach ($addr in @('127.0.0.1', '::1')) {
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient
+            $iar = $client.BeginConnect($addr, $port, $null, $null)
+            $connected = $iar.AsyncWaitHandle.WaitOne(1000)
+            if ($connected) {
+                $client.EndConnect($iar)
+                $client.Close()
+                return $true
+            }
+            $client.Close()
+        } catch { }
     }
+    return $false
 }
 
 function Get-Pm2ProcessCount {
@@ -67,49 +88,118 @@ function Ensure-Pm2Daemon {
     }
 }
 
+function Get-DgStokAppInfo {
+    $info = [pscustomobject]@{
+        Exists    = $false
+        Status    = $null
+        UptimeSec = -1
+    }
+    try {
+        # FIX(WATCHDOG-5.1): pm2 jlist ConvertFrom-Json PS5.1'de case-duplicate
+        # anahtar (username/USERNAME) yuzunden throw ediyor -> yanlis "process yok"
+        # tespiti ve resurrect dongusu. Bunun yerine PM2 pid dosyasi + process
+        # StartTime kullan: JSON parse yok, guvenilir uptime.
+        $pidFile = "C:\Users\Dogan\.pm2\pids\dg-stok-0.pid"
+        if (-not (Test-Path $pidFile)) { return $info }
+        $raw = Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $info }
+        $procId = 0
+        if (-not [int]::TryParse($raw.Trim(), [ref]$procId)) { return $info }
+        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if ($null -eq $p) { return $info }
+        if ($p.ProcessName -notmatch 'node') { return $info }
+        $info.Exists = $true
+        $info.Status = 'online'
+        try {
+            $info.UptimeSec = [int]((Get-Date) - $p.StartTime).TotalSeconds
+        } catch {
+            $info.UptimeSec = -1
+        }
+    } catch {
+        # pid dosyasi okunamadi -> bilinmiyor, mevcut akis devam eder
+    }
+    return $info
+}
+
 function Ensure-Backend {
     $port = 4000
-    $listening = Test-PortListening $port
-    if (-not $listening) {
-        Write-Warning "Backend :$port kapali..."
-        $procCount = Get-Pm2ProcessCount
+    # FIX(WATCHDOG-GRACE): DG-STOK boot suresi ~10 sn. Sabit sleep yerine gercek
+    # PM2 pm_uptime tabanli startup grace: yeni baslamis process'e restart atma.
+    $startupGraceSec = 30
 
-        if ($procCount -gt 0) {
-            # PM2'de process var ama port kapali - restart
-            Write-Warning "PM2'de process var, restart yapiliyor..."
-            try {
-                & $pm2 restart dg-stok 2>$null | Out-Null
-                Start-Sleep -Seconds 5
-            } catch {
-                Write-Warning "restart hatasi: $_"
-                # Resurrect dene
-                try {
-                    & $pm2 resurrect 2>$null | Out-Null
-                    Start-Sleep -Seconds 4
-                } catch { }
-            }
-        } else {
-            # PM2'de process yok - resurrect veya manuel start
-            Write-Warning "PM2'de process yok, resurrect yapiliyor..."
+    if (Test-PortListening $port) {
+        $script:ConsecutivePortFails = 0
+        return
+    }
+
+    # FIX(WATCHDOG-DEBOUNCE): Tek bir yanlis/gecici okuma restart tetiklemesin;
+    # ardisik 2 basarisiz kontrol (>=5 sn) dogrulanmadan aksiyon alma.
+    $script:ConsecutivePortFails = [int]$script:ConsecutivePortFails + 1
+    if ($script:ConsecutivePortFails -lt 2) {
+        Write-Warning "Port :$port kapali (ardisik deneme $($script:ConsecutivePortFails)/2), dogrulama bekleniyor."
+        return
+    }
+
+    $appInfo = Get-DgStokAppInfo
+
+    if ($appInfo.Exists) {
+        if ($appInfo.Status -eq 'launching') {
+            Write-Warning "dg-stok '$($appInfo.Status)' durumunda, startup grace bekleniyor."
+            return
+        }
+        if ($appInfo.UptimeSec -ge 0 -and $appInfo.UptimeSec -lt $startupGraceSec) {
+            Write-Warning "dg-stok startup grace icinde (uptime=$($appInfo.UptimeSec)s < ${startupGraceSec}s), restart atlanıyor."
+            return
+        }
+        if ($script:LastBackendAction -and ((Get-Date) - $script:LastBackendAction).TotalSeconds -lt $startupGraceSec) {
+            Write-Warning "Son watchdog aksiyonundan bu yana grace gecmedi, restart atlanıyor."
+            return
+        }
+
+        # Process grace'i asti ama port hala kapali -> gercek ariza, toparla
+        Write-Warning "dg-stok grace sonrasi hala port dinlemiyor, restart yapiliyor..."
+        try {
+            & $pm2 restart dg-stok 2>$null | Out-Null
+            $script:LastBackendAction = Get-Date
+            Start-Sleep -Seconds 5
+        } catch {
+            Write-Warning "restart hatasi: $_"
             try {
                 & $pm2 resurrect 2>$null | Out-Null
+                $script:LastBackendAction = Get-Date
                 Start-Sleep -Seconds 4
             } catch { }
-
-            $portCheck = Test-PortListening $port
-            if (-not $portCheck) {
-                Write-Warning "resurrect basarisiz, manuel start yapiliyor..."
-                try {
-                    Push-Location "$root\server"
-                    & $pm2 start "src\index.ts" --name dg-stok --interpreter "C:\Program Files\nodejs\node.exe" 2>$null | Out-Null
-                    Pop-Location
-                    Start-Sleep -Seconds 5
-                } catch {
-                    Write-Warning "manuel start hatasi: $_"
-                    try { Pop-Location } catch { }
-                }
-            }
         }
+        return
+    }
+
+    # PM2'de dg-stok process'i canli degil. Once grace, sonra resurrect/start.
+    # FIX(WATCHDOG-NORESTART): pid dosyasi ile process eslesmedigi icin bu dal
+    # yanlislikla tetiklenebiliyordu; burada restart yerine idempotent resurrect.
+    if ($script:LastBackendAction -and ((Get-Date) - $script:LastBackendAction).TotalSeconds -lt $startupGraceSec) {
+        Write-Warning "Son watchdog aksiyonundan bu yana grace gecmedi (process yok), islem atlanıyor."
+        return
+    }
+
+    Write-Warning "PM2'de dg-stok canli degil, resurrect deneniyor..."
+    try {
+        & $pm2 resurrect 2>$null | Out-Null
+        $script:LastBackendAction = Get-Date
+        Start-Sleep -Seconds 4
+    } catch { }
+
+    if (Test-PortListening $port) { return }
+
+    Write-Warning "resurrect basarisiz, manuel start yapiliyor..."
+    try {
+        Push-Location "$root\server"
+        & $pm2 start "src\index.ts" --name dg-stok --interpreter "C:\Program Files\nodejs\node.exe" 2>$null | Out-Null
+        Pop-Location
+        $script:LastBackendAction = Get-Date
+        Start-Sleep -Seconds 5
+    } catch {
+        Write-Warning "manuel start hatasi: $_"
+        try { Pop-Location } catch { }
     }
 }
 

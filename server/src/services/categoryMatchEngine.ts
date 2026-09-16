@@ -687,7 +687,9 @@ export async function classifyByAi(
 
   // FIX(F-04): batch'ler sıralı yerine SINIRLI eşzamanlılıkla çalışır.
   // Karar mantığı, prompt, eşikler ve provider önceliği DEĞİŞMEDİ.
-  const AI_BATCH_CONCURRENCY = 1;
+  // Fix(perf): 1 → 2. Değer 1 iken çok-batch'li preview (≤200 ürün) tamamen
+  // SERİ çalışıp 10+ dakikaya çıkıyordu; 2 sınırlı eşzamanlılık bunu yarıya indirir.
+  const AI_BATCH_CONCURRENCY = 2;
   // FIX(F-04): geçici hatalar (429/5xx/timeout/tüm-sağlayıcılar-dolu) için sınırlı backoff retry.
   // Kalıcı hatalar (INVALID_KEY, MODEL_NOT_FOUND vb.) retry EDİLMEZ.
   const TRANSIENT_ERROR_CODES = new Set(['RATE_LIMIT', 'TIMEOUT', 'SERVER_ERROR', 'NO_AI_PROVIDER_AVAILABLE']);

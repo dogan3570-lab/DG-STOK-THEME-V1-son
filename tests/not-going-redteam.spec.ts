@@ -8,8 +8,8 @@ import { test, expect, type Page } from 'playwright/test';
 
 const APP = 'http://localhost:4000';
 const API = 'http://localhost:4000/api';
-const EMAIL = 'admin@dgstok.com';
-const PASSWORD = 'Admin1234!';
+const EMAIL = 'admin@dg-stok.local';
+const PASSWORD = 'CHANGE_ME_NOW';
 
 // ---------- Helpers ----------
 

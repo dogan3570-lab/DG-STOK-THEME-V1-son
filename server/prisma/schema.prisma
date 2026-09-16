@@ -111,13 +111,16 @@ model Product {
   aiScore         Float?
   matchedBy       String?
   lastMatchDate   DateTime?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
-  xmlSource       XmlSource?  @relation(fields: [xmlSourceId], references: [id])
-  brand           Brand?      @relation(fields: [brandId], references: [id])
-  category        Category?   @relation(fields: [categoryId], references: [id])
-  variants        Variant[]
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+  xmlSource              XmlSource?  @relation(fields: [xmlSourceId], references: [id])
+  brand                  Brand?      @relation(fields: [brandId], references: [id])
+  category               Category?   @relation(fields: [categoryId], references: [id])
+  xmlDimensionalWeight   Float?
+  manualDimensionalWeight Float?
+  variants               Variant[]
   marketplaceStates ProductMarketplaceState[]
+  trendyolAttributes TrendyolProductAttribute[]
   workflowState   WorkflowState?
   workflowTimelines WorkflowTimeline[]
 
@@ -276,6 +279,58 @@ model Variant {
   @@unique([productId, name, value])
   @@index([name])
   @@index([productId])
+}
+
+model TrendyolProductAttribute {
+  id                 String   @id @default(uuid())
+  productId          String
+  // GLOBAL: kayıt artık pazaryeri bazında izole edilir. Mevcut Trendyol kayıtları
+  // default "tt" ile KORUNUR (additive, non-destructive).
+  marketplaceKey     String   @default("tt")
+  categoryExternalId Int
+  attributeId        Int
+  attributeName      String
+  attributeValueId   Int?
+  attributeValue     String?
+  source             String   @default("default")
+  // Provenance: eşleşmenin güveni ve gerekçesi (izlenebilirlik).
+  confidence         Float?
+  reason             String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  product            Product  @relation(fields: [productId], references: [id])
+
+  @@unique([productId, marketplaceKey, categoryExternalId, attributeId])
+  @@index([productId])
+  @@index([marketplaceKey, productId])
+  @@index([categoryExternalId])
+}
+
+// ÖĞRENEN GLOBAL ATTRIBUTE MAPPING (ürünün gerçek attribute kaydından AYRI tutulur).
+// Kaynak sinyal (variant/title/manual) → gerçek marketplace attribute/valueId eşlemesi.
+// İzolasyon: marketplaceKey + categoryExternalId + attributeId (+ kaynak) bazında kesin.
+model MarketplaceAttributeLearning {
+  id                 String   @id @default(uuid())
+  marketplaceKey     String
+  categoryExternalId Int
+  attributeId        Int
+  attributeName      String
+  attributeValueId   Int?
+  attributeValue     String?
+  sourceType         String   @default("variant")
+  sourceKey          String
+  sourceValue        String   @default("")
+  confidence         Float    @default(1.0)
+  reason             String?
+  verified           Boolean  @default(false)
+  successCount       Int      @default(0)
+  createdBy          String   @default("engine")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([marketplaceKey, categoryExternalId, attributeId, sourceType, sourceKey, sourceValue])
+  @@index([marketplaceKey, categoryExternalId, attributeId])
+  @@index([marketplaceKey])
 }
 
 model Notification {

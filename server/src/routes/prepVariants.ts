@@ -1,10 +1,12 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma.ts';
 import { requireAuth, requireRole } from '../auth/authMiddleware.ts';
 import { runVariantMatchFlow } from '../services/variantMatch.ts';
 import { detectVariantAttributes } from '../services/readiness.ts';
 import { fetchTrendyolCategoryAttributes, fetchTrendyolAttributeValues } from '../services/trendyolCatalog.ts';
 import {reconcileProductGates, queueReconcileProductGates} from '../services/readinessService.ts';
+import { learnManualAttributeCorrection } from '../services/marketplaceAttributeEngine.ts';
 
 /** Gerçek varyant alanları — AKYI ve HBT/DGLIVE önekli çöp alanlar hariç. */
 const REAL_VARIANT_NAMES = new Set(['Renk', 'Beden', 'Numara', 'Kapasite', 'Hacim', 'Cinsiyet', 'Materyal', 'Model']);
@@ -82,26 +84,42 @@ const handleDashboard = async (req: any, res: any) => {
   try {
     const xmlSourceId = req.query?.xmlSourceId ? String(req.query.xmlSourceId) : undefined;
     const marketplaceId = String(req.query?.marketplaceId ?? '');
-    const where: Record<string, unknown> = { status: { not: 'DELETED' } };
-    if (xmlSourceId) where.xmlSourceId = xmlSourceId;
+    // FIX(PERF): 9 ayri COUNT + TÜM VariantAnalysis satırlarını JS'e çeken findMany TEK/küçük
+    // raw SQL'e indirildi. Sayaç anlamı ve where semantiği (status!=DELETED + opsiyonel xmlSourceId) AYNI.
+    const statRows = await prisma.$queryRaw<any[]>`
+      SELECT
+        COUNT(*) as totalProducts,
+        SUM(CASE WHEN variantStatus = 'NOT_REQUIRED' THEN 1 ELSE 0 END) as notRequired,
+        SUM(CASE WHEN variantMatch = 1 THEN 1 ELSE 0 END) as autoMatched,
+        SUM(CASE WHEN variantStatus = 'WAITING_AI' AND variantMatch = 0 THEN 1 ELSE 0 END) as waitingAi,
+        SUM(CASE WHEN variantStatus = 'MANUAL_REVIEW' THEN 1 ELSE 0 END) as manualReview,
+        SUM(CASE WHEN variantStatus = 'COMPLETED' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN variantStatus NOT IN ('NOT_REQUIRED','MANUAL_REVIEW') THEN 1 ELSE 0 END) as hasVariant,
+        SUM(CASE WHEN variantStatus NOT IN ('NOT_REQUIRED','WAITING_AI','MANUAL_REVIEW','COMPLETED') THEN 1 ELSE 0 END) as analysisFailed,
+        SUM(CASE WHEN variantMatch = 0 AND variantStatus IN ('MANUAL_REVIEW','WAITING_AI','FAILED') THEN 1 ELSE 0 END) as manualPending
+      FROM Product
+      WHERE status != 'DELETED'
+      ${xmlSourceId ? Prisma.sql`AND xmlSourceId = ${xmlSourceId}` : Prisma.empty}
+    `;
+    const s = (statRows[0] || {}) as Record<string, unknown>;
+    const totalProducts = Number(s.totalProducts ?? 0);
+    const notRequired = Number(s.notRequired ?? 0);
+    const autoMatched = Number(s.autoMatched ?? 0);
+    const waitingAi = Number(s.waitingAi ?? 0);
+    const manualReview = Number(s.manualReview ?? 0);
+    const completed = Number(s.completed ?? 0);
+    const hasVariant = Number(s.hasVariant ?? 0);
+    const analysisFailed = Number(s.analysisFailed ?? 0);
+    const manualPending = Number(s.manualPending ?? 0);
 
-    const [totalProducts, notRequired, autoMatched, waitingAi, manualReview, completed, hasVariant, analysisFailed] = await Promise.all([
-      prisma.product.count({ where }),
-      prisma.product.count({ where: { ...where, variantStatus: 'NOT_REQUIRED' } }),
-      prisma.product.count({ where: { ...where, variantMatch: true } }),
-      prisma.product.count({ where: { ...where, variantStatus: 'WAITING_AI', variantMatch: false } }),
-      prisma.product.count({ where: { ...where, variantStatus: 'MANUAL_REVIEW' } }),
-      prisma.product.count({ where: { ...where, variantStatus: 'COMPLETED' } }),
-      prisma.product.count({ where: { ...where, variantStatus: { not: 'NOT_REQUIRED' } } }),
-      prisma.product.count({ where: { ...where, variantStatus: { notIn: ['NOT_REQUIRED', 'WAITING_AI', 'MANUAL_REVIEW', 'COMPLETED'] } } }),
-    ]);
-
-    // AI ile eşleşenler GERÇEK kayıttan ölçülür (VariantAnalysis source='ai' + validationPassed).
-    const aiValidatedRows = await prisma.variantAnalysis.findMany({ where: { validationPassed: true, source: 'ai' }, select: { productId: true } });
-    const aiValidatedIds = aiValidatedRows.map((a) => a.productId);
-    const aiMatched = aiValidatedIds.length > 0
-      ? await prisma.product.count({ where: { id: { in: aiValidatedIds }, ...where } })
-      : 0;
+    // AI eşleşenler GERÇEK kayıttan (VariantAnalysis source='ai' + validationPassed) — id listesi JS'e çekilmez.
+    const aiRows = await prisma.$queryRaw<any[]>`
+      SELECT COUNT(*) as c FROM Product
+      WHERE status != 'DELETED'
+      ${xmlSourceId ? Prisma.sql`AND xmlSourceId = ${xmlSourceId}` : Prisma.empty}
+      AND id IN (SELECT productId FROM VariantAnalysis WHERE validationPassed = 1 AND source = 'ai')
+    `;
+    const aiMatched = Number((aiRows[0] as any)?.c ?? 0);
 
     // Manuel = GERÇEK MANUAL_REVIEW kaydı (kalan hesabı DEĞİL).
     const manual = manualReview;
@@ -113,7 +131,7 @@ const handleDashboard = async (req: any, res: any) => {
       marketplaceName = mp?.name ?? null;
     }
 
-    res.json({ totalProducts, hasVariant, notRequired, autoMatched, aiMatched, manual, manualReview, waitingAi, completed, analysisFailed, marketplaceName });
+    res.json({ totalProducts, hasVariant, notRequired, autoMatched, aiMatched, manual, manualReview, waitingAi, completed, analysisFailed, manualPending, marketplaceName });
   } catch (error) {
     console.error('[variants] GET dashboard error:', error);
     res.status(500).json({ error: { code: 'DB_ERROR', message: 'Dashboard alınamadı' } });
@@ -165,8 +183,20 @@ router.get('/products', requireAuth, async (req, res) => {
     if (!xmlSourceId) return res.status(400).json({ ok: false, error: 'xmlSourceId zorunludur' });
     const page = Math.max(1, Number(req.query?.page ?? 1));
     const limit = Math.min(1000, Math.max(1, Number(req.query?.limit ?? 50)));
-    // Varyant ekranı YALNIZCA varyant gerektiren ürünleri listeler (NOT_REQUIRED hariç).
-    const where: Record<string, unknown> = { xmlSourceId, variantStatus: { not: 'NOT_REQUIRED' } };
+    const matchFilter = String(req.query?.matchFilter ?? 'all');
+    // Varyant ekranı filtre: all=NOT_REQUIRED hariç, matched=variantMatch=true, unmatched=variantMatch=false+!NR, manual=MANUAL_REVIEW
+    const where: Record<string, unknown> = { xmlSourceId };
+    if (matchFilter === 'matched') {
+      where.variantMatch = true;
+      where.variantStatus = { not: 'MANUAL_REVIEW' };
+    } else if (matchFilter === 'unmatched') {
+      where.variantMatch = false;
+      where.variantStatus = { not: 'NOT_REQUIRED' };
+    } else if (matchFilter === 'manual') {
+      where.variantStatus = 'MANUAL_REVIEW';
+    } else {
+      where.variantStatus = { not: 'NOT_REQUIRED' };
+    }
     const [items, total] = await Promise.all([
       prisma.product.findMany({
         where,
@@ -184,10 +214,13 @@ router.get('/products', requireAuth, async (req, res) => {
     const data = items.map((p) => {
       const realVariants = (p.variants || []).filter((v) => REAL_VARIANT_NAMES.has(v.name));
       const va = vaMap.get(p.id);
-      let status = 'NOT_REQUIRED';
+let status = 'NOT_REQUIRED';
       let reason: string | null = null;
       if (p.variantStatus === 'NOT_REQUIRED') {
         status = 'NOT_REQUIRED';
+      } else if (p.variantStatus === 'MANUAL_REVIEW') {
+        status = 'MANUAL';
+        reason = extractManualReason(va?.checkResults ?? null);
       } else if (p.variantMatch && p.matchedBy === 'ai') {
         status = 'AI';
       } else if (p.variantMatch && p.matchedBy === 'manual') {
@@ -196,12 +229,9 @@ router.get('/products', requireAuth, async (req, res) => {
         status = 'AUTO';
       } else if (va?.validationPassed) {
         status = 'AI';
-      } else if (p.variantStatus === 'MANUAL_REVIEW') {
-        status = 'MANUAL';
-        reason = extractManualReason(va?.checkResults ?? null);
       } else if (p.variantStatus === 'FAILED') {
         status = 'FAILED';
-        reason = 'Eşleştirme sırasında hata oluştu';
+        reason = 'Eşlestirma sırasında hata oluştu';
       } else {
         status = 'WAITING_AI';
         reason = 'Varyant analizi yapılmadı — AI eşleştirmesi bekleniyor';
@@ -304,7 +334,7 @@ router.post('/batch', requireAuth, async (req, res) => {
       }
     }
     if (created > 0) {     await prisma.$transaction(async (tx) => {
-      await tx.product.updateMany({ where: { id: { in: productIds } }, data: { variantMatch: true } });
+      await tx.product.updateMany({ where: { id: { in: productIds } }, data: { variantMatch: true, matchedBy: 'manual', variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
     });
     for (const pid of productIds) { queueReconcileProductGates(pid); } }
     await prisma.auditLog.create({ data: { action: 'BATCH_VARIANT_CREATE', entity: 'variant', details: `Toplu varyant: ${created} adet ${cleanName}:${cleanValue}`, actorUserId: (req as any).actor?.userId || null } });
@@ -403,13 +433,13 @@ router.post('/bulk-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), asyn
           }
         }
         if (uniqueProductIds.length > 0) {
-          await tx.product.updateMany({ where: { id: { in: uniqueProductIds } }, data: { variantMatch: true } });
+          await tx.product.updateMany({ where: { id: { in: uniqueProductIds } }, data: { variantMatch: true, matchedBy: 'manual', variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
         }
       });
       for (const pid of uniqueProductIds) { queueReconcileProductGates(pid); }
     } else if (uniqueProductIds.length > 0) {
       await prisma.$transaction(async (tx) => {
-        await tx.product.updateMany({ where: { id: { in: uniqueProductIds } }, data: { variantMatch: true } });
+        await tx.product.updateMany({ where: { id: { in: uniqueProductIds } }, data: { variantMatch: true, matchedBy: 'manual', variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
       });
       for (const pid of uniqueProductIds) { queueReconcileProductGates(pid); }
     }
@@ -585,10 +615,13 @@ router.get('/screen', requireAuth, async (req, res) => {
       const hasSize = p.variants.some(v => v.name === 'Beden');
       const hasNumber = p.variants.some(v => v.name === 'Numara');
       const va = screenVaMap.get(p.id);
-      let screenStatus: string;
+let screenStatus: string;
       let screenReason: string | null = null;
       if (p.variantStatus === 'NOT_REQUIRED') {
         screenStatus = 'NOT_REQUIRED';
+      } else if (p.variantStatus === 'MANUAL_REVIEW') {
+        screenStatus = 'MANUAL_REVIEW';
+        screenReason = extractManualReason(null);
       } else if (p.variantMatch && p.matchedBy === 'ai') {
         screenStatus = 'AI_MATCHED';
       } else if (p.variantMatch && p.matchedBy === 'manual') {
@@ -597,12 +630,9 @@ router.get('/screen', requireAuth, async (req, res) => {
         screenStatus = 'AUTO_ACCEPTED';
       } else if (va?.validationPassed) {
         screenStatus = 'AI_MATCHED';
-      } else if (p.variantStatus === 'MANUAL_REVIEW') {
-        screenStatus = 'MANUAL_REVIEW';
-        screenReason = extractManualReason(null);
       } else if (p.variantStatus === 'FAILED') {
         screenStatus = 'FAILED';
-        screenReason = 'Eşleştirme sırasında hata oluştu';
+        screenReason = 'Eşlestirma sırasında hata oluştu';
       } else {
         screenStatus = 'WAITING_AI';
         screenReason = 'AI eşleştirmesi bekleniyor';
@@ -690,7 +720,7 @@ router.post('/auto-match', requireAuth, async (req, res) => {
     }
 
     const products = await prisma.product.findMany({
-      where: { id: { in: productIds } },
+      where: { id: { in: productIds }, matchedBy: { not: 'manual' } },
       select: { id: true, sku: true, xmlKey: true, title: true, variantMatch: true, variants: { select: { name: true, value: true } } },
     });
 
@@ -714,7 +744,7 @@ router.post('/auto-match', requireAuth, async (req, res) => {
     let applied = 0;
     if (apply === true && matched > 0) {
       const ids = preview.map(p => p.productId);
-      await prisma.product.updateMany({ where: { id: { in: ids } }, data: { variantMatch: true } });
+      await prisma.product.updateMany({ where: { id: { in: ids } }, data: { variantMatch: true, variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
       for (const pid of ids) { queueReconcileProductGates(pid); }
       applied = matched;
       await prisma.auditLog.create({ data: { action: 'V5_AUTO_MATCH', entity: 'variant', details: `Otomatik eslestirme: ${applied} urun`, actorUserId: (req as any).actor?.userId || null } });
@@ -743,7 +773,7 @@ router.post('/confirm-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), a
     }
     if (updatedIds.length > 0) {
       await prisma.$transaction(async (tx) => {
-        await tx.product.updateMany({ where: { id: { in: updatedIds } }, data: { variantMatch: true } });
+        await tx.product.updateMany({ where: { id: { in: updatedIds } }, data: { variantMatch: true, matchedBy: 'manual', variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
       });
       for (const pid of updatedIds) { queueReconcileProductGates(pid); }
     }
@@ -775,7 +805,7 @@ router.post('/manual-match', requireAuth, requireRole(['ADMIN', 'OPERATOR']), as
     }
     if (allUpdatedIds.length > 0) {
       await prisma.$transaction(async (tx) => {
-        await tx.product.updateMany({ where: { id: { in: allUpdatedIds } }, data: { variantMatch: true } });
+        await tx.product.updateMany({ where: { id: { in: allUpdatedIds } }, data: { variantMatch: true, matchedBy: 'manual', variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
       });
       for (const pid of allUpdatedIds) { queueReconcileProductGates(pid); }
     }
@@ -799,7 +829,7 @@ router.post('/approve', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (
       return res.status(400).json({ ok: false, error: 'productIds array gerekli' });
     }
 
-    await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { variantMatch: true } });
+    await prisma.product.updateMany({ where: { id: { in: productIds } }, data: { variantMatch: true, matchedBy: 'manual', variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
     for (const pid of productIds) { queueReconcileProductGates(pid); }
 
     await prisma.auditLog.create({
@@ -859,7 +889,7 @@ router.post('/reanalyze', requireAuth, async (req, res) => {
 // ==================== 20. SCAN ====================
 router.post('/scan', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
   try {
-    const where: any = { variantMatch: false, variantStatus: { not: 'NOT_REQUIRED' } };
+    const where: any = { variantMatch: false, matchedBy: { not: 'manual' }, variantStatus: { not: 'NOT_REQUIRED' } };
     const products = await prisma.product.findMany({
       where,
       select: { id: true, title: true, xmlKey: true, sku: true, description: true, detail: true, technicalSpecs: true, variantMatch: true, variants: { select: { id: true, name: true, value: true } } },
@@ -892,7 +922,7 @@ router.post('/scan', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req
     }
 
     if (matchedProductIds.length > 0) {
-      await prisma.product.updateMany({ where: { id: { in: matchedProductIds } }, data: { variantMatch: true } });
+      await prisma.product.updateMany({ where: { id: { in: matchedProductIds } }, data: { variantMatch: true, variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
       for (const pid of matchedProductIds) { queueReconcileProductGates(pid); }
       totalProductsWithVariants = matchedProductIds.length;
     }
@@ -988,7 +1018,7 @@ router.post('/unmatch', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (
     }
 
     await prisma.$transaction(async (tx) => {
-      await tx.product.update({ where: { id: productId }, data: { variantMatch: false, variantStatus: 'WAITING_AI' } });
+      await tx.product.update({ where: { id: productId }, data: { variantMatch: false, variantStatus: 'WAITING_AI', matchedBy: null } });
       await tx.variant.deleteMany({ where: { productId } });
     });
 
@@ -1003,6 +1033,32 @@ router.post('/unmatch', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (
   }
 });
 
+// ==================== 23b. MANUAL DECISION (VARYANTLI / VARYANTSIZ) ====================
+router.post('/manual-decision', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
+  try {
+    const { productId, decision } = req.body;
+    if (!productId || !decision) return res.status(400).json({ ok: false, error: 'productId ve decision gerekli' });
+    if (!['VARYANTLI', 'VARYANTSIZ'].includes(decision)) return res.status(400).json({ ok: false, error: 'decision=VARYANTLI veya VARYANTSIZ olmalı' });
+
+    const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true, variantMatch: true, variantStatus: true } });
+    if (!product) return res.status(404).json({ ok: false, error: 'Ürün bulunamadı' });
+
+    if (decision === 'VARYANTSIZ') {
+      await prisma.product.update({ where: { id: productId }, data: { variantMatch: false, variantStatus: 'NOT_REQUIRED', lastMatchDate: new Date() } });
+      await prisma.auditLog.create({ data: { action: 'MANUAL_DECISION_VARYANTSIZ', entity: 'variant', details: `Manuel karar: VARYANTSIZ (${productId})`, actorUserId: (req as any).actor?.userId || null } });
+      return res.json({ ok: true, decision: 'VARYANTSIZ', productId });
+    }
+
+    // VARYANTLI — UI tarafında manuel eşleştirme paneli açılacak, burada sadece durum güncellenir
+    await prisma.product.update({ where: { id: productId }, data: { variantStatus: 'MANUAL_REVIEW', lastMatchDate: new Date() } });
+    await prisma.auditLog.create({ data: { action: 'MANUAL_DECISION_VARYANTLI', entity: 'variant', details: `Manuel karar: VARYANTLI - eşleştirme bekleniyor (${productId})`, actorUserId: (req as any).actor?.userId || null } });
+    return res.json({ ok: true, decision: 'VARYANTLI', productId, message: 'Manuel eşleştirme paneli açılmalı' });
+  } catch (error) {
+    console.error('[variants] POST manual-decision error:', error);
+    return res.status(500).json({ ok: false, error: 'Manuel karar işlenemedi' });
+  }
+});
+
 // ==================== 24. CREATE VARIANT ====================
 router.post('/', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, res) => {
   try {
@@ -1012,7 +1068,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'OPERATOR']), async (req, re
     const product = await prisma.product.findUnique({ where: { id: productId }, select: { id: true } });
     if (!product) return res.status(404).json({ ok: false, error: 'Urun bulunamadi' });
     const item = await prisma.variant.create({ data: { name, value, productId } });
-    await prisma.product.update({ where: { id: productId }, data: { variantMatch: true } });
+    await prisma.product.update({ where: { id: productId }, data: { variantMatch: true, matchedBy: 'manual', variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
     queueReconcileProductGates(productId);
     await prisma.auditLog.create({ data: { action: 'VARIANT_CREATE', entity: 'variant', details: `Varyant olusturuldu: ${name}:${value} (urun: ${productId})`, actorUserId: (req as any).actor?.userId || null } });
     return res.status(201).json({ item });
@@ -1175,12 +1231,23 @@ router.post('/manual-match-v2', requireAuth, requireRole(['ADMIN', 'OPERATOR']),
 
     const variantName = attrDef.attribute.name;
     const variantValue = valueHit.attributeValue;
+    // ÖĞRENME: kullanıcı manuel eşleştirmesi doğrulanmış mapping olarak kaydedilir.
+    try {
+      await learnManualAttributeCorrection({
+        marketplaceKey: mp.key,
+        categoryExternalId,
+        attributeId,
+        attributeName: variantName,
+        attributeValueId: valueHit.attributeValueId,
+        attributeValue: variantValue,
+      });
+    } catch (e) { console.error('[variants] manual learning failed:', (e as any)?.message || e); }
     await prisma.variant.upsert({
       where: { productId_name_value: { productId, name: variantName, value: variantValue } },
       create: { productId, name: variantName, value: variantValue },
       update: {},
     });
-    await prisma.product.update({ where: { id: productId }, data: { variantMatch: true, variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
+    await prisma.product.update({ where: { id: productId }, data: { variantMatch: true, matchedBy: 'manual', variantStatus: 'COMPLETED', lastMatchDate: new Date() } });
     queueReconcileProductGates(productId);
 
     const existing = await prisma.variantAnalysis.findFirst({ where: { productId } });

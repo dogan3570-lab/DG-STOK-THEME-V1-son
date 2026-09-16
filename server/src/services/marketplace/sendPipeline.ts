@@ -6,6 +6,7 @@ import { resolveListingPrice, parsePriceRangeRules } from '../listingPriceResolv
 import { evaluateTrendyolSendGate } from '../sendReadiness.ts';
 import { getPrepStockRange, isWithinPrepRange } from '../stockAutomation.ts';
 import { sendListingToMarketplace } from './marketplaceApi.ts';
+import { confirmLearningsForProduct } from '../attributeLearning.ts';
 import type { MarketplaceListingPayload } from './types.ts';
 
 export interface SendPipelineResult {
@@ -106,6 +107,8 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
       variantStatus: true,
       categoryId: true,
       brand: { select: { name: true, externalId: true } },
+      xmlDimensionalWeight: true,
+      manualDimensionalWeight: true,
     },
   });
 
@@ -130,7 +133,7 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
 
   let payload: MarketplaceListingPayload;
 
-  // Trendyol (tt): gerçek runtime 4/4 gate — kategori/brand/attribute mapping +
+// Trendyol (tt): gerçek runtime 4/4 gate — kategori/brand/attribute mapping +
   // listing template + fiyat kuralı gerçek catalog/DB doğrulamasından geçer.
   // İmport'tan gelen sahte flag'lere (categoryMatch vs.) GÜVENİLMEZ.
   if (marketplace.key === 'tt') {
@@ -139,7 +142,13 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
       return errorResult(input, gate.firstFailureCode ?? 'NOT_READY', gate.firstFailureMessage ?? 'Ürün 4/4 gönderime hazır değil');
     }
 
-    payload = {
+    // Effective dimensional weight: manual > XML > null (Trendyol V2'de optional)
+    const effectiveDimensionalWeight = product.manualDimensionalWeight ?? product.xmlDimensionalWeight ?? null;
+
+    const productMainId = product.sku ?? product.barcode ?? `PROD-${product.id.slice(0, 8)}`;
+    const listPrice = gate.listingPrice ?? product.salePrice ?? product.purchasePrice ?? 0;
+
+    const basePayload = {
       barcode: product.barcode,
       sku: product.sku,
       title: product.title ?? '',
@@ -153,7 +162,16 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
       brandId: gate.brandId,
       categoryId: gate.categoryId,
       attributes: gate.attributes,
+      productMainId: product.sku ?? product.barcode ?? `PROD-${product.id.slice(0, 8)}`,
+      listPrice: Math.max(gate.listingPrice ?? 0, product.salePrice ?? product.purchasePrice ?? 0),
     };
+
+    // dimensionalWeight sadece varsa gönder (Trendyol V2'de optional)
+    if (effectiveDimensionalWeight !== null) {
+      payload = { ...basePayload, dimensionalWeight: effectiveDimensionalWeight };
+    } else {
+      payload = basePayload;
+    }
   } else {
     // Diğer pazaryerleri: mevcut backend authoritative akış korunur.
     const ready = isReady({
@@ -293,6 +311,10 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
         lastActionAt: new Date(),
       },
     });
+
+    // ÖĞRENME: pazaryerinin gerçekten kabul ettiği (confirmed external id) eşleşmeleri
+    // doğrulanmış öğrenme olarak işaretle. Hata gönderim sonucunu BOZMAZ.
+    confirmLearningsForProduct(input.productId, marketplace.key).catch(() => null);
 
     // Gözlemlenebilirlik: gerçek external id ASLA loglanmaz — yalnızca hash
     console.log(

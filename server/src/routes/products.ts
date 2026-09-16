@@ -809,7 +809,7 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
         purchasePrice: true, salePrice: true, vatRate: true, profitMargin: true, aiScore: true,
         seoTitle: true, seoDescription: true, technicalSpecs: true,
         supplierCategory: true, customBrandName: true, computedTitle: true, prefixEnabled: true,
-        categoryMatch: true, brandMatch: true, variantMatch: true, templateMatch: true,
+        categoryMatch: true, brandMatch: true, variantMatch: true, variantStatus: true, templateMatch: true,
         categoryId: true, brandId: true, xmlSourceId: true,
         createdAt: true, updatedAt: true,
         category: { select: { id: true, name: true } },

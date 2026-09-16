@@ -11,7 +11,7 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   use: {
-    baseURL: 'http://localhost:5175',
+    baseURL: 'http://localhost:4000',
     trace: 'off',
     screenshot: 'off',
     actionTimeout: 10000,

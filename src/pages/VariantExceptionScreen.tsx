@@ -204,16 +204,16 @@ export default function VariantExceptionScreen() {
 
  // ==================== MANUAL MATCH ====================
 
- const handleManualMatch = async () => {
- const ids = getSelectedProductIds();
- if (ids.length === 0) {
- showToast('warning', 'Lütfen en az bir ürün seçin');
- return;
- }
- setManualGroupId(`DG_GRP_${Date.now()}`);
- setManualParentSku(products.find(p => ids.includes(p.id))?.sku || '');
- setShowManualMatch(true);
- };
+const handleManualMatch = async (preSelectedIds?: string[]) => {
+  const ids = preSelectedIds ?? getSelectedProductIds();
+  if (ids.length === 0) {
+  showToast('warning', 'Lütfen en az bir ürün seçin');
+  return;
+  }
+  setManualGroupId(`DG_GRP_${Date.now()}`);
+  setManualParentSku(products.find(p => ids.includes(p.id))?.sku || '');
+  setShowManualMatch(true);
+  };
 
  const handleConfirmManualMatch = async () => {
  const ids = getSelectedProductIds();
@@ -622,15 +622,14 @@ export default function VariantExceptionScreen() {
  >
  🔗 Otomatik Eşleştir
  </button>
- <button
- onClick={() => {
- setSelectedIds(new Set([product.id]));
- handleManualMatch();
- }}
- className="rounded bg-transparent px-2 py-1 text-[10px] font-medium text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-all"
- >
- ✏️ Manuel Eşleştir
- </button>
+<button
+  onClick={() => {
+  handleManualMatch([product.id]);
+  }}
+  className="rounded bg-transparent px-2 py-1 text-[10px] font-medium text-current hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-all"
+  >
+  ✏️ Manuel Eşleştir
+  </button>
  </div>
  </td>
  </tr>

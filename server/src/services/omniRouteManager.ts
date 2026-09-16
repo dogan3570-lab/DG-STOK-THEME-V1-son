@@ -98,7 +98,7 @@ const OMNIROUTE_BASE = process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128
 let OMNIROUTE_API_KEY = '';
 let apiKeyResolved = false;
 
-async function resolveApiKey(): Promise<string> {
+export async function resolveApiKey(): Promise<string> {
   if (apiKeyResolved) return OMNIROUTE_API_KEY;
   try {
     const { decryptApiKey } = await import('./crypto.ts');
@@ -117,6 +117,9 @@ const MAX_ATTEMPTS_PER_REQUEST = 5;
 const COOLDOWN_BASE_MS = 5 * 60 * 1000;
 const COOLDOWN_MAX_MS = 4 * 60 * 60 * 1000;
 const DISCOVERY_COOLDOWN_MS = 2 * 60 * 1000;
+// Karantina TTL: auth/model hataları kendiliğinden düşer. 'removed_by_omniroute' kalıcıdır.
+// Aksi halde geçmişteki tek bir 401 tüm free havuzunu KALICI kilitler → NO_MODEL.
+const QUARANTINE_TTL_MS = 30 * 60 * 1000;
 
 let discoveryLock = false;
 let lastDiscoveryTimestamp = 0;
@@ -267,6 +270,31 @@ export async function discoverAndPersist(): Promise<{ ok: boolean; freeCount: nu
     const totalCount = apiModels.length;
 
     const registry = await getRegistry();
+
+    // Fix(2): /v1/models auth gerektirir; bu OmniRoute'ta /v1/chat/completions açıkken
+    // /v1/models 401 dönebiliyor. Boş liste "gerçekten silindi" DEMEK DEĞİLDİR.
+    // Eski kod boş listede TÜM modelleri kalıcı 'removed_by_omniroute' işaretliyordu
+    // → manager 137/quarantine, orchestrator 129/healthy çelişkisi.
+    if (apiModels.length === 0) {
+      let healed = 0;
+      for (const m of registry.models) {
+        if (m.quarantineReason) {
+          // Liste alınamadığında hiçbir karantina DOĞRULANAMAZ → tümü temizlenir.
+          m.quarantineReason = null;
+          if (m.health === 'quarantined') m.health = 'unknown';
+          healed++;
+        }
+      }
+      registry.lastDiscoveryError = 'MODEL_LIST_EMPTY: /v1/models boş/erişilemez döndü; kaldırma doğrulanamadı';
+      await saveRegistry(registry);
+      return {
+        ok: false,
+        freeCount: registry.models.filter(m => m.free).length,
+        totalCount: 0,
+        error: `OmniRoute /v1/models boş döndü — kaldırma doğrulanamadı; doğrulanamayan removed işaretleri temizlendi (${healed})`,
+      };
+    }
+
     const existingMap = new Map<string, OmniRouteModelEntry>();
     for (const m of registry.models) {
       existingMap.set(m.id, m);
@@ -287,6 +315,13 @@ export async function discoverAndPersist(): Promise<{ ok: boolean; freeCount: nu
         existing.contextWindow = entry.contextWindow;
         existing.free = entry.free;
         existing.lastCheckedAt = now;
+        // API'de yeniden görünen model karantinadan çıkar (artık "removed" değil).
+        if (existing.quarantineReason === 'removed_by_omniroute') {
+          existing.quarantineReason = null;
+          existing.health = 'unknown';
+          existing.lastError = null;
+          existing.lastErrorCode = null;
+        }
         merged.push(existing);
       } else {
         entry.lastCheckedAt = now;
@@ -326,10 +361,21 @@ export async function discoverAndPersist(): Promise<{ ok: boolean; freeCount: nu
 
 // ==================== MODEL SELECTION ====================
 
+/**
+ * Aktif karantina: 'removed_by_omniroute' kalıcıdır; diğer sebepler (auth/model hatası)
+ * QUARANTINE_TTL_MS sonrası kendiliğinden düşer. Böylece geçici bir hata free havuzunu
+ * kalıcı olarak kilitlemez (eski davranış → selectBestFreeModel NO_MODEL).
+ */
+export function isActivelyQuarantined(m: OmniRouteModelEntry): boolean {
+  if (!m.quarantineReason) return false;
+  if (m.quarantineReason === 'removed_by_omniroute') return true;
+  const ref = m.lastCheckedAt || m.lastUsedAt;
+  if (!ref) return false;
+  return Date.now() - new Date(ref).getTime() < QUARANTINE_TTL_MS;
+}
+
 export function isUsable(m: OmniRouteModelEntry): boolean {
-  if (m.quarantineReason) return false;
-  if (m.health === 'quarantined') return false;
-  return true;
+  return !isActivelyQuarantined(m);
 }
 
 function modelScore(m: OmniRouteModelEntry): number {
@@ -399,6 +445,7 @@ export async function recordModelOutcome(
     model.consecutiveFailures = 0;
     model.lastError = null;
     model.lastErrorCode = null;
+    model.quarantineReason = null; // başarı → karantina düşer (self-heal)
     model.lastLatencyMs = latencyMs ?? null;
   } else {
     model.totalRequests++;
@@ -485,11 +532,33 @@ async function sendToOmniRoute(
       timeout: timeoutMs,
     }, (res: any) => {
       let data = '';
-      res.on('data', (chunk: any) => { data += chunk; });
+      const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+      let totalBytes = 0;
+      let aborted = false;
+      res.on('data', (chunk: any) => {
+        try {
+          totalBytes += chunk.length;
+          if (totalBytes > MAX_RESPONSE_BYTES) {
+            aborted = true;
+            req.destroy();
+            clearTimeout(timer);
+            console.log('[SOMR-03] http RESPONSE_TOO_LARGE ' + totalBytes, new Date().toISOString());
+            return resolve({ ok: false, content: null, model, latencyMs: Date.now() - startTime, error: 'RESPONSE_TOO_LARGE: response exceeds 2MB limit' });
+          }
+          data += chunk;
+        } catch (err: any) {
+          aborted = true;
+          req.destroy();
+          clearTimeout(timer);
+          console.log('[SOMR-03] http DATA_ERROR err=' + (err?.message || 'unknown'), new Date().toISOString());
+          resolve({ ok: false, content: null, model, latencyMs: Date.now() - startTime, error: `DATA_ERROR: ${err?.message || 'read failed'}` });
+        }
+      });
       res.on('end', () => {
+        if (aborted) return;
         clearTimeout(timer);
         const latencyMs = Date.now() - startTime;
-        console.log('[SOMR-02] http DONE status=' + res.statusCode + ' latency=' + latencyMs, new Date().toISOString());
+        console.log('[SOMR-02] http DONE status=' + res.statusCode + ' latency=' + latencyMs + ' bytes=' + totalBytes, new Date().toISOString());
         if (res.statusCode < 200 || res.statusCode >= 300) {
           return resolve({ ok: false, content: null, model, latencyMs, error: `HTTP_${res.statusCode}: ${data.slice(0, 200) || res.statusCode}` });
         }
@@ -499,12 +568,16 @@ async function sendToOmniRoute(
           const usage = parsed?.usage
             ? { prompt_tokens: parsed.usage.prompt_tokens ?? 0, completion_tokens: parsed.usage.completion_tokens ?? 0, total_tokens: parsed.usage.total_tokens ?? 0 }
             : undefined;
-          resolve({ ok: true, content, model, usage, latencyMs });
+          // Fix(visibility): OmniRoute yanıtı GERÇEK sunulan modeli (parsed.model) taşır.
+          // İstenen 'auto/best-free' yerine gerçek modeli raporla (trace/UI gerçeği göstersin).
+          const servedModel = (typeof parsed?.model === 'string' && parsed.model) ? parsed.model : model;
+          resolve({ ok: true, content, model: servedModel, usage, latencyMs });
         } catch (e: any) {
           resolve({ ok: false, content: null, model, latencyMs, error: `PARSE_ERROR: ${e?.message}` });
         }
       });
       res.on('error', (err: any) => {
+        if (aborted) return;
         clearTimeout(timer);
         const latencyMs = Date.now() - startTime;
         console.log('[SOMR-03] http RES_ERROR err=' + err.message, new Date().toISOString());
@@ -594,16 +667,17 @@ export async function testModel(modelId?: string): Promise<{
   error?: string;
   errorCode?: string;
 }> {
-  const targetModel = modelId || (await selectBestFreeModel())?.id;
-  if (!targetModel) {
-    return { ok: false, model: 'none', latencyMs: 0, error: 'Uygun model bulunamadı', errorCode: 'NO_MODEL' };
-  }
+  // Fix: model verilmediyse üretim yolunun gerçek modelini (auto/best-free) test et.
+  // Eski kod selectBestFreeModel() kullanıyordu; sticky karantina yüzünden null dönüp
+  // NO_MODEL veriyordu (üretim auto/best-free ile çalışırken test başarısızdı).
+  const targetModel = modelId || 'auto/best-free';
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (OMNIROUTE_API_KEY) {
-    headers['Authorization'] = `Bearer ${OMNIROUTE_API_KEY}`;
+  const resolvedKey = await resolveApiKey();
+  if (resolvedKey) {
+    headers['Authorization'] = `Bearer ${resolvedKey}`;
   }
 
   try {
@@ -633,9 +707,11 @@ export async function testModel(modelId?: string): Promise<{
 
     await recordModelOutcome(targetModel, ok, ok ? undefined : 'MODEL_TEST_FAILED', ok ? undefined : `Model testi başarısız: ${content.slice(0, 80)}`, latencyMs);
 
+    // Fix(visibility): GERÇEK sunulan modeli raporla (istenen 'auto/best-free' yerine).
+    const servedModel = (typeof data?.model === 'string' && data.model) ? data.model : targetModel;
     return {
       ok,
-      model: targetModel,
+      model: servedModel,
       latencyMs,
       error: ok ? undefined : `Model testi OMNIROUTE_OK döndürmedi: ${content.slice(0, 80)}`,
       errorCode: ok ? undefined : 'MODEL_TEST_FAILED',
@@ -654,9 +730,12 @@ export async function getOmniRouteStatus(): Promise<OmniRouteStatus> {
   const registry = await getRegistry();
 
   const freeModels = registry.models.filter(m => m.free);
-  const healthyCount = freeModels.filter(m => m.health === 'healthy').length;
-  const degradedCount = freeModels.filter(m => m.health === 'degraded').length;
-  const quarantineCount = freeModels.filter(m => m.health === 'quarantined' || m.quarantineReason).length;
+  // Health kararı TEK kaynaktan: isUsable/isActivelyQuarantined (TTL farkındalıklı).
+  // Eski kod kalıcı quarantineReason yüzünden 137/2 gibi çelişkili sayı üretiyordu.
+  const usable = freeModels.filter(m => isUsable(m));
+  const healthyCount = usable.filter(m => m.health === 'healthy').length;
+  const degradedCount = usable.filter(m => m.health === 'degraded' || m.health === 'unknown').length;
+  const quarantineCount = freeModels.filter(m => isActivelyQuarantined(m)).length;
 
   return {
     connected: health.ok,

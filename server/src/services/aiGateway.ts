@@ -71,7 +71,11 @@ const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
     model: '',
   },
   opencode: {
-    baseUrl: 'https://opencode.ai/zen/v1',
+    // Fix(root-cause): OpenCode Zen cloud (opencode.ai/zen) free tier bir OpenCode
+    // CLIENT SESSION gerektirir (400 MissingSessionID) → sunucu tarafı key ile kullanılamaz.
+    // Çalışan yol (terminal OpenCode config'i + free-agent pool) OmniRoute'tur ve
+    // opencode/* modellerini OmniRoute sunar. AI Kontrol Merkezi de aynı çalışan yolu kullanır.
+    baseUrl: (process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128') + '/v1',
     model: 'big-pickle',
   },
   omniroute: {
@@ -556,13 +560,13 @@ function buildCategoryMatchPrompt(
 
   const productList = products.map(p => {
     const cands = candidatesByProduct.get(p.id) || [];
-    const candList = cands.map(c => `    - ID: "${c.id}" | Name: "${c.name}" | Path: "${c.fullPath}"`).join('\n');
+    const candList = cands.map(c => `    - ID: "${c.id}" | Name: "${c.name}" | Path: "${(c.fullPath || '').split(' > ').slice(-2).join(' > ')}"`).join('\n');
     const parts: string[] = [];
     parts.push(`productId: "${p.id}"`);
-    if (p.title) parts.push(`title: "${p.title.substring(0, 150)}"`);
+    if (p.title) parts.push(`title: "${p.title.substring(0, 100)}"`);
     if (p.supplierCategory) parts.push(`supplierCategory: "${p.supplierCategory}"`);
     if (p.xmlBrandName) parts.push(`brand: "${p.xmlBrandName}"`);
-    if (p.description) parts.push(`description: "${p.description.substring(0, 250)}"`);
+    if (p.description) parts.push(`description: "${p.description.substring(0, 150)}"`);
     parts.push(`candidates:\n${candList || '    (no candidates)'}`);
     return `  {\n    ${parts.join(',\n    ')}\n  }`;
   }).join(',\n');
@@ -903,9 +907,10 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
       }, 120000);
 
       const latencyMs = Date.now() - startTime;
-      await incrementRequestCount(provider, true);
 
       const ok = !!result.content && String(result.content).toUpperCase().includes('DEEPSEEK_OK');
+      // Fix: sonucu beklemeden 'connected' işaretlenmesi engellendi (gerçek sonuç kaydedilir).
+      await incrementRequestCount(provider, ok, ok ? undefined : `Model testi DEEPSEEK_OK döndürmedi: ${String(result.content ?? '').slice(0, 80)}`);
       return {
         ok,
         provider,
@@ -919,13 +924,16 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
     if (provider === 'opencode') {
       const result = await callOpenCodeApi(apiKey, model, {
         messages: [{ role: 'user', content: 'Return exactly: OPENCODE_OK' }],
-        max_tokens: 200,
+        // Fix: reasoning modelleri (big-pickle) 256 token altında yanıtı content'e yazmadan
+        // token'ı reasoning'de tüketiyordu (finish_reason=length, content=null) → sahte FAIL.
+        max_tokens: 256,
       }, 120000);
 
       const latencyMs = Date.now() - startTime;
-      await incrementRequestCount(provider, true);
 
       const ok = !!result.content && String(result.content).toUpperCase().includes('OPENCODE_OK');
+      // Fix: sonucu beklemeden 'connected' işaretlenmesi engellendi (gerçek sonuç kaydedilir).
+      await incrementRequestCount(provider, ok, ok ? undefined : `Model testi OPENCODE_OK döndürmedi: ${String(result.content ?? '').slice(0, 80)}`);
       return {
         ok,
         provider,
@@ -936,10 +944,25 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
       };
     }
     if (provider === 'openrouter') {
-      const modelTest = await completeWithFreeModel({
-        messages: [{ role: 'user', content: 'Return exactly: OPENROUTER_TEST_OK' }],
-        max_tokens: 20,
-      });
+      // Fix: OpenRouter testi GERÇEKTEN OpenRouter'ı çağırır.
+      // Eski kod completeWithFreeModel (OmniRoute) kullanıyordu → model 'auto/best-free'
+      // dönüp yanlış provider raporlanıyordu (gerçek OpenRouter hiç çağrılmıyordu).
+      const orModel = configuredModel && configuredModel !== 'default' ? configuredModel : 'openrouter/free';
+      let orContent: string | null = null;
+      try {
+        const r = await callOpenRouterApi(apiKey, orModel, {
+          messages: [{ role: 'user', content: 'Return exactly: OPENROUTER_TEST_OK' }],
+          // Fix: 20 token free reasoning modellerinde reasoning'de tükeniyordu →
+          // content boş + finish_reason 'length' → sahte FAIL. 128 ile gerçek yanıt gelir.
+          max_tokens: 128,
+          temperature: 0,
+        }, 120000);
+        orContent = r.content;
+      } catch (err: any) {
+        const classified = classifyError(err);
+        await incrementRequestCount(provider, false, classified.errorMsg);
+        return { ok: false, provider, model: orModel, latencyMs: Date.now() - startTime, error: classified.errorMsg, errorCode: classified.errorCode };
+      }
 
       const latencyMs = Date.now() - startTime;
 
@@ -949,20 +972,17 @@ export async function testProvider(provider: string, modelOverride?: string): Pr
         catalogModels = (await getOrRegistry()).models.length;
       } catch { /* katalog okunamadıysa 0 kalır */ }
 
-      const ok = modelTest.ok && !!modelTest.content && String(modelTest.content).toUpperCase().includes('OPENROUTER_TEST_OK');
-      // FIX(RT-ACC): Başarısız test artık provider'ı 'connected' işaretlemiyor.
-      // Eski kod sonucu beklemeden incrementRequestCount(provider, true) çağırıyordu
-      // → UI "Bağlı" gösterirken gerçekte test başarısızdı.
-      await incrementRequestCount(provider, ok, ok ? undefined : (modelTest.error || 'Model testi başarısız'));
+      const ok = !!orContent && String(orContent).toUpperCase().includes('OPENROUTER_TEST_OK');
+      await incrementRequestCount(provider, ok, ok ? undefined : 'Model testi OPENROUTER_TEST_OK döndürmedi');
 
       return {
         ok,
         provider,
-        model: modelTest.ok ? modelTest.model : '(model yok)',
+        model: orModel,
         latencyMs,
         catalogModels,
-        error: ok ? undefined : `Model testi başarısız: ${modelTest.error || 'OPENROUTER_TEST_OK döndürülmedi'}`,
-        errorCode: ok ? undefined : modelTest.errorCode || 'MODEL_TEST_FAILED',
+        error: ok ? undefined : `Model testi başarısız: ${String(orContent ?? '').slice(0, 80)}`,
+        errorCode: ok ? undefined : 'MODEL_TEST_FAILED',
       };
     }
 

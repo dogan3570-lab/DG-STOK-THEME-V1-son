@@ -398,6 +398,7 @@ export function validateProduct(
     categoryMatch: boolean;
     brandMatch: boolean;
     variantMatch: boolean;
+    variantStatus?: string | null;
     variants?: { name: string; value: string }[];
     commissionRate?: number | null;
     vatRate?: number | null;
@@ -492,7 +493,9 @@ export function validateProduct(
   }
 
   if (config.checkVariantMatch) {
-    checks.push({ field: 'variant', label: 'Varyant eşleşmiş', passed: product.variantMatch || variants.length > 0, message: product.variantMatch ? 'Eşleşmiş' : 'Eşleşmemiş', severity: 'warning' });
+    // readiness.ts ile birebir: NOT_REQUIRED (varyantsız) ürün varyant eşleşmiş sayılır.
+    const variantOk = product.variantMatch === true || product.variantStatus === 'NOT_REQUIRED' || variants.length > 0;
+    checks.push({ field: 'variant', label: 'Varyant eşleşmiş', passed: variantOk, message: variantOk ? 'Eşleşmiş' : 'Eşleşmemiş', severity: 'warning' });
   }
 
   if (config.checkCommissionRate) {

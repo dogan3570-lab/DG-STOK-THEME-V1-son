@@ -34,8 +34,33 @@ export async function discoverOpenCodeModels(forceRefresh: boolean = false): Pro
   if (!forceRefresh && cachedModels.length > 0) {
     return cachedModels;
   }
-  // Stub: return empty array
-  cachedModels = [];
+  // Fix(root-cause): stub yerine GERÇEK discovery — OpenCode free modelleri OmniRoute
+  // registry'sinde 'opencode/*' ve 'oc/*' ön ekleriyle listelenir.
+  try {
+    const { getRegistry } = await import('./omniRouteManager.ts');
+    const registry = await getRegistry();
+    cachedModels = registry.models
+      .filter((m) => m.free && (m.id.startsWith('opencode/') || m.id.startsWith('oc/')))
+      .map((m) => ({
+        modelId: m.id,
+        displayName: m.name,
+        provider: 'opencode',
+        active: true,
+        health: m.health,
+        freeStatus: 'free',
+        totalRequests: m.totalRequests,
+        successfulRequests: m.successfulRequests,
+        failedRequests: m.failedRequests,
+        lastUsedAt: m.lastUsedAt,
+        lastCheckedAt: m.lastCheckedAt,
+        lastError: m.lastError,
+        lastErrorCode: m.lastErrorCode,
+        lastLatencyMs: m.lastLatencyMs,
+        consecutiveFailures: m.consecutiveFailures,
+      }));
+  } catch {
+    cachedModels = [];
+  }
   return cachedModels;
 }
 

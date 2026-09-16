@@ -294,6 +294,7 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
         SUM(CASE WHEN status = 'READY' AND categoryMatch = 1 AND brandMatch = 1 AND templateMatch = 1 AND (variantMatch = 1 OR variantStatus = 'NOT_REQUIRED') THEN 1 ELSE 0 END) as "readyCount",
         SUM(CASE WHEN status != 'READY' AND categoryMatch = 1 AND brandMatch = 1 AND templateMatch = 1 AND (variantMatch = 1 OR variantStatus = 'NOT_REQUIRED') THEN 1 ELSE 0 END) as "waitingCount",
         SUM(CASE WHEN status = 'ERROR' OR categoryMatch = 0 OR brandMatch = 0 OR templateMatch = 0 OR (variantMatch = 0 AND variantStatus != 'NOT_REQUIRED') THEN 1 ELSE 0 END) as "blockedCount",
+        SUM(CASE WHEN categoryMatch = 1 THEN 1 ELSE 0 END) as "categoryMatched",
         SUM(CASE WHEN categoryMatch = 0 THEN 1 ELSE 0 END) as "missingCategory",
         SUM(CASE WHEN brandMatch = 0 THEN 1 ELSE 0 END) as "missingBrand",
         SUM(CASE WHEN variantMatch = 0 AND variantStatus != 'NOT_REQUIRED' THEN 1 ELSE 0 END) as "missingVariant",
@@ -359,6 +360,7 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
       waitingCount,
       blockedCount,
       notReadyCount: waitingCount + blockedCount, // backward compat
+      categoryMatched: Number((row as any)?.categoryMatched ?? 0), // F1: gerçek kategori eşleşen (hardcode yok)
       missingCategory: Number((row as any)?.missingCategory ?? 0),
       missingBrand: Number((row as any)?.missingBrand ?? 0),
       missingVariant: Number((row as any)?.missingVariant ?? 0),

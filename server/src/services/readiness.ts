@@ -15,7 +15,8 @@ const COLORS = new Set([
   'pink', 'gray', 'grey', 'brown', 'beige', 'navy', 'silver', 'gold', 'cream',
   'siyah', 'beyaz', 'kirmizi', 'mavi', 'yesil', 'sari', 'mor', 'turuncu',
   'pembe', 'lacivert', 'bordo', 'bej', 'kahverengi', 'krem', 'gri', 'altin',
-  'gumus', 'metalik', 'fume',
+  'gumus', 'gümüş', 'metalik', 'fume',
+  'mint', 'taba', 'visne', 'kahve', 'haki', 'kiremit',
 ]);
 
 const COLOR_LABEL: Record<string, string> = {
@@ -25,7 +26,9 @@ const COLOR_LABEL: Record<string, string> = {
   gold: 'Altin', cream: 'Krem', siyah: 'Siyah', beyaz: 'Beyaz', kirmizi: 'Kirmizi',
   mavi: 'Mavi', yesil: 'Yesil', sari: 'Sari', mor: 'Mor', turuncu: 'Turuncu',
   pembe: 'Pembe', lacivert: 'Lacivert', bordo: 'Bordo', bej: 'Bej', kahverengi: 'Kahverengi',
-  krem: 'Krem', gri: 'Gri', altin: 'Altin', gumus: 'Gumus', metalik: 'Gri', fume: 'Gri',
+  krem: 'Krem', gri: 'Gri', altin: 'Altin', gumus: 'Gümüş', gümüş: 'Gümüş',
+  metalik: 'Gri', fume: 'Gri', mint: 'Mint', taba: 'Taba', visne: 'Vişne',
+  kahve: 'Kahve', haki: 'Haki', kiremit: 'Kiremit',
 };
 
 const SIZES = new Set([
@@ -86,6 +89,34 @@ export function detectVariantAttributes(text: string): DetectedVariant[] {
     const colorParts = parts.filter(p => COLORS.has(p));
     if (colorParts.length >= 2) {
       found.push({ name: 'Renk', value: COLOR_LABEL[colorParts[0]] || colorParts[0] });
+      return found;
+    }
+  }
+
+  // 4) Slash-separated color pairs: "Renk1 /Renk2" or "Renk1/Renk2"
+  if (text.includes('/')) {
+    const slashParts = text.split(/\s*\/\s*/).map(p => p.trim().toLowerCase()).filter(Boolean);
+    const slashColors = slashParts.filter(p => COLORS.has(p));
+    if (slashColors.length >= 2) {
+      found.push({ name: 'Renk', value: COLOR_LABEL[slashColors[0]] || slashColors[0] });
+      return found;
+    }
+  }
+
+  // 5) Color + Size anywhere in title: 2+ color tokens AND 1+ size token
+  const colorTokens = tokens.filter(t => COLORS.has(t));
+  const sizeTokens = tokens.filter(t => SIZES.has(t));
+  if (colorTokens.length >= 2 && sizeTokens.length >= 1) {
+    found.push({ name: 'Renk', value: COLOR_LABEL[colorTokens[0]] || colorTokens[0] });
+    found.push({ name: 'Beden', value: sizeTokens[0].toUpperCase() });
+    return found;
+  }
+
+  // 6) Multiple distinct colors in title (no size needed): "Kirmizi Beyaz", "Mavi ve Mor"
+  if (colorTokens.length >= 2) {
+    const distinct = [...new Set(colorTokens)];
+    if (distinct.length >= 2) {
+      found.push({ name: 'Renk', value: COLOR_LABEL[distinct[0]] || distinct[0] });
       return found;
     }
   }

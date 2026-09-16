@@ -168,69 +168,43 @@ export function matchVariantToTrendyolAttribute(
 export function resolveTrendyolAttributes(
   attrs: TrendyolAttributeDef[],
   valuesByAttribute: Map<number, TrendyolAttributeValueDef[]>,
-  variants: XmlVariant[]
+  variants: XmlVariant[],
+  persistedAttributes: TrendyolPayloadAttribute[] = []
 ): TrendyolAttributeResolution {
   if (!Array.isArray(attrs) || attrs.length === 0) {
     // Kategori attribute response'u yoksa doğrulama YAPILAMAZ (fail-closed).
     return { status: 'VARIANT_ATTRIBUTE_NOT_FOUND', attributes: [], resolved: [], missing: [{ xmlVariantName: '', xmlVariantValue: '', reason: 'KATEGORI_ATTRIBUTE_YOK' }], requiredMissing: [] };
   }
 
+  const persisted = Array.isArray(persistedAttributes) ? persistedAttributes : [];
+  const persistedIds = new Set<number>(persisted.map((p) => p.attributeId));
+
   const variantList = Array.isArray(variants) ? variants : [];
   if (variantList.length === 0) {
-    // Varyant yok: gerekli varianter attribute var mı?
-    const requiredVarianter = attrs.filter((a) => a.varianter && (a.required || a.slicer));
-    if (requiredVarianter.length > 0) {
-      return {
-        status: 'REQUIRED_ATTRIBUTE_MISSING',
-        attributes: [],
-        resolved: [],
-        missing: [],
-        requiredMissing: requiredVarianter.map((a) => ({ attributeId: a.attribute.id, attributeName: a.attribute.name })),
-      };
+    // Varyant yok: zorunlu (required) attribute varsa EKSİK kabul edilir (fail-closed).
+    // KALICI Trendyol kayıtları (persistedAttributes) ile karşılananlar eksik SAYILMAZ.
+    const requiredMissing = attrs
+      .filter((a) => a.required && !persistedIds.has(a.attribute.id))
+      .map((a) => ({ attributeId: a.attribute.id, attributeName: a.attribute.name }));
+    if (requiredMissing.length > 0) {
+      return { status: 'REQUIRED_ATTRIBUTE_MISSING', attributes: persisted, resolved: [], missing: [], requiredMissing };
     }
-    return emptyResolution();
+    if (persisted.length === 0) return emptyResolution();
+    return { status: 'OK', attributes: persisted, resolved: [], missing: [], requiredMissing: [] };
   }
 
   const resolved: ResolvedTrendyolAttribute[] = [];
   const missing: TrendyolAttributeResolution['missing'] = [];
-  const usedAttrIds = new Set<number>();
-  const targetedAttrIds = new Set<number>();
-
-  const variantTargetsAttr = (variantNameNorm: string, attrNameNorm: string): boolean => {
-    if (variantNameNorm === attrNameNorm) return true;
-    if (variantNameNorm.length >= 3 && attrNameNorm.includes(variantNameNorm)) return true;
-    if (attrNameNorm.length >= 3 && variantNameNorm.includes(attrNameNorm)) return true;
-    return false;
-  };
 
   for (const variant of variantList) {
-    const nameNorm = normalizeName(variant.name);
-    for (const attr of attrs) {
-      if (variantTargetsAttr(nameNorm, normalizeName(attr.attribute.name))) {
-        targetedAttrIds.add(attr.attribute.id);
-      }
-    }
-
     const r = matchVariantToTrendyolAttribute(variant, attrs, valuesByAttribute);
     resolved.push(r);
-    if (r.status === 'MATCHED' && r.attributeId !== null) {
-      usedAttrIds.add(r.attributeId);
-    } else if (r.status === 'INVALID_VALUE') {
+    if (r.status === 'INVALID_VALUE') {
       missing.push({ xmlVariantName: variant.name, xmlVariantValue: variant.value, reason: 'INVALID_VALUE (AKYI/bozuk değer)' });
     } else if (r.status === 'AMBIGUOUS') {
       missing.push({ xmlVariantName: variant.name, xmlVariantValue: variant.value, reason: 'AMBIGUOUS (birden fazla aday)' });
-    } else {
+    } else if (r.status === 'NOT_FOUND') {
       missing.push({ xmlVariantName: variant.name, xmlVariantValue: variant.value, reason: 'NOT_FOUND (whitelist değer yok)' });
-    }
-  }
-
-  // Gerekli varianter/slicer attribute: hiçbir XML varyantı onu hedeflemiyorsa EKSİK.
-  const requiredMissing: TrendyolAttributeResolution['requiredMissing'] = [];
-  for (const attr of attrs) {
-    if (attr.varianter && (attr.required || attr.slicer)) {
-      if (!targetedAttrIds.has(attr.attribute.id) && !usedAttrIds.has(attr.attribute.id)) {
-        requiredMissing.push({ attributeId: attr.attribute.id, attributeName: attr.attribute.name });
-      }
     }
   }
 
@@ -242,6 +216,23 @@ export function resolveTrendyolAttributes(
       }
       return { attributeId: r.attributeId as number, attributeValue: r.attributeValue ?? undefined };
     });
+
+  // Zorunlu (required) attribute'ların TAMAMI payload'da bulunmalıdır — yalnızca
+  // varianter olanlar değil. Aksi halde Trendyol batch'i FAILED döner (fail-closed).
+  const presentAttrIds = new Set<number>(payloadAttributes.map((a) => a.attributeId));
+  // KALICI Trendyol kayıtlarını payload'a ekle (aynı attributeId zaten varsa dokunma).
+  for (const p of persisted) {
+    if (!presentAttrIds.has(p.attributeId)) {
+      payloadAttributes.push(p);
+      presentAttrIds.add(p.attributeId);
+    }
+  }
+  const requiredMissing: TrendyolAttributeResolution['requiredMissing'] = [];
+  for (const attr of attrs) {
+    if (attr.required && !presentAttrIds.has(attr.attribute.id)) {
+      requiredMissing.push({ attributeId: attr.attribute.id, attributeName: attr.attribute.name });
+    }
+  }
 
   // Değer düzeyinde hata varsa VARIANT_ATTRIBUTE_NOT_FOUND önceliklidir;
   // yalnızca "attribute hiç hedeflenmemişse" REQUIRED_ATTRIBUTE_MISSING denir.

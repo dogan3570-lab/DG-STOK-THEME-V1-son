@@ -159,7 +159,17 @@ export async function evaluateTrendyolSendGate(input: EvaluateSendGateInput): Pr
     valuesByAttribute.set(attr.attribute.id, values);
   }
   const variants = product.variants.map((v) => ({ name: v.name, value: v.value }));
-  const resolution = resolveTrendyolAttributes(attrDefs, valuesByAttribute, variants);
+  // KALICI Trendyol varsayılan attribute kayıtları (yalnızca bu ürün + bu kategori).
+  const persistedRows = await prisma.trendyolProductAttribute.findMany({
+    where: { productId: input.productId, marketplaceKey: 'tt', categoryExternalId: categoryId },
+    select: { attributeId: true, attributeValueId: true, attributeValue: true },
+  });
+  const persistedAttributes: TrendyolPayloadAttribute[] = persistedRows.map((r) =>
+    r.attributeValueId !== null
+      ? { attributeId: r.attributeId, attributeValueIds: [r.attributeValueId] }
+      : { attributeId: r.attributeId, attributeValue: r.attributeValue ?? undefined }
+  );
+  const resolution = resolveTrendyolAttributes(attrDefs, valuesByAttribute, variants, persistedAttributes);
   if (resolution.status === 'REQUIRED_ATTRIBUTE_MISSING') {
     const names = resolution.requiredMissing.map((m) => m.attributeName).join(', ');
     return failedResult('REQUIRED_ATTRIBUTE_MISSING', `Zorunlu Trendyol özellikleri eksik: ${names || 'bilinmiyor'}`, {

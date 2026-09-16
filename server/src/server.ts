@@ -162,19 +162,11 @@ app.get('/api/health', (_req, res) => {
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) return res.status(401).json({ ok: false, error: 'invalid_credentials' });
 
-    const usesDefaultPassword = await bcrypt.compare('admin123', user.password);
-
     let prefs: Record<string, unknown> = {};
     try { prefs = JSON.parse(user.preferences || '{}'); } catch { prefs = {}; }
 
-    // Bilinen default parola tespit edilirse kalıcı zorunlu değişim bayrağı işlenir.
-    if (usesDefaultPassword && !prefs.mustChangePassword) {
-      prefs.mustChangePassword = true;
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { preferences: JSON.stringify(prefs) },
-      });
-    }
+    // FIX: "admin123" artık varsayılan/zorunlu-değişim parolası olarak işaretlenmez.
+    // mustChangePassword yalnızca kullanıcının mevcut tercihinden türetilir.
 
     const token = jwt.sign(
       { role: user.role, sub: user.id },
@@ -193,7 +185,7 @@ app.get('/api/health', (_req, res) => {
     return res.json({
       ok: true,
       token,
-      mustChangePassword: usesDefaultPassword || !!prefs.mustChangePassword,
+      mustChangePassword: !!prefs.mustChangePassword,
       user: { id: user.id, email: user.email, role: user.role },
     });
   });

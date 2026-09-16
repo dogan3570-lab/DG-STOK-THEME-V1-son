@@ -600,6 +600,33 @@ function CategoryPickerModal({ group, bulkGroups, marketplaces, onClose, onDone 
  const [expanded, setExpanded] = useState<Set<string>>(new Set());
  const [search, setSearch] = useState('');
  const [saving, setSaving] = useState(false);
+ const [mpAttrs, setMpAttrs] = useState<Array<{ attributeName: string; attributeValue: string | null; source: string; productCount: number }>>([]);
+ const [mpAttrSupported, setMpAttrSupported] = useState(true);
+ const [mpLearnedCount, setMpLearnedCount] = useState(0);
+
+ const activeMpKey = marketplaces.find(m=>m.id===activeMpId)?.key;
+ const targetProductKey = targetGroups.map(g=>g.productIds.join(',')).join('|');
+
+ // Seçili pazaryerinin GERÇEK kalıcı attribute kayıtları + öğrenilmiş mapping'leri.
+ // İzolasyon: yalnızca seçili pazaryerinin kayıtları döner (HB/N11/Trendyol ayrı).
+ useEffect(() => {
+   const ids = targetGroups.flatMap(g=>g.productIds);
+   if (!activeMpId || ids.length === 0) { setMpAttrs([]); setMpLearnedCount(0); return; }
+   const params = new URLSearchParams({ productIds: ids.join(','), marketplaceId: activeMpId });
+   apiFetch<{ ok: boolean; supported?: boolean; items: Array<{ attributeName: string; attributeValue: string | null; source: string }>; learnedMappings?: unknown[] }>(`/categories/attributes?${params}`)
+     .then(r => {
+       if (!r.ok || !r.data) return;
+       setMpAttrSupported(r.data.supported !== false);
+       const agg = new Map<string, { attributeName: string; attributeValue: string | null; source: string; productCount: number }>();
+       for (const it of r.data.items || []) {
+         const k = `${it.attributeName}|${it.attributeValue ?? ''}|${it.source}`;
+         const cur = agg.get(k);
+         if (cur) cur.productCount++; else agg.set(k, { attributeName: it.attributeName, attributeValue: it.attributeValue, source: it.source, productCount: 1 });
+       }
+       setMpAttrs([...agg.values()]);
+       setMpLearnedCount((r.data.learnedMappings || []).length);
+     }).catch(()=>{ /* okuma hatası UI'yı bozmaz */ });
+ }, [activeMpId, targetProductKey]);
 
  useEffect(() => { if (marketplaces.length>0 && !activeMpId) setActiveMpId(marketplaces[0].id); }, [marketplaces, activeMpId]);
  useEffect(() => {
@@ -655,6 +682,25 @@ function CategoryPickerModal({ group, bulkGroups, marketplaces, onClose, onDone 
  <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder={`${activeMpName} kategorilerinde ara...`} className="input-theme mt-3 w-full py-2 text-xs" />
  </div>
  <div className="flex-1 space-y-0.5 overflow-y-auto p-3">{treeLoading?<div className="flex items-center justify-center gap-2 py-10 text-slate-500"><span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-primary"/><span className="text-xs">Kategoriler yukleniyor...</span></div>:filteredTree.length===0?<div className="py-10 text-center text-xs text-slate-500">Kategori bulunamadi</div>:renderTree(filteredTree)}</div>
+ {(
+  <div className="border-t border-slate-100 dark:border-slate-800/60 px-5 py-3">
+   <div className="mb-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-200">🔖 {activeMpName} Kalıcı Özellikleri (gerçek kayıt + öğrenme)</div>
+   {!mpAttrSupported ? (
+    <div className="text-[11px] text-amber-600 dark:text-amber-400">Bu pazaryeri için gerçek attribute kataloğu henüz entegre değil (uydurma yapılmaz).</div>
+   ) : mpAttrs.length > 0 ? (
+    <div className="flex flex-wrap gap-1.5">
+     {mpAttrs.map((a,i)=>(
+      <span key={i} className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+       <b>{a.attributeName}:</b> {a.attributeValue} <span className="text-[9px] opacity-70">[{a.source}]</span> <span className="text-[9px] text-current">({a.productCount} ürün)</span>
+      </span>
+     ))}
+    </div>
+   ) : (
+    <div className="text-[11px] text-slate-500 dark:text-slate-400">Bu ürünler için henüz kalıcı özellik kaydedilmedi (kategori eşleştirilince otomatik yazılır).</div>
+   )}
+   {mpLearnedCount > 0 && <div className="mt-1 text-[10px] text-slate-400">🧠 Öğrenilmiş mapping: {mpLearnedCount} (bu pazaryerine özel)</div>}
+  </div>
+ )}
  <div className="flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800/60 px-5 py-3.5"><div className="min-w-0 text-xs text-slate-600 dark:text-slate-400">{selectedCatId?<>Secili: <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedCatName}</span></>:'Agactan bir kategori secin'}</div><div className="flex shrink-0 gap-2"><button type="button" onClick={onClose} className="btn-secondary px-4 py-2 text-xs">Vazgec</button><button type="button" onClick={handleConfirm} disabled={!selectedCatId||saving} className="btn-primary px-4 py-2 text-xs disabled:opacity-50">{saving?'Eslestiriliyor...':`✓ Eslestir${isBulk?` (${targetGroups.length})`:''}`}</button></div></div>
  </div>
  </div>

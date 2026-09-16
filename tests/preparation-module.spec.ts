@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 
-const BASE_URL = 'http://localhost:5175';
+const BASE_URL = 'http://localhost:4000';
 
 test.describe('Ürün Hazırlama ve Gönderime Hazır Modülü Testleri', () => {
 
