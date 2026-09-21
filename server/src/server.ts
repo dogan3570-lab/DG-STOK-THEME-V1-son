@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { prisma } from './db/prisma.ts';
 import { env } from './env.ts';
 import { router } from './routes/index.ts';
+import { PROFIT_V2_PAGE } from './profitV2/uiHtml.ts';
 import { ensureDefaultAdminUser, seedDefaultMarketplaces, seedDefaultAIProviders, ensureDefaultListingTemplates, migrateMarketplaceCredentials, migrateAiProviderKeys } from './bootstrap.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -317,7 +318,7 @@ app.get('/api/health', (_req, res) => {
 
   // Frontend (vanilla JS) calls endpoints WITHOUT /api prefix (e.g. /xml-sources, /categories).
   // Rewrite URL internally so POST/PUT/DELETE also work correctly.
-  const frontendPaths = ['/products', '/xml-sources', '/categories', '/brands', '/variants', '/listings', '/listing-v2', '/ready-to-ship', '/orders', '/marketplace-manage', '/marketplace-send', '/ai-settings', '/stock-automation', '/dashboard', '/settings', '/marketplaces', '/auth', '/notifications', '/nav-badges', '/reports', '/category-engine', '/category-core-v2', '/trendyol-mapping', '/finance', '/users', '/audit-logs'];
+  const frontendPaths = ['/products', '/xml-sources', '/categories', '/brands', '/variants', '/listings', '/listing-v2', '/ready-to-ship', '/orders', '/marketplace-manage', '/marketplace-send', '/ai-settings', '/stock-automation', '/dashboard', '/settings', '/marketplaces', '/auth', '/notifications', '/nav-badges', '/reports', '/category-engine', '/category-core-v2', '/trendyol-mapping', '/finance', '/profit-engine', '/users', '/audit-logs', '/missing-fields'];
   app.use((req, res, next) => {
     for (const p of frontendPaths) {
       if (req.path === p || req.path.startsWith(p + '/')) {
@@ -355,6 +356,12 @@ app.get('/api/health', (_req, res) => {
     app.use('/api/*', (_req, res) => {
       res.status(404).json({ error: 'API endpoint not found' });
     });
+
+// Profit-V2 (Kâr/Zarar) — serve SPA index.html; client-side will render ProfitEngine
+     app.get(['/profit-v2', '/profit-v2/'], (_req, res) => {
+       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+       res.sendFile(path.join(webDistPath, 'index.html'));
+     });
 
     app.get('*', (_req, res) => {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');

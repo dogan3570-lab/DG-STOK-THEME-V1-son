@@ -505,6 +505,7 @@ async function sendToOmniRoute(
   request: { messages: { role: string; content: string }[]; temperature?: number; max_tokens?: number; response_format?: { type: string } },
   headers: Record<string, string>,
   timeoutMs: number,
+  abortSignal?: AbortSignal,
 ): Promise<{ ok: boolean; content: string | null; model: string; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; latencyMs: number; error?: string }> {
   const body: any = {
     model,
@@ -531,6 +532,19 @@ async function sendToOmniRoute(
       headers: { ...headers, 'Content-Length': Buffer.byteLength(bodyStr) },
       timeout: timeoutMs,
     }, (res: any) => {
+      // AbortSignal handling
+      if (abortSignal) {
+        if (abortSignal.aborted) {
+          req.destroy();
+          clearTimeout(timer);
+          return resolve({ ok: false, content: null, model, latencyMs: Date.now() - startTime, error: 'ABORTED' });
+        }
+        abortSignal.addEventListener('abort', () => {
+          req.destroy();
+          clearTimeout(timer);
+          resolve({ ok: false, content: null, model, latencyMs: Date.now() - startTime, error: 'ABORTED' });
+        });
+      }
       let data = '';
       const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
       let totalBytes = 0;

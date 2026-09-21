@@ -18,6 +18,7 @@ const MENU_ITEMS = [
   { key: 'ai-image', label: 'AI Görsel', icon: '🖼️' },
   { key: 'ai-sales', label: 'AI Satış', icon: '💰' },
   { key: 'copilot', label: 'AI Copilot', icon: '🤖' },
+  { key: 'kar-zarar', label: 'Kâr/Zarar Motoru', icon: '📈' },
   { key: 'pazaryeri', label: 'Pazaryeri', icon: '🛒' },
   { key: 'siparis', label: 'Siparişler', icon: '📑' },
   { key: 'rapor', label: 'Raporlar', icon: '📊' },

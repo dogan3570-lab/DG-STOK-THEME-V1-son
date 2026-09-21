@@ -20,10 +20,11 @@ import AIImageCenter from './pages/AIImageCenter';
 import AISalesCenter from './pages/AISalesCenter';
 import AICopilot from './pages/AICopilot';
 import AIControlCenter from './pages/AIControlCenter';
+import ProfitEngine from './pages/ProfitEngine';
 import { MarketplaceProvider } from './context/MarketplaceContext';
 import ToastContainer from './components/ui/Toast';
 
-type PageKey = 'kontrol' | 'xml' | 'urunhavuzu' | 'urunhazirlama' | 'urunhazirlama-kategori' | 'urunhazirlama-marka' | 'urunhazirlama-varyant' | 'urunhazirlama-listeleme' | 'gonderimehazir' | 'pazaryeri' | 'siparis' | 'rapor' | 'ayar' | 'varyant' | 'ai-image' | 'ai-sales' | 'copilot' | 'musteriler' | 'ai-kontrol' | 'automation';
+type PageKey = 'kontrol' | 'xml' | 'urunhavuzu' | 'urunhazirlama' | 'urunhazirlama-kategori' | 'urunhazirlama-marka' | 'urunhazirlama-varyant' | 'urunhazirlama-listeleme' | 'gonderimehazir' | 'pazaryeri' | 'siparis' | 'rapor' | 'ayar' | 'varyant' | 'ai-image' | 'ai-sales' | 'copilot' | 'musteriler' | 'ai-kontrol' | 'automation' | 'kar-zarar';
 
 const MENU_ITEMS: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: 'kontrol', label: 'Kontrol Paneli', icon: '📊' },
@@ -36,6 +37,7 @@ const MENU_ITEMS: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: 'ai-image', label: 'AI Görsel Merkezi', icon: '🖼️' },
   { key: 'ai-sales', label: 'AI Satış Asistanı', icon: '💰' },
   { key: 'copilot', label: 'AI Copilot', icon: '🤖' },
+  { key: 'kar-zarar', label: 'Kâr/Zarar Motoru', icon: '📈' },
   { key: 'pazaryeri', label: 'Pazaryeri Yönetimi', icon: '🛒' },
   { key: 'siparis', label: 'Siparişler', icon: '📑' },
   { key: 'rapor', label: 'Raporlar', icon: '📊' },
@@ -76,14 +78,21 @@ export default function App() {
     }
   }, []);
 
-  React.useEffect(() => {
-    const onNavigate = (e: Event) => {
-      const key = (e as CustomEvent<string>).detail;
-      if (typeof key === 'string' && key) setActivePage(key);
-    };
-    window.addEventListener('dgstok:navigate', onNavigate);
-    return () => window.removeEventListener('dgstok:navigate', onNavigate);
-  }, []);
+React.useEffect(() => {
+     const onNavigate = (e: Event) => {
+       const key = (e as CustomEvent<string>).detail;
+       if (typeof key === 'string' && key) setActivePage(key);
+     };
+     window.addEventListener('dgstok:navigate', onNavigate);
+     return () => window.removeEventListener('dgstok:navigate', onNavigate);
+   }, []);
+
+   // Sync URL profit-v2 route to kar-zarar page
+   React.useEffect(() => {
+     if (window.location.pathname.includes('/profit-v2')) {
+       setActivePage('kar-zarar');
+     }
+   }, [window.location.pathname]);
 
   const handleLoginSuccess = (role: string, user: any) => {
     setAuth({ loggedIn: true, role, user });
@@ -126,6 +135,8 @@ export default function App() {
       rapor: 'Raporlar',
       ayar: 'Ayarlar',
       musteriler: 'Müşteri Yönetimi',
+      automation: 'Stok Otomasyonu',
+      'kar-zarar': 'Kâr/Zarar Motoru',
     };
     return titles[activePage] || 'Kontrol Paneli';
   };
@@ -152,6 +163,7 @@ export default function App() {
       case 'ayar': return <Settings />;
       case 'musteriler': return <SaasCustomers />;
       case 'automation': return <Automation />;
+      case 'kar-zarar': return <ProfitEngine />;
       default: return <Dashboard />;
     }
   };

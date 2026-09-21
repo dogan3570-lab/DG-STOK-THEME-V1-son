@@ -15,6 +15,7 @@ import { getMarketplaceAttributeCatalog } from '../services/marketplaceAttribute
 import { invalidateProductsStatsCache } from './products.ts';
 import { learnFromVerifiedDecision } from '../services/categoryKnowledgeV2.ts';
 import { deriveState, isAiEligible, computeEligibility, type ProductState } from '../services/categoryStateMachine.ts';
+import { invalidateMissingFieldsCache, getBlockedProductIdsSafe } from '../services/missingFieldsService.ts';
 import {
   classifyProviderError,
   classifyAiDecision,
@@ -293,26 +294,19 @@ router.get('/tree', requireAuth, async (req: Request, res: Response) => {
             node = {
               id: isLeaf ? leaf.id : `virtual:${path}`,
               name: seg,
-              externalId: isLeaf ? leaf.externalId : null,
               parentId: isLeaf ? leaf.parentId : null,
               productCount: isLeaf ? leaf._count.products : 0,
               children: [],
-              virtual: !isLeaf,
             };
             if (isLeaf) {
-              node.createdAt = leaf.createdAt;
-              node.updatedAt = leaf.updatedAt;
+              node.parentId = leaf.parentId;
             }
             indexByPath.set(path, node);
             current.push(node);
           } else if (isLeaf) {
             node.id = leaf.id;
-            node.externalId = leaf.externalId;
             node.parentId = leaf.parentId;
             node.productCount = leaf._count.products;
-            node.virtual = false;
-            node.createdAt = leaf.createdAt;
-            node.updatedAt = leaf.updatedAt;
           }
           current = node.children;
         }
@@ -338,12 +332,9 @@ router.get('/tree', requireAuth, async (req: Request, res: Response) => {
       const toNode = (c: any): any => ({
         id: c.id,
         name: c.name,
-        externalId: c.externalId,
         parentId: c.parentId,
         productCount: c._count?.products ?? 0,
         children: (childMap.get(c.id) || []).map(toNode),
-        createdAt: c.createdAt,
-        updatedAt: c.updatedAt,
       });
 
       const dashIds = new Set(categories.filter(c => !c.parentId && c.name.includes('>>>')).map(c => c.id));
@@ -358,7 +349,10 @@ router.get('/tree', requireAuth, async (req: Request, res: Response) => {
       return roots;
     }
 
-    const payload = { items: buildCategoryTree(allCategories), flat: allCategories };
+    // PAYLOAD SADELEŞTİRME: flat yalnızca UI'ın kullandığı {id,name,parentId} taşır
+    // (tam kategori satırı + _count + timestamp gereksizdi). Tree düğümlerinden
+    // externalId/createdAt/updatedAt/virtual çıkarıldı (UI kullanmıyor).
+    const payload = { items: buildCategoryTree(allCategories), flat: allCategories.map((c) => ({ id: c.id, name: c.name, parentId: c.parentId })) };
     if (!search) {
       _treeRouteCache.payload = payload;
       _treeRouteCache.json = JSON.stringify(payload);
@@ -1250,11 +1244,19 @@ router.get('/products', requireAuth, async (req: Request, res: Response) => {
     const [items, total] = await Promise.all([
       prisma.product.findMany({
         where,
-        include: {
+        // PAYLOAD SADELEŞTİRME: yalnızca UI'ın GERÇEKTEN kullandığı alanlar.
+        // description/images-hariç-ağır metadata (seo/technicalSpecs/originalTitle/
+        // computedTitle/detail/link/currency/unit/variants) çıkarıldı.
+        // images Categories.tsx tarafından kullanılır → korunur.
+        select: {
+          id: true, title: true, xmlKey: true, sku: true, barcode: true,
+          supplierCategory: true, categoryId: true, categoryMatch: true,
+          aiSuggestedCategoryId: true, aiScore: true, images: true,
+          brandMatch: true, variantMatch: true, variantStatus: true, templateMatch: true,
+          status: true, purchasePrice: true, salePrice: true, stock: true,
           category: { select: { id: true, name: true } },
           brand: { select: { id: true, name: true } },
           xmlSource: { select: { id: true, name: true } },
-          variants: { select: { id: true, name: true, value: true } },
         },
         skip: (page - 1) * limit,
         take: limit,
@@ -1262,23 +1264,24 @@ router.get('/products', requireAuth, async (req: Request, res: Response) => {
       }),
       prisma.product.count({ where }),
     ]);
-    // FIX(312-R2): kalici Trendyol mapping bilgisi — UI "kalici eslesme var/yok" ayrimini
-    // bu set uzerinden gostermek zorunda (operational match = aktif + externalId'li mapping).
+    // FIX(312-R2): marketplaceId UI bağlamı (küçük alan) korunur.
     const mpIdParam = readQueryValue(req.query?.marketplaceId);
     let opMpId = mpIdParam;
     if (!opMpId) {
       const ttMp = await prisma.marketplace.findUnique({ where: { key: 'tt' }, select: { id: true } });
       opMpId = ttMp?.id ?? null;
     }
-    let mappedCategoryIds: string[] = [];
-    if (opMpId) {
-      const ms = await prisma.categoryMapping.findMany({ where: { marketplaceId: opMpId, active: true, externalId: { not: null } }, select: { categoryId: true } });
-      mappedCategoryIds = Array.from(new Set(ms.map(m => m.categoryId)));
-    }
+
+    // MARKETPLACE GATE bayrağı (gerçek Trendyol send-gate; global 4/4 ve kategori eşleşmesinden AYRI).
+    // Blocked set cache'ten okunur (bloklamaz). Kategori UI'ı bu ürünleri "gönderilemez" olarak işaretler.
+    let blockedSet = new Set<string>();
+    try { const { ids } = await getBlockedProductIdsSafe(); blockedSet = new Set(ids); } catch { /* cache yok */ }
+    const itemsWithGate = items.map((it) => ({ ...it, marketplaceBlocked: blockedSet.has(it.id) }));
 
     // FIX(F-05): tam sayfalama sözleşmesi (hasNext/hasPrevious eklendi; mevcut alanlar korundu).
     const totalPages = Math.ceil(total / limit);
-    res.json({ items, pagination: { page, limit, total, totalPages, hasNext: page < totalPages, hasPrevious: page > 1 }, mappedCategoryIds, marketplaceId: opMpId });
+    // mappedCategoryIds KALDIRILDI: hiçbir UI çağıranı kullanmıyordu (3867 id ~150KB gereksiz payload + ek DB sorgusu).
+    res.json({ items: itemsWithGate, pagination: { page, limit, total, totalPages, hasNext: page < totalPages, hasPrevious: page > 1 }, marketplaceId: opMpId });
   } catch (error) {
     console.error('Error fetching category products:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch category products' } });
@@ -1483,6 +1486,10 @@ router.post('/attributes/manual', requireAuth, async (req: Request, res: Respons
       sourceName: sourceName ?? attrDef.attributeName, sourceValue: sourceValue ?? valueHit.attributeValue,
     });
     await prisma.auditLog.create({ data: { action: 'ATTRIBUTE_MANUAL_SET', entity: 'product', entityId: productId, meta: JSON.stringify({ marketplaceKey: mp.key, categoryExternalId: catExt, attributeId, attributeValueId }), details: `Manuel attribute: ${attrDef.attributeName}=${valueHit.attributeValue}`, actorUserId: (req as any).actor?.userId || null } });
+
+    // Manuel attribute çözümü sonrası missing-fields/RTS cache'i geçersiz kılınır →
+    // eligibility yeniden hesaplanır; ürün gerçekten gönderilebilirse RTS'ye döner.
+    invalidateMissingFieldsCache();
 
     return res.json({
       ok: true, productId, marketplaceKey: mp.key, categoryExternalId: catExt,
@@ -2497,7 +2504,12 @@ router.get('/filtered', requireAuth, async (req: Request, res: Response) => {
     const search = String(req.query.search || '').trim();
     // FIX: eşleşme filtresi artık SERVER-SIDE (Tümü/Eşleşmiş/Eşleşmemiş) — total/totalPages tutarlı.
     const matchFilterRaw = String(req.query.matchFilter || 'all');
-    const matchFilter = ['all', 'matched', 'unmatched'].includes(matchFilterRaw) ? matchFilterRaw : 'all';
+    const matchFilter = ['all', 'matched', 'unmatched', 'mpreq'].includes(matchFilterRaw) ? matchFilterRaw : 'all';
+    // Pazaryeri Zorunlu: yalnız gerçek gate ile engelli ürünler (cached blocked set — non-blocking).
+    let blockedIds: string[] = [];
+    if (matchFilter === 'mpreq') {
+      try { const r = await getBlockedProductIdsSafe(); blockedIds = r.ids || []; } catch { blockedIds = []; }
+    }
 
     if (!xmlSourceId || !marketplaceId) {
       return res.status(400).json({ ok: false, error: { code: 'CONTEXT_REQUIRED', message: 'xmlSourceId ve marketplaceId zorunludur' } });
@@ -2516,6 +2528,7 @@ router.get('/filtered', requireAuth, async (req: Request, res: Response) => {
     if (matchFilter === 'matched') where.categoryMatch = true;
     else if (matchFilter === 'unmatched') where.categoryMatch = false;
     if (search) where.OR = [{ title: { contains: search } }, { xmlKey: { contains: search } }, { sku: { contains: search } }, { barcode: { contains: search } }];
+    if (matchFilter === 'mpreq') where.id = { in: blockedIds.length > 0 ? blockedIds : ['__none__'] };
 
     let products: any[];
     let total: number;
@@ -2525,6 +2538,10 @@ router.get('/filtered', requireAuth, async (req: Request, res: Response) => {
       const conds: Prisma.Sql[] = [Prisma.sql`status <> 'DELETED'`, Prisma.sql`xmlSourceId = ${xmlSourceId}`];
       if (matchFilter === 'matched') conds.push(Prisma.sql`categoryMatch = 1`);
       else if (matchFilter === 'unmatched') conds.push(Prisma.sql`categoryMatch = 0`);
+      else if (matchFilter === 'mpreq') {
+        if (blockedIds.length > 0) conds.push(Prisma.sql`id IN (${Prisma.join(blockedIds.map((id) => Prisma.sql`${id}`), ', ')})`);
+        else conds.push(Prisma.sql`1 = 0`);
+      }
       if (search) {
         const like = `%${search}%`;
         conds.push(Prisma.sql`(title LIKE ${like} OR xmlKey LIKE ${like} OR sku LIKE ${like} OR barcode LIKE ${like})`);

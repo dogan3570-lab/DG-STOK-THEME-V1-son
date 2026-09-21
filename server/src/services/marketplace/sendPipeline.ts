@@ -146,7 +146,7 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
     const effectiveDimensionalWeight = product.manualDimensionalWeight ?? product.xmlDimensionalWeight ?? null;
 
     const productMainId = product.sku ?? product.barcode ?? `PROD-${product.id.slice(0, 8)}`;
-    const listPrice = gate.listingPrice ?? product.salePrice ?? product.purchasePrice ?? 0;
+    const listPrice = gate.listingPrice ?? product.purchasePrice ?? product.salePrice ?? 0;
 
     const basePayload = {
       barcode: product.barcode,
@@ -163,7 +163,7 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
       categoryId: gate.categoryId,
       attributes: gate.attributes,
       productMainId: product.sku ?? product.barcode ?? `PROD-${product.id.slice(0, 8)}`,
-      listPrice: Math.max(gate.listingPrice ?? 0, product.salePrice ?? product.purchasePrice ?? 0),
+      listPrice: Math.max(gate.listingPrice ?? 0, product.purchasePrice ?? product.salePrice ?? 0),
     };
 
     // dimensionalWeight sadece varsa gönder (Trendyol V2'de optional)
@@ -209,7 +209,7 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
       where: { id: resolvedTemplate.id as string },
       select: { priceRangeRules: true },
     });
-    const priceResult = resolveListingPrice(product.purchasePrice, parsePriceRangeRules(templateRow?.priceRangeRules));
+    const priceResult = resolveListingPrice(product.purchasePrice ?? product.salePrice, parsePriceRangeRules(templateRow?.priceRangeRules));
     if (priceResult.status !== 'OK') {
       return errorResult(input, priceResult.status, priceResult.reason ?? 'Listing fiyatı hesaplanamadı');
     }
@@ -286,12 +286,12 @@ export async function sendProductToMarketplace(input: SendPipelineInput): Promis
     return {
       productId: input.productId,
       marketplaceId: input.marketplaceId,
-      ok: false,
+      ok: true,
       status: 'SENDING',
       duplicate: false,
       externalListingId: null,
       listingUrl: null,
-      externalRef: null,
+      externalRef: result.batchRequestId,
       errorCode: 'APPROVAL_PENDING',
       errorMessage: 'Ürün Trendyol kuyruğuna alındı; gerçek external ID doğrulanmadan ACTIVE üretilmez',
     };
@@ -480,7 +480,7 @@ export async function sendBatchProductsToMarketplace(
 
       const payload: MarketplaceListingPayload = {
         barcode: product.barcode, sku: product.sku, title: product.title ?? '',
-        description: product.description ?? '', price: product.salePrice ?? 0,
+        description: product.description ?? '', price: product.purchasePrice ?? product.salePrice ?? 0,
         stock: product.stock, vatRate: product.vatRate, categoryExternalId,
         brandName: product.brand?.name ?? null,
         images: product.images ? product.images.split(',').map(s => s.trim()).filter(Boolean) : [],
@@ -491,7 +491,9 @@ export async function sendBatchProductsToMarketplace(
 
       if (apiResult.ok && apiResult.batchRequestId) {
         await prisma.productMarketplaceState.update({ where: { id: stateId }, data: { status: 'SENDING', externalRef: apiResult.batchRequestId, errorMessage: 'APPROVAL_PENDING', lastActionAt: new Date() } });
-        return { productId: input.productId, marketplaceId, ok: false, status: 'SENDING', duplicate: false, externalListingId: null, listingUrl: null, externalRef: null, errorCode: 'APPROVAL_PENDING', errorMessage: 'Kuyruğa alındı' };
+        // APPROVAL_PENDING = Trendyol batch KABUL EDİLDİ (batchRequestId alındı). Gönderim BAŞARILI;
+        // ürün onay kuyruğunda. `ok:true` ile job failedCount yerine successfulCount'a yazılır.
+        return { productId: input.productId, marketplaceId, ok: true, status: 'SENDING', duplicate: false, externalListingId: null, listingUrl: null, externalRef: apiResult.batchRequestId, errorCode: 'APPROVAL_PENDING', errorMessage: 'Kuyruğa alındı' };
       }
       if (apiResult.ok && apiResult.externalListingId) {
         await prisma.productMarketplaceState.update({ where: { id: stateId }, data: { status: 'ACTIVE', listingId: apiResult.externalListingId, externalRef: apiResult.externalRef ?? apiResult.externalListingId, listingUrl: apiResult.listingUrl, price: payload.price, stock: payload.stock, errorMessage: null, lastActionAt: new Date() } });

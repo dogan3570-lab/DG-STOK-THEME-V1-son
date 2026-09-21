@@ -208,12 +208,12 @@ export async function evaluateTrendyolSendGate(input: EvaluateSendGateInput): Pr
     });
   }
 
-  // 5) PRICE — AUTHORITATIVE BASE = Product.salePrice.
+  // 5) PRICE — AUTHORITATIVE BASE = KANONİK MALİYET (purchasePrice ?? salePrice, KDV dahil ALIŞ).
   // Kurallar canonical olarak MarketplacePricingRule'dan okunur (aktif bantlar);
   // ListingTemplate.priceRangeRules fiyat hesabinda ARTIK KULLANILMAZ, boylece
-  // sablon eksikligi fiyati gereksiz yere bloklamaz. purchasePrice satis
-  // hesabina GIRMEZ (yalnizca UI bilgilendirmede). Fail-closed korunur:
-  // salePrice gecersizse veya uygun bant yoksa gate FAIL olur, sahte fiyat uretilmez.
+  // sablon eksikligi fiyati gereksiz yere bloklamaz. purchasePrice/salePrice ayni
+  // XML toptan fiyatini tasir; purchasePrice ONCELIKLIDIR. Fail-closed korunur:
+  // maliyet gecersizse veya uygun bant yoksa gate FAIL olur, sahte fiyat uretilmez.
   const pricingRules = await prisma.marketplacePricingRule.findMany({
     where: {
       marketplaceId: input.marketplaceId,
@@ -222,8 +222,9 @@ export async function evaluateTrendyolSendGate(input: EvaluateSendGateInput): Pr
     },
     orderBy: { minPrice: 'asc' },
   });
+  const canonicalCost = product.purchasePrice ?? product.salePrice;
   const priceResult = resolveListingPrice(
-    product.salePrice,
+    canonicalCost,
     pricingRules.map((r) => ({
       minPrice: r.minPrice,
       maxPrice: r.maxPrice,

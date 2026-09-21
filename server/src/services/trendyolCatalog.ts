@@ -8,6 +8,12 @@ import { decryptCredential } from './crypto.ts';
  */
 const BASE = 'https://apigw.trendyol.com/integration';
 
+// GÜVENLİ TTL CACHE: aynı kategori/attribute için tekrar API çağrısı yapılmaz.
+// Yalnızca başarılı ve boş-olmayan yanıtlar cache'lenir; TTL sonunda tazelenir.
+const CATALOG_CACHE_TTL_MS = 30 * 60 * 1000;
+const attrDefsCache = new Map<number, { json: TrendyolCategoryAttribute[]; at: number }>();
+const attrValuesCache = new Map<string, { json: TrendyolAttributeValue[]; at: number }>();
+
 export interface TrendyolCategory {
   id: number;
   name: string;
@@ -92,17 +98,35 @@ export async function fetchTrendyolBrands(page = 0, size = 1000): Promise<Trendy
 }
 
 export async function fetchTrendyolCategoryAttributes(categoryId: number): Promise<TrendyolCategoryAttribute[]> {
+  const now = Date.now();
+  const hit = attrDefsCache.get(categoryId);
+  if (hit && now - hit.at < CATALOG_CACHE_TTL_MS) return hit.json;
   const r = await catalogGet(`/product/categories/${categoryId}/attributes`);
   if (!r.ok || !r.json) return [];
   const j = r.json as Record<string, unknown>;
   const arr = j.categoryAttributes || j.content || (Array.isArray(j) ? j : []);
-  return Array.isArray(arr) ? (arr as TrendyolCategoryAttribute[]) : [];
+  const out = Array.isArray(arr) ? (arr as TrendyolCategoryAttribute[]) : [];
+  // Yalnızca başarılı/boş-olmayan yanıt cache'lenir (transient hata kalıcılaşmasın).
+  if (out.length > 0) attrDefsCache.set(categoryId, { json: out, at: now });
+  return out;
 }
 
 export async function fetchTrendyolAttributeValues(categoryId: number, attributeId: number, size = 1000): Promise<TrendyolAttributeValue[]> {
+  const key = categoryId + ':' + attributeId;
+  const now = Date.now();
+  const hit = attrValuesCache.get(key);
+  if (hit && now - hit.at < CATALOG_CACHE_TTL_MS) return hit.json;
   const r = await catalogGet(`/product/categories/${categoryId}/attributes/${attributeId}/values?size=${size}`);
   if (!r.ok || !r.json) return [];
   const j = r.json as Record<string, unknown>;
   const arr = j.content || (Array.isArray(j) ? j : []);
-  return Array.isArray(arr) ? (arr as TrendyolAttributeValue[]) : [];
+  const out = Array.isArray(arr) ? (arr as TrendyolAttributeValue[]) : [];
+  if (out.length > 0) attrValuesCache.set(key, { json: out, at: now });
+  return out;
+}
+
+/** Katalog cache'ini temizler (katalog değişiminde manuel çağrılabilir). */
+export function invalidateTrendyolCatalogCache(): void {
+  attrDefsCache.clear();
+  attrValuesCache.clear();
 }

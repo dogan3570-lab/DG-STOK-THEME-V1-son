@@ -26,6 +26,10 @@ import financeRoutes from './finance.ts';
 import usersRoutes from './users.ts';
 import auditLogsRoutes from './auditLogs.ts';
 import notificationsRoutes from './notifications.ts';
+import missingFieldsRoutes from './missingFields.ts';
+import profitEngineRoutes from './profitEngine.ts';
+import profitV2Routes from './profitV2.ts';
+import financeCenterRoutes from './financeCenter.ts';
 import { fetchXmlFromUrl, importXmlProducts } from '../services/xmlImport.ts';
 
 export const router = Router();
@@ -69,6 +73,10 @@ router.use('/finance', financeRoutes);
 router.use('/users', usersRoutes);
 router.use('/audit-logs', auditLogsRoutes);
 router.use('/notifications', notificationsRoutes);
+router.use('/missing-fields', missingFieldsRoutes);
+router.use('/profit-engine', profitEngineRoutes);
+router.use('/profit-v2', profitV2Routes);
+router.use('/finance-center', financeCenterRoutes);
 
 // ==================== MARKETPLACES ====================
 // Auth + ADMIN rolü gerekli; credential alanları (apiKey, apiSecret, merchantId, storeId) ASLA döndürülmez

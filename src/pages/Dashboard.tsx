@@ -144,77 +144,6 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Page Greeting & Actions */}
-      <div className="panel-theme p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">Entegrasyon Performans Merkezi</h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            {activeXmlCount > 0
-              ? `${activeXmlCount} aktif XML kaynağı ile ${totalProducts.toLocaleString('tr-TR')} ürün senkronize ediliyor.`
-              : 'Henüz aktif XML kaynağı bulunmuyor.'}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={fetchAllData}
-            className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-semibold rounded-xl transition-all flex items-center gap-2 text-slate-700 dark:text-slate-200"
-          >
-            🔄 Manuel Senkronize Et
-          </button>
-          <button className="btn-primary px-4 py-2.5 text-xs flex items-center gap-2">
-            + Yeni Ürün Aktar
-          </button>
-        </div>
-      </div>
-
-      {/* Stats Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="panel-theme p-5 flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Toplam Stok Havuzu</span>
-            <div className="w-9 h-9 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center text-sm">📦</div>
-          </div>
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{totalProducts.toLocaleString('tr-TR')}</span>
-            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">Aktif</span>
-          </div>
-        </div>
-
-        <div className="panel-theme p-5 flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Hazır Ürünler</span>
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center text-sm">✅</div>
-          </div>
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{readyCount.toLocaleString('tr-TR')}</span>
-            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">Eşleşti</span>
-          </div>
-        </div>
-
-        <div className="panel-theme p-5 flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Pazaryeri Sağlığı</span>
-            <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center text-sm">🛒</div>
-          </div>
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{marketplaces.length}</span>
-            <span className="text-[10px] font-bold text-slate-400">Bağlantı</span>
-          </div>
-        </div>
-
-        <div className="panel-theme p-5 flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">XML Kaynakları</span>
-            <div className="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-500 flex items-center justify-center text-sm">🔗</div>
-          </div>
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{stats?.totalXmlSources || 0}</span>
-            <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-md">{activeXmlCount} Aktif</span>
-          </div>
-        </div>
-      </div>
-
       {/* KPI Cards Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <KpiCard title="TOPLAM ÜRÜN" value={totalProducts.toLocaleString('tr-TR')} subtitle="Havuzdaki toplam ürün" icon="📦" color="blue" />
@@ -266,19 +195,11 @@ export default function Dashboard() {
         <h3 className="section-title mb-4">DETAYLI İSTATİSTİKLER</h3>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           {[
-            { label: 'TOPLAM ÜRÜN', value: totalProducts.toLocaleString('tr-TR') },
-            { label: 'AKTİF ÜRÜNLER', value: readyCount.toLocaleString('tr-TR') },
-            { label: 'STOKTA OLMAYAN', value: lowStockProducts.toLocaleString('tr-TR') },
-            { label: 'HATALI ÜRÜNLER', value: errorProducts.toLocaleString('tr-TR') },
             { label: 'TOPLAM MARKA', value: brandCount },
             { label: 'TOPLAM KATEGORİ', value: categoryCount },
             { label: 'TOPLAM VARYANT', value: variantCount.toLocaleString('tr-TR') },
             { label: 'PAZARYERİ SAYISI', value: marketplaces.length },
             { label: 'TOPLAM XML KAYNAK', value: stats?.totalXmlSources || 0 },
-            { label: 'AKTİF XML', value: activeXmlCount },
-            { label: 'PASİF XML', value: passiveXmlCount },
-            { label: 'HATALI XML', value: xmlErrorCount },
-            { label: 'BUGÜN XML GÜNCELLEME', value: todayXmlUpdates },
           ].map((item, i) => (
             <div key={i} className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 p-4">
               <div className="text-xs text-slate-500 dark:text-slate-400">{item.label}</div>

@@ -19,6 +19,20 @@ import { getPrepStockRange, isWithinPrepRange } from '../services/stockAutomatio
 import { fetchTrendyolCategoryAttributes } from '../services/trendyolCatalog.ts';
 import { resolveTrendyolAttributes } from '../services/trendyolVariantResolver.ts';
 import { normalizeName } from '../services/categoryBrandMapper.ts';
+import { getBlockedProductIdsSafe } from '../services/missingFieldsService.ts';
+
+// RTS DIŞLAMA (NON-BLOCKING): Gerçek Trendyol send-gate ile REQUIRED_ATTRIBUTE_MISSING
+// olan ürünler hazır havuzunda GÖSTERİLMEZ. Blocked set arka plan/snapshot cache'ten
+// okunur; RTS isteği gate taramasını BEKLEMEZ. Snapshot yoksa (complete=false) ürün
+// yanlışlıkla "gönderilebilir" gösterilmesin diye temkinli davranılır.
+async function resolveBlockedProductIds(): Promise<{ ids: string[]; complete: boolean }> {
+  try {
+    return await getBlockedProductIdsSafe();
+  } catch (e) {
+    console.error('[ready-to-ship][blocked-ids]', e);
+    return { ids: [], complete: false };
+  }
+}
 
 // SEND-CENTER: insan-okur kural açıklaması (değerler DB MarketplacePricingRule'dan gelir, hardcode YOK).
 function describePricingRule(r?: { minPrice: number; maxPrice: number; profitMargin: number; fixedAmount: number } | null): string {
@@ -276,6 +290,14 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
     const xmlSourceIds = context.xmlSourceIds;
     const marketplaceIds = context.marketplaceIds;
 
+    // REQUIRED_ATTRIBUTE_MISSING ile engelli ürünler stats'tan da dışlanır (cache'ten; bloklamaz).
+    const blocked = await resolveBlockedProductIds();
+    const blockedNotIn = !blocked.complete
+      ? Prisma.sql`AND 1 = 0`
+      : (blocked.ids.length
+        ? Prisma.sql`AND id NOT IN (${Prisma.join(blocked.ids.map((id) => Prisma.sql`${id}`), ', ')})`
+        : Prisma.empty);
+
     // FIX(2M): syncTemplateMatch request path'ten çıkarıldı → background'a taşındı.
     // Response artık DB'deki mevcut templateMatch değerlerini kullanır.
     // FIX(M9/BULGU-2): GET /stats salt-okunur — background sync (state-mutating reconcile)
@@ -306,6 +328,7 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
         SUM(CASE WHEN status = 'ERROR' THEN 1 ELSE 0 END) as "errorCount"
       FROM Product
       WHERE status != 'DELETED'
+      ${blockedNotIn}
       ${xmlSourceIds.length ? Prisma.sql`AND xmlSourceId IN (${Prisma.join(xmlSourceIds.map(id => Prisma.sql`${id}`), ', ')})` : Prisma.empty}
       ${marketplaceIds.length ? Prisma.sql`AND id IN (SELECT productId FROM ProductMarketplaceState WHERE marketplaceId IN (${Prisma.join(marketplaceIds.map(id => Prisma.sql`${id}`), ', ')}) )` : Prisma.empty}
     `;
@@ -354,6 +377,21 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
     const waitingCount = Number(row?.waitingCount ?? 0);
     const blockedCount = Number(row?.blockedCount ?? 0);
 
+    // GLOBAL 4/4 vs MARKETPLACE GATE ayrımı (legacy UI'ın yanıltıcı "state" ifadesini doğrular).
+    let marketplaceBlockedCount = 0;
+    if (blocked.complete && blocked.ids.length > 0) {
+      marketplaceBlockedCount = await prisma.product.count({
+        where: {
+          ...(xmlSourceIds.length ? { xmlSourceId: { in: xmlSourceIds } } : {}),
+          ...(marketplaceIds.length ? { marketplaceStates: { some: { marketplaceId: { in: marketplaceIds } } } } : {}),
+          id: { in: blocked.ids },
+          status: 'READY', categoryMatch: true, brandMatch: true, templateMatch: true,
+          OR: [{ variantMatch: true }, { variantStatus: 'NOT_REQUIRED' }],
+        },
+      });
+    }
+    const readyForListingGlobal = readyCount + marketplaceBlockedCount;
+
     res.json({
       productUniverseCount,
       readyCount,
@@ -374,10 +412,77 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
       marketplaceStateMissingCount,
       marketplaceActive,
       marketplaceName,
+      gateScanPending: !blocked.complete,
+      readyForListingGlobal,
+      marketplaceReady: readyCount,
+      marketplaceBlocked: marketplaceBlockedCount,
     });
   } catch (error) {
     console.error('Error fetching dispatch stats:', error);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch stats' } });
+  }
+});
+
+// ==================== MARKETPLACE RESULT CENTER (READ-ONLY) ====================
+// Gerçek ProductMarketplaceState + Product verisinden gönderim sonuçları.
+// Sonuç sınıfları: APPROVED | APPROVAL_PENDING | REJECTED | ERROR
+// NOT: "Pazaryerine Gitmeyen" semantiği DEĞİŞMEZ (yalnız status='ERROR' → /categories/not-going).
+export function classifyMarketplaceResult(status: string, errorMessage: string | null): { result: string; reasonType: string; reasonLabel: string; reasonDetail: string; targetModule: string } {
+  const em = (errorMessage || '').toUpperCase();
+  const has = (s: string) => em.includes(s);
+  if (status === 'ACTIVE') return { result: 'APPROVED', reasonType: 'NONE', reasonLabel: 'Onaylandı', reasonDetail: 'Pazaryeri ürünü onayladı ve listeledi.', targetModule: '' };
+  if (status === 'SENDING') return { result: 'APPROVAL_PENDING', reasonType: 'NONE', reasonLabel: 'Onay bekliyor', reasonDetail: 'Pazaryeri batch kuyruğunda; onay bekleniyor.', targetModule: '' };
+  if (has('BANNED') || has('YASAK') || has('FORBIDDEN')) return { result: 'REJECTED', reasonType: 'BANNED_WORD', reasonLabel: 'Yasaklı kelime', reasonDetail: 'Ürün başlığında/detayında pazaryeri tarafından kabul edilmeyen ifade bulundu.', targetModule: 'product' };
+  if (has('CATEGORY') || has('KATEGORI')) return { result: 'REJECTED', reasonType: 'CATEGORY', reasonLabel: 'Kategori sorunu', reasonDetail: 'Pazaryerinde uygun kategori eşleşmesi bulunamadı veya geçersiz.', targetModule: 'category' };
+  if (has('ATTRIBUTE') || has('OZELLIK') || has('REQUIRED')) return { result: 'REJECTED', reasonType: 'REQUIRED_ATTRIBUTE', reasonLabel: 'Zorunlu özellik eksik', reasonDetail: 'Pazaryeri için zorunlu ürün özelliği eksik veya geçersiz.', targetModule: 'product' };
+  if (has('BRAND') || has('MARKA')) return { result: 'REJECTED', reasonType: 'BRAND', reasonLabel: 'Marka sorunu', reasonDetail: 'Marka eşleşmesi veya marka bilgisi geçersiz.', targetModule: 'brand' };
+  if (has('VARIANT') || has('VARYANT')) return { result: 'REJECTED', reasonType: 'VARIANT', reasonLabel: 'Varyant sorunu', reasonDetail: 'Ürün varyant bilgisi eksik veya geçersiz.', targetModule: 'variant' };
+  if (has('TEMPLATE') || has('SABLON')) return { result: 'REJECTED', reasonType: 'TEMPLATE', reasonLabel: 'Şablon sorunu', reasonDetail: 'Listing şablonu bulunamadı veya geçersiz.', targetModule: 'template' };
+  if (has('IMAGE') || has('GORSEL') || has('RESIM')) return { result: 'REJECTED', reasonType: 'IMAGE', reasonLabel: 'Görsel sorunu', reasonDetail: 'Ürün görseli eksik veya kabul edilmedi.', targetModule: 'product' };
+  if (has('PRICE') || has('FIYAT')) return { result: 'REJECTED', reasonType: 'PRICE', reasonLabel: 'Fiyat sorunu', reasonDetail: 'Fiyat pazaryeri kurallarına uymuyor.', targetModule: 'pricing' };
+  if (has('STOCK') || has('STOK')) return { result: 'REJECTED', reasonType: 'STOCK', reasonLabel: 'Stok sorunu', reasonDetail: 'Stok yetersiz veya geçersiz.', targetModule: 'stock' };
+  return { result: 'REJECTED', reasonType: 'OTHER', reasonLabel: 'Pazaryeri reddi', reasonDetail: errorMessage || 'Pazaryeri ürünü reddetti.', targetModule: 'product' };
+}
+
+router.get('/results', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const marketplaceId = req.query?.marketplaceId ? String(req.query.marketplaceId) : null;
+    const states = await prisma.productMarketplaceState.findMany({
+      where: { status: { in: ['SENDING', 'ACTIVE', 'ERROR'] }, ...(marketplaceId ? { marketplaceId } : {}) },
+      select: {
+        productId: true, marketplaceId: true, status: true, errorMessage: true, externalRef: true,
+        listingId: true, listingUrl: true, lastActionAt: true,
+        product: { select: { id: true, xmlKey: true, title: true, barcode: true, images: true, xmlSourceId: true, category: { select: { id: true, name: true } } } },
+        marketplace: { select: { key: true, name: true } },
+      },
+      orderBy: { lastActionAt: 'desc' },
+      take: 2000,
+    });
+    const marketplaces = await prisma.marketplace.findMany({ where: { active: true }, select: { id: true, key: true, name: true }, orderBy: { name: 'asc' } });
+    const items = states.map((s) => {
+      const c = classifyMarketplaceResult(s.status, s.errorMessage);
+      return {
+        productId: s.productId, xmlKey: s.product.xmlKey, title: s.product.title, barcode: s.product.barcode,
+        image: (s.product.images || '').split(',').map((x) => x.trim()).filter(Boolean)[0] || null,
+        xmlSourceId: s.product.xmlSourceId ?? null,
+        marketplaceId: s.marketplaceId, marketplaceKey: s.marketplace.key, marketplaceName: s.marketplace.name,
+        categoryId: s.product.category?.id ?? null, categoryName: s.product.category?.name ?? null,
+        sendStatus: s.status, result: c.result, reasonType: c.reasonType, reasonLabel: c.reasonLabel,
+        reasonDetail: c.reasonDetail, targetModule: c.targetModule,
+        lastActionAt: s.lastActionAt, externalRef: s.externalRef, listingId: s.listingId, errorMessage: s.errorMessage,
+      };
+    });
+    const counts = {
+      total: items.length,
+      approved: items.filter((i) => i.result === 'APPROVED').length,
+      approvalPending: items.filter((i) => i.result === 'APPROVAL_PENDING').length,
+      rejected: items.filter((i) => i.result === 'REJECTED').length,
+      error: items.filter((i) => i.result === 'REJECTED').length,
+    };
+    res.json({ ok: true, counts, marketplaces, items });
+  } catch (error) {
+    console.error('[results] error:', error);
+    res.status(500).json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Sonuçlar alınamadı' } });
   }
 });
 
@@ -483,6 +588,15 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
       if (missingReason in { category: 1, brand: 1, template: 1, variant: 1, image: 1, barcode: 1, price: 1, stock: 1, error: 1 }) {
         and.push((reasonMap as any)[missingReason]);
       }
+    }
+
+    // REQUIRED_ATTRIBUTE_MISSING ile engelli ürünler RTS listesinden (tüm filtreler) dışlanır.
+    // Cache'ten okunur (bloklamaz). Snapshot yoksa temkinli: hiçbir ürün "gönderilebilir" gösterilmez.
+    const listBlocked = await resolveBlockedProductIds();
+    if (!listBlocked.complete) {
+      and.push({ id: { in: [] } });
+    } else if (listBlocked.ids.length > 0) {
+      and.push({ id: { notIn: listBlocked.ids } });
     }
 
     if (Object.keys(where).length > 0 && and.length > 0) {
@@ -655,8 +769,9 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
         const rulesForMp = rulesAll
           .filter(r => r.marketplaceId === m.id && (!r.xmlSourceId || r.xmlSourceId === item.xmlSourceId))
           .map(r => ({ minPrice: r.minPrice, maxPrice: r.maxPrice, profitMargin: r.profitMargin, fixedAmount: r.fixedAmount, rounding: r.rounding ?? undefined }));
-        const ruleUsed = rulesForMp.find(r => !r.maxPrice || (item.salePrice != null && item.salePrice >= r.minPrice && item.salePrice <= r.maxPrice)) ?? rulesForMp[0] ?? null;
-        const res = resolveListingPrice(item.salePrice, rulesForMp);
+        const canonicalCost = item.purchasePrice ?? item.salePrice;
+        const ruleUsed = rulesForMp.find(r => !r.maxPrice || (canonicalCost != null && canonicalCost >= r.minPrice && canonicalCost <= r.maxPrice)) ?? rulesForMp[0] ?? null;
+        const res = resolveListingPrice(canonicalCost, rulesForMp);
         return {
           marketplaceId: m.id,
           key: m.key,
@@ -694,6 +809,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     res.json({
       items: itemsWithReadiness,
       marketplaces: mpMeta,
+      gateScanPending: !listBlocked.complete,
       pagination: {
         page,
         limit,
@@ -1886,8 +2002,9 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
       const rulesForMp = rulesDetail
         .filter(r => r.marketplaceId === m.id && (!r.xmlSourceId || r.xmlSourceId === product.xmlSourceId))
         .map(r => ({ minPrice: r.minPrice, maxPrice: r.maxPrice, profitMargin: r.profitMargin, fixedAmount: r.fixedAmount, rounding: r.rounding ?? undefined }));
-      const ruleUsed = rulesForMp.find(r => !r.maxPrice || (product.salePrice != null && product.salePrice >= r.minPrice && product.salePrice <= r.maxPrice)) ?? rulesForMp[0] ?? null;
-      const res = resolveListingPrice(product.salePrice, rulesForMp);
+      const canonicalCost = product.purchasePrice ?? product.salePrice;
+      const ruleUsed = rulesForMp.find(r => !r.maxPrice || (canonicalCost != null && canonicalCost >= r.minPrice && canonicalCost <= r.maxPrice)) ?? rulesForMp[0] ?? null;
+      const res = resolveListingPrice(canonicalCost, rulesForMp);
       const pmsRow = product.marketplaceStates.find(s => s.marketplaceId === m.id);
       return {
         marketplaceId: m.id,

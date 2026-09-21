@@ -9,6 +9,7 @@ import { queueReconcileProductGates } from '../services/readinessService.ts';
 import { productsStatsGet as _psGet, productsStatsSet as _psSet, invalidateProductsStats as _psInvalidate } from '../services/productsStatsCache.ts';
 import { PRODUCT_STATUS_DELETED, createManualOrExcelProduct, softDeleteProduct, type ManualProductInput } from '../services/productLifecycle.ts';
 import { previewImport, commitImportFile } from '../services/excelImport.ts';
+import { getBlockedProductIdsSafe } from '../services/missingFieldsService.ts';
 
 const router = Router();
 
@@ -318,6 +319,24 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
         blockedCategory = catGroups.filter(g => !mappedSet.has(g.categoryId as string)).reduce((s, g) => s + g._count.id, 0);
       }
     }
+    // MARKETPLACE GATE (gerçek Trendyol send-gate): global 4/4'ten AYRI.
+    // Blocked set cache'ten okunur (bloklamaz). marketplaceReady = global ready − blocked.
+    let marketplaceBlocked = 0;
+    try {
+      const { ids: blockedIds } = await getBlockedProductIdsSafe();
+      if (blockedIds.length > 0) {
+        marketplaceBlocked = await prisma.product.count({
+          where: {
+            ...(xmlSourceId ? { xmlSourceId } : {}),
+            id: { in: blockedIds },
+            status: 'READY', categoryMatch: true, brandMatch: true, templateMatch: true,
+            OR: [{ variantMatch: true }, { variantStatus: 'NOT_REQUIRED' }],
+          },
+        });
+      }
+    } catch { /* cache yoksa 0 */ }
+    const marketplaceReady = Math.max(0, (m.ready ?? 0) - marketplaceBlocked);
+
     const lastRun = await prisma.xmlImportRun.findFirst({
       where: xmlSourceId ? { sourceId: xmlSourceId } : undefined,
       orderBy: { startedAt: 'desc' },
@@ -333,6 +352,8 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
       updatedCount: m.updatedToday ?? 0,
       deletedCount: 0,
       readyForListing: m.ready ?? 0,
+      marketplaceReady,
+      marketplaceBlocked,
       missingInfo: (m.total ?? 0) - (m.ready ?? 0),
       pendingCategory: m.pendingCategory ?? 0,
       pendingBrand: m.pendingBrand ?? 0,
@@ -740,9 +761,13 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     ]);
 
     // KDV dahil alış fiyatı (STABLE iş kuralı — backend'de hesaplanır)
+    // + marketplace gate bayrağı (gerçek Trendyol send-gate; global 4/4'ten AYRI). Blocked set cache'ten.
+    let blockedSet = new Set<string>();
+    try { const { ids } = await getBlockedProductIdsSafe(); blockedSet = new Set(ids); } catch { /* cache yok */ }
     const itemsWithPricing = items.map((item) => ({
       ...item,
       vatIncludedPurchasePrice: computeVatIncludedPurchasePrice(item, item.xmlSource),
+      marketplaceBlocked: blockedSet.has(item.id),
     }));
 
     res.json({

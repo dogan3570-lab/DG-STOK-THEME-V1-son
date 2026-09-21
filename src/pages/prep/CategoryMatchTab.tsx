@@ -5,6 +5,7 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { apiFetch } from '../../lib/api';
 import { useMarketplace } from '../../context/MarketplaceContext';
 import { showToast } from '../../components/ui/Toast';
+import MissingFieldsPanel from './MissingFieldsPanel';
 // ==================== TYPES ====================
 
 interface ProductItem {
@@ -12,6 +13,7 @@ interface ProductItem {
  supplierCategory: string | null; categoryId: string | null;
  categoryMatch: boolean; aiSuggestedCategoryId: string | null;
  aiScore: number | null; category?: { id: string; name: string } | null;
+ marketplaceBlocked?: boolean;
 }
 
 interface FlatCategory {
@@ -27,7 +29,7 @@ interface Marketplace { id: string; key: string; name: string; }
 type MatchStatus = 'auto_matched' | 'ai_suggested' | 'manual_required';
 
 interface CategoryGroup {
- xmlPath: string; total: number; matchedCount: number;
+ xmlPath: string; total: number; matchedCount: number; blockedCount: number;
  productIds: string[]; aiProductIds: string[];
  status: MatchStatus; targetPath?: string;
  suggestionParentPath?: string; suggestionLeaf?: string;
@@ -35,9 +37,9 @@ interface CategoryGroup {
 }
 
 const STATUS_CFG: Record<MatchStatus, { icon: string; label: string; bg: string; text: string }> = {
-  auto_matched: { icon:'🟢', label:'Tam Eslesti', bg:'bg-emerald-500/10', text: 'text-emerald-600 dark:text-emerald-400' },
-  ai_suggested: { icon:'🤖', label:'AI Eslesti', bg:'bg-purple-500/10', text: 'text-purple-600 dark:text-purple-400' },
-  manual_required: { icon:'🟠', label:'Manuel Bekliyor', bg:'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400' },
+  auto_matched: { icon:'🟢', label:'Eşleşti', bg:'bg-emerald-500/10', text: 'text-emerald-600 dark:text-emerald-400' },
+  ai_suggested: { icon:'🤖', label:'AI Önerisi', bg:'bg-purple-500/10', text: 'text-purple-600 dark:text-purple-400' },
+  manual_required: { icon:'🟠', label:'Bekliyor', bg:'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400' },
 };
 
 function resolvePath(id: string|null|undefined, map: Map<string,FlatCategory>): string {
@@ -50,7 +52,8 @@ function resolvePath(id: string|null|undefined, map: Map<string,FlatCategory>): 
 // ==================== ANA BILESEN ====================
 
 export default function CategoryMatchTab() {
- const { marketplaceId, marketplaces: ctxMarketplaces, selectMarketplace } = useMarketplace();
+ const { selectedMarketplace, setSelectedMarketplace, marketplaces: ctxMarketplaces } = useMarketplace();
+ const marketplaceId = selectedMarketplace?.id || '';
  const [products, setProducts] = useState<ProductItem[]>([]);
  const [flatCats, setFlatCats] = useState<FlatCategory[]>([]);
  const [totalProducts, setTotalProducts] = useState(0);
@@ -58,6 +61,8 @@ export default function CategoryMatchTab() {
  const [aiRunning, setAiRunning] = useState(false);
  const [step, setStep] = useState<0|1|2|3>(1);
  const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
+ const [board, setBoard] = useState<{ total:number; catMatched:number; catMissing:number; mpMissing:number; autoResolved:number; aiSuggested:number; needsUser:number } | null>(null);
+ const [mfSignal, setMfSignal] = useState(0);
  const [modalOpen, setModalOpen] = useState(false);
  const [modalGroup, setModalGroup] = useState<CategoryGroup | null>(null);
  const [modalBulk, setModalBulk] = useState(false);
@@ -103,6 +108,38 @@ export default function CategoryMatchTab() {
 
  useEffect(() => { fetchAll(); }, [fetchAll]);
 
+ // BİLGİ BORDOSU: gerçek API/DB verisi (hardcode yok, aynı population).
+ useEffect(() => {
+ const loadBoard = async () => {
+ try {
+ const [cs, ps, mf] = await Promise.all([
+ apiFetch<any>('/categories/stats'),
+ apiFetch<any>('/products/stats'),
+ apiFetch<any>('/missing-fields/stats'),
+ ]);
+ const c = cs.ok ? cs.data : null;
+ const p = ps.ok ? ps.data : null;
+ const m = mf.ok ? (mf.data?.data || mf.data) : null;
+ setBoard({
+ total: c?.TOTAL_PRODUCTS ?? p?.totalProducts ?? 0,
+ catMatched: c?.MATCHED ?? 0,
+ catMissing: c?.UNMATCHED ?? p?.pendingCategory ?? 0,
+ mpMissing: m?.needsUser ?? p?.marketplaceBlocked ?? 0,
+ autoResolved: m?.autoResolved ?? 0,
+ aiSuggested: c?.AI_SUGGESTED ?? p?.aiSuggestedPending ?? 0,
+ needsUser: m?.needsUser ?? 0,
+ });
+ } catch { /* sessiz: board opsiyonel */ }
+ };
+ loadBoard();
+ }, []);
+
+ // 🟡 Pazaryeri Zorunlu: pazaryeri seçili değilse API ÇAĞRILMAZ; net uyarı verilir.
+ const handleMarketplaceRequired = useCallback(() => {
+ if (!marketplaceId) { showToast('Önce pazaryeri seçin', 'error'); return; }
+ setMfSignal((s) => s + 1);
+ }, [marketplaceId]);
+
  // ==================== GRUPLAMA ====================
  const groups = useMemo<CategoryGroup[]>(() => {
  const byCat = new Map<string, ProductItem[]>();
@@ -114,8 +151,9 @@ export default function CategoryMatchTab() {
  for (const [xmlPath, items] of byCat) {
  const pids = items.map(p => p.id);
  const matched = items.filter(p => p.categoryMatch && p.categoryId);
+ const blockedCount = items.filter(p => p.marketplaceBlocked).length;
  if (matched.length === items.length && items.length > 0) {
- result.push({ xmlPath, total: items.length, matchedCount: matched.length, productIds: pids, aiProductIds: [], status: 'auto_matched', targetPath: resolvePath(matched[0].categoryId, flatMap) || matched[0].category?.name || 'Eslesti' });
+ result.push({ xmlPath, total: items.length, matchedCount: matched.length, blockedCount, productIds: pids, aiProductIds: [], status: 'auto_matched', targetPath: resolvePath(matched[0].categoryId, flatMap) || matched[0].category?.name || 'Eslesti' });
  continue;
  }
  const aiOnes = items.filter(p => !p.categoryMatch && p.aiSuggestedCategoryId);
@@ -124,10 +162,10 @@ export default function CategoryMatchTab() {
  const topId = [...freq.entries()].sort((a,b) => b[1]-a[1])[0][0];
  const full = resolvePath(topId, flatMap); const segs = full ? full.split(' > ') : [];
  const scores = aiOnes.map(p => p.aiScore||0); const avg = scores.reduce((s,v)=>s+v,0)/(scores.length||1);
- result.push({ xmlPath, total: items.length, matchedCount: matched.length, productIds: pids, aiProductIds: aiOnes.filter(p=>p.aiSuggestedCategoryId===topId).map(p=>p.id), status:'ai_suggested', suggestionId:topId, suggestionParentPath: segs.slice(0,-1).join(' > '), suggestionLeaf: segs[segs.length-1]||flatMap.get(topId)?.name||'Onerilen', aiScore:avg, targetPath: matched.length>0 ? resolvePath(matched[0].categoryId,flatMap) : undefined });
+ result.push({ xmlPath, total: items.length, matchedCount: matched.length, blockedCount, productIds: pids, aiProductIds: aiOnes.filter(p=>p.aiSuggestedCategoryId===topId).map(p=>p.id), status:'ai_suggested', suggestionId:topId, suggestionParentPath: segs.slice(0,-1).join(' > '), suggestionLeaf: segs[segs.length-1]||flatMap.get(topId)?.name||'Onerilen', aiScore:avg, targetPath: matched.length>0 ? resolvePath(matched[0].categoryId,flatMap) : undefined });
  continue;
  }
- result.push({ xmlPath, total: items.length, matchedCount: matched.length, productIds: pids, aiProductIds: [], status: matched.length>0?'manual_required':'manual_required', targetPath: matched.length>0 ? resolvePath(matched[0].categoryId,flatMap) : undefined });
+ result.push({ xmlPath, total: items.length, matchedCount: matched.length, blockedCount, productIds: pids, aiProductIds: [], status: matched.length>0?'manual_required':'manual_required', targetPath: matched.length>0 ? resolvePath(matched[0].categoryId,flatMap) : undefined });
  }
  const order: Record<MatchStatus,number> = { auto_matched:0, ai_suggested:1, manual_required:2 };
  return result.sort((a,b) => order[a.status]!==order[b.status] ? order[a.status]-order[b.status] : a.xmlPath.localeCompare(b.xmlPath,'tr'));
@@ -317,6 +355,29 @@ export default function CategoryMatchTab() {
  <div className="relative">
  <h1 className="mb-4 pt-1 text-center text-[26px] font-extrabold tracking-tight" >Kategori Eslestirme Motoru V5</h1>
 
+ {/* ====== BILGI BORDOSU (gerçek API/DB; hardcode yok) ====== */}
+ {board && (
+ <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+ {[
+ { label:'Toplam Ürün', value: board.total, tone:'text-slate-700 dark:text-slate-200' },
+ { label:'Kategori Eşleşti', value: board.catMatched, tone:'text-emerald-600 dark:text-emerald-400' },
+ { label:'Kategori Eksik', value: board.catMissing, tone:'text-amber-600 dark:text-amber-400' },
+ { label:'Pazaryeri Zorunlu Alan Eksik', value: board.mpMissing, tone:'text-red-600 dark:text-red-400' },
+ { label:'Otomatik Çözülebilir', value: board.autoResolved, tone:'text-emerald-600 dark:text-emerald-400' },
+ { label:'AI Önerisi', value: board.aiSuggested, tone:'text-purple-600 dark:text-purple-400' },
+ { label:'Kullanıcı Müdahalesi', value: board.needsUser, tone:'text-blue-600 dark:text-blue-400' },
+ ].map((c) => (
+ <div key={c.label} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800/50">
+ <div className={`text-xl font-extrabold ${c.tone}`}>{c.value.toLocaleString('tr-TR')}</div>
+ <div className="mt-0.5 text-[10px] font-medium text-slate-500 dark:text-slate-400">{c.label}</div>
+ </div>
+ ))}
+ </div>
+ )}
+
+ {/* ====== PAZARYERI ZORUNLU ALANLAR (gerçek gate kuyruğu) ====== */}
+ <MissingFieldsPanel openSignal={mfSignal} />
+
  {/* Tedarikci XML + Pazaryeri Secimi */}
  <div className="mb-4 flex flex-wrap items-center justify-center gap-3">
  <select value={xmlSupplierId} onChange={e => setXmlSupplierId(e.target.value)}
@@ -324,37 +385,35 @@ export default function CategoryMatchTab() {
  <option value="">📦 Tedarikci / XML Seciniz...</option>
  {xmlSources.map(xs => <option key={xs.id} value={xs.id}>{xs.name}</option>)}
  </select>
- <select value={marketplaceId} onChange={e => selectMarketplace(e.target.value)}
+ <select value={marketplaceId} onChange={e => setSelectedMarketplace(ctxMarketplaces.find((m) => m.id === e.target.value) || null)}
  className="select-theme min-w-[200px]">
  <option value="">🛒 Pazaryeri Seciniz...</option>
  {ctxMarketplaces.map(mp => <option key={mp.id} value={mp.id}>{mp.name}</option>)}
  </select>
  </div>
 
- {/* ====== 4 ADIMLI CHEVRON STEPPER ====== */}
- <div className="mb-5 flex items-stretch justify-center">
- {steps.map((s, i) => {
- const active = step === s.key;
- const handleClick = (e: React.MouseEvent) => { e.stopPropagation(); (s.action ? s.action : () => setStep(s.key))(); };
- return (
- <button key={s.key} type="button" onClick={handleClick}
- style={{
- pointerEvents: 'auto', position: 'relative', zIndex: 9999, cursor: 'pointer',
- minWidth:'165px',
- clipPath: i===0 ? 'polygon(12px 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,12px 100%,0 100%,0 0)' : 'polygon(16px 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,16px 100%,0 50%)',
- boxShadow: active
- ? (s.tone==='green'?'0 4px 20px -2px transparent, 0 2px 8px transparent'
- :s.tone==='purple'?'0 6px 24px -4px transparent, 0 2px 10px transparent'
- :s.tone==='orange'?'0 6px 24px -4px transparent, 0 2px 10px transparent'
- :'0 6px 24px -4px transparent, 0 2px 10px transparent')
- : '0 1px 3px transparent, 0 1px 2px transparent',
- marginLeft: i===0?0:'-10px'}}
- className={`relative px-7 py-3 text-sm font-bold transition-all duration-150 hover:brightness-110 active:scale-95 ${ active ? s.tone==='green' ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white ring-2 ring-emerald-500/30 z-30' : s.tone==='purple' ? 'bg-gradient-to-br from-purple-500 to-purple-600 text-white ring-2 ring-purple-500/30 z-30' : s.tone==='orange' ? 'bg-gradient-to-br from-amber-500 to-amber-600 text-white ring-2 ring-amber-500/30 z-30' : 'bg-gradient-to-br from-blue-500 to-blue-600 text-white ring-2 ring-blue-500/30 z-30' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700' }`}>
- {s.label}
- {s.count > 0 && s.key !== 0 && <span className="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold" style={{}}>{s.count}</span>}
+ {/* ====== 3 ANA ISLEM BUTONU ====== */}
+ <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-4">
+ <button type="button" onClick={() => { setStep(1); handleAutoMatchDbl(); }} disabled={autoMatchRunning}
+ className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:brightness-110 active:scale-95 disabled:opacity-50">
+ ⚙️ Otomatik Eşleştir{autoCount > 0 && <span className="rounded-full bg-white/20 px-2 text-[11px]">{autoCount}</span>}
  </button>
- );
- })}
+ <button type="button" onClick={() => { setStep(2); handleAiMatch(); }}
+ className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:brightness-110 active:scale-95">
+ 🤖 AI ile Eşleştir{aiCount > 0 && <span className="rounded-full bg-white/20 px-2 text-[11px]">{aiCount}</span>}
+ </button>
+ <button type="button" onClick={() => { setStep(3); handleManualMatchDbl(); }}
+ className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:brightness-110 active:scale-95">
+ ✋ Manuel Eşleştir{manualCount > 0 && <span className="rounded-full bg-white/20 px-2 text-[11px]">{manualCount}</span>}
+ </button>
+ <button type="button" onClick={handleMarketplaceRequired}
+ className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-yellow-500 to-amber-500 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:brightness-110 active:scale-95">
+ 🟡 Pazaryeri Zorunlu{board && board.mpMissing > 0 && <span className="rounded-full bg-white/20 px-2 text-[11px]">{board.mpMissing}</span>}
+ </button>
+ </div>
+
+ <div className="mb-3 flex justify-end">
+ <button type="button" onClick={handleGoPreparation} className="rounded-lg border border-slate-300 px-3 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Ürün Hazırlamaya Geç →</button>
  </div>
 
  {/* ====== ANA DIS KART ====== */}
@@ -368,9 +427,9 @@ export default function CategoryMatchTab() {
  </div>
  )}
 
- {/* --- ILERLEME CUBUGU --- */}
- <div className="mb-4 flex items-center gap-4">
- <div className="flex-1">
+ {/* --- TEK GENEL ILERLEME/STATUS CUBUGU --- */}
+ <div className="mb-4">
+ <div>
  <div className="mb-1 flex items-center justify-between text-xs">
  <span className="font-semibold" >
  Kategori Eslestirme Ilerlemesi
@@ -402,7 +461,6 @@ export default function CategoryMatchTab() {
  </div>
  )}
  </div>
- <div className="shrink-0"><ProgressRing percent={autoMatchLive && autoMatchLive.total>0 ? Math.round((autoMatchLive.processed/autoMatchLive.total)*100) : percent} size={64} /></div>
  </div>
 
  {/* ====== PAGINATION TOOLBAR (TABLO USTU) ====== */}
@@ -422,6 +480,17 @@ export default function CategoryMatchTab() {
  />
  ☑ Tümünü Seç ({filteredGroups.length} kategori)
  </label>
+ <button type="button" onClick={() => {
+ const pg = new Set(paginatedGroups.map(g => g.xmlPath));
+ if (paginatedGroups.length > 0 && paginatedGroups.every(g => selectedGroups.has(g.xmlPath))) {
+ setSelectedGroups(prev => { const n = new Set(prev); for (const p of pg) n.delete(p); return n; });
+ } else {
+ setSelectedGroups(prev => { const n = new Set(prev); for (const g of paginatedGroups) n.add(g.xmlPath); return n; });
+ }
+ }}
+ className="rounded-lg border border-slate-300 px-3 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
+ ☑ Bu sayfayı seç ({paginatedGroups.length})
+ </button>
  {selectedGroups.size > 0 && (
  <button type="button" onClick={openBulkMatch}
  className="ml-3 rounded-lg bg-transparent px-3 py-1 text-[11px] font-bold text-current hover:bg-transparent"
@@ -563,7 +632,7 @@ function GroupRow({ group, selected, onToggle, onChoose, onApprove }: { group:Ca
  <div className={`grid cursor-pointer grid-cols-[40px_minmax(0,4fr)_minmax(0,3fr)_minmax(0,5fr)] items-stretch transition-colors ${selected?'bg-primary/5 dark:bg-primary/10':'hover:bg-slate-50 dark:hover:bg-slate-800/30'}`} onClick={onToggle}>
  <div className="flex items-center justify-center" onClick={e=>e.stopPropagation()}><input type="checkbox" checked={selected} onChange={onToggle} className="h-4 w-4 cursor-pointer" /></div>
  <div className="flex min-w-0 items-center gap-2 px-4 py-3"><span className="shrink-0 text-[10px] text-slate-400">▸</span><div className="min-w-0"><div className="truncate text-sm font-medium text-slate-800 dark:text-slate-200" title={group.xmlPath}>{group.xmlPath}</div><div className="text-[10px] text-slate-500 dark:text-slate-400">{group.total} urun</div></div></div>
- <div className="flex items-center gap-2 px-4"><span className="text-base">{cfg.icon}</span><div><div className={`text-sm font-bold ${cfg.text}`}>{cfg.label}</div>{group.status==='ai_suggested' && group.aiScore!=null && <div className="text-[10px] text-purple-600 dark:text-purple-400">%{Math.round(group.aiScore*100)} guven</div>}{group.status==='manual_required' && group.matchedCount>0 && <div className="text-[10px] text-amber-600 dark:text-amber-400">{group.matchedCount}/{group.total} eslesti</div>}</div></div>
+ <div className="flex items-center gap-2 px-4"><span className="text-base">{cfg.icon}</span><div><div className={`text-sm font-bold ${cfg.text}`}>{cfg.label}</div>{group.status==='ai_suggested' && group.aiScore!=null && <div className="text-[10px] text-purple-600 dark:text-purple-400">%{Math.round(group.aiScore*100)} guven</div>}{group.status==='manual_required' && group.matchedCount>0 && <div className="text-[10px] text-amber-600 dark:text-amber-400">{group.matchedCount}/{group.total} eslesti</div>}{group.blockedCount>0 && <div className="mt-0.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400" title="Bu grupta Trendyol zorunlu alanı eksik ürünler var — üstteki 'Pazaryeri Zorunlu Alanlar' kuyruğundan çözün">Trendyol Gönderim: Eksik Zorunlu Alan ({group.blockedCount})</div>}</div></div>
  <div className="flex min-w-0 items-center px-4 py-3" onClick={e=>e.stopPropagation()}>
  {group.status==='auto_matched' && <div className="flex min-w-0 items-start gap-1.5 text-sm" ><span className="mt-1 shrink-0 text-[8px] text-emerald-500">▸</span><span className="truncate text-slate-700 dark:text-slate-300" title={group.targetPath}>{group.targetPath}</span></div>}
  {group.status==='ai_suggested' && <div className="min-w-0">{group.suggestionParentPath && <div className="flex items-start gap-1.5 text-sm" ><span className="mt-1 shrink-0 text-[8px] text-purple-500">▸</span><span className="truncate text-slate-700 dark:text-slate-300" title={group.suggestionParentPath}>{group.suggestionParentPath}</span></div>}<div className="mt-0.5 flex flex-wrap items-center gap-2"><span className="text-sm"><span className="font-bold text-slate-600 dark:text-slate-400">Onerilen: </span><span className="font-bold text-purple-600 dark:text-purple-400">{group.suggestionLeaf}</span></span><button type="button" onClick={onApprove} className="rounded-lg px-2.5 py-1 text-[11px] font-bold text-white bg-emerald-500 hover:bg-emerald-600 shadow-sm transition-all hover:brightness-110" title="AI onerisini onayla">✓ Onayla</button></div></div>}

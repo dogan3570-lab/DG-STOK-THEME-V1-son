@@ -14,7 +14,8 @@ interface ProductItem {
  purchasePrice: number | null; salePrice: number | null; vatRate: number | null;
  profitMargin: number | null; images: string | null; status: string;
  errorMessage: string | null; aiScore: number | null;
- categoryMatch?: boolean; brandMatch?: boolean; variantMatch?: boolean; templateMatch?: boolean;
+  categoryMatch?: boolean; brandMatch?: boolean; variantMatch?: boolean; templateMatch?: boolean;
+  marketplaceBlocked?: boolean;
  categoryId: string | null; brandId: string | null; xmlSourceId: string | null;
  supplierCategory: string | null;
  prefixEnabled?: boolean;
@@ -41,6 +42,7 @@ interface Pagination { page: number; limit: number; total: number; totalPages: n
 
 interface PoolStats {
  totalProducts: number; readyForListing: number; newProducts: number;
+ marketplaceReady: number; marketplaceBlocked: number;
  pendingCategory: number; pendingBrand: number; pendingVariant: number;
  variantAnalysisPending: number; // Varyant Motoru V2 (manuel + hatalı)
  errorProducts: number;
@@ -296,14 +298,15 @@ export default function ProductPool() {
  <div className="space-y-4">
  {/* ========== KPI KARTLARI ========== */}
  {stats && (
- <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-3">
- <KpiCard title="Toplam Ürün" value={stats.totalProducts.toLocaleString('tr-TR')} color="blue" />
- <KpiCard title="Gönderime Hazır" value={stats.readyForListing.toLocaleString('tr-TR')} color="green" />
- <KpiCard title="Kategori Bekleyen" value={stats.pendingCategory.toLocaleString('tr-TR')} color="yellow" />
- <KpiCard title="Marka Bekleyen" value={stats.pendingBrand.toLocaleString('tr-TR')} color="orange" />
- <KpiCard title="Varyant Bekleyen" value={stats.pendingVariant.toLocaleString('tr-TR')} color="purple" />
- <KpiCard title="Varyant V2 ⚠️" value={stats.variantAnalysisPending?.toLocaleString('tr-TR') || '0'} color="pink" />
- <KpiCard title="Hatalı" value={stats.errorProducts.toLocaleString('tr-TR')} color="red" />
+ <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-8 gap-3">
+ <KpiCard title="Toplam Ürün" value={(stats.totalProducts ?? 0).toLocaleString('tr-TR')} color="blue" />
+ <KpiCard title="4/4 Hazırlık" value={(stats.readyForListing ?? 0).toLocaleString('tr-TR')} color="yellow" />
+ <KpiCard title="Pazaryeri Gönderilebilir" value={(stats.marketplaceReady ?? 0).toLocaleString('tr-TR')} color="green" />
+ <KpiCard title="Kategori Bekleyen" value={(stats.pendingCategory ?? 0).toLocaleString('tr-TR')} color="yellow" />
+ <KpiCard title="Marka Bekleyen" value={(stats.pendingBrand ?? 0).toLocaleString('tr-TR')} color="orange" />
+ <KpiCard title="Varyant Bekleyen" value={(stats.pendingVariant ?? 0).toLocaleString('tr-TR')} color="purple" />
+ <KpiCard title="Varyant V2 ⚠️" value={(stats.variantAnalysisPending ?? 0).toLocaleString('tr-TR')} color="pink" />
+ <KpiCard title="Hatalı" value={(stats.errorProducts ?? 0).toLocaleString('tr-TR')} color="red" />
  </div>
  )}
 
@@ -336,7 +339,7 @@ export default function ProductPool() {
  className={`rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${ pagination.limit === size ? 'bg-primary/10 text-primary' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700' }`}>{size}</button>
  ))}
  </div>
- <span className="text-xs text-current whitespace-nowrap">{pagination.total.toLocaleString('tr-TR')} ürün</span>
+ <span className="text-xs text-current whitespace-nowrap">{(pagination.total ?? 0).toLocaleString('tr-TR')} ürün</span>
  </div>
 
  {/* ========== SEÇIM TOOLBAR ========== */}
@@ -440,9 +443,17 @@ export default function ProductPool() {
  <TD><span className="text-xs text-current">{p.variants?.find(v => v.name === 'Renk')?.value || '-'}</span></TD>
  <TD><span className="text-xs text-current">{p.variants?.find(v => v.name === 'Beden')?.value || '-'}</span></TD>
  <TD><span className="text-xs text-current">{p.variants?.find(v => v.name === 'Numara')?.value || '-'}</span></TD>
- <TD><span className="text-xs text-current">{new Date(p.updatedAt).toLocaleDateString('tr-TR')}</span></TD>
- <TD><span className="text-xs text-current">-</span></TD>
- </tr>
+  <TD><span className="text-xs text-current">{new Date(p.updatedAt).toLocaleDateString('tr-TR')}</span></TD>
+  <TD>
+  {p.marketplaceBlocked ? (
+  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400" title="Trendyol gönderim: eksik zorunlu alan — Kategori → Pazaryeri Zorunlu Alanlar kuyruğundan çözün">Trendyol: Eksik Alan</span>
+  ) : p.status === 'READY' ? (
+  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">Gönderilebilir</span>
+  ) : (
+  <span className="text-xs text-current">-</span>
+  )}
+  </TD>
+  </tr>
  ))
  )}
  </tbody>
@@ -453,7 +464,7 @@ export default function ProductPool() {
  {pagination.totalPages > 1 && (
  <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-200 dark:border-slate-800/60 bg-white dark:bg-slate-800/40">
  <span className="text-xs text-current">
- Sayfa {pagination.page}/{pagination.totalPages} · {pagination.total.toLocaleString('tr-TR')} ürün
+ Sayfa {pagination.page}/{pagination.totalPages} · {(pagination.total ?? 0).toLocaleString('tr-TR')} ürün
  </span>
  <nav className="flex gap-1">
  <button onClick={() => setPagination(prev => ({ ...prev, page: 1 }))} disabled={pagination.page <= 1}

@@ -1,22 +1,23 @@
 ﻿=========================================
 DG-STOK POST-REBOOT VERIFICATION
-Timestamp: 2026-09-13 09:38:33
+Timestamp: 2026-09-21 09:51:12
 =========================================
 
-PM2 daemon running : PASS (PID: 10248)
+PM2 daemon running : PASS (PID: 15580)
 dg-stok ONLINE in PM2 : PASS 
-  Ôöé 0  Ôöé dg-stok    Ôöé default     Ôöé 1.0.0   Ôöé fork    Ôöé 7592     Ôöé 61s    Ôöé 0    Ôöé online    Ôöé 15.7%    Ôöé 57.4mb   Ôöé Dogan    Ôöé disabled Ôöé
+  Ôöé 0  Ôöé dg-stok    Ôöé default     Ôöé 1.0.0   Ôöé fork    Ôöé 18368    Ôöé 10s    Ôöé 0    Ôöé online    Ôöé 7.8%     Ôöé 73.1mb   Ôöé Dogan    Ôöé disabled Ôöé
 Backend :4000 LISTEN : FAIL 
-  PID: 7592
+  PID: 18368
 Vite :5175 LISTEN : FAIL 
 Task Scheduler: DG-STOK Watchdog exists : PASS 
-  State: Ready
+  State: Running
   StartWhenAvailable=True : PASS 
   DisallowStartIfOnBatteries=False : PASS 
   StopIfGoingOnBatteries=False : PASS 
   ExecutionTimeLimit=PT0S : PASS 
-Watchdog PS1 process running : FAIL 
-Startup: DG-STOK-Services.lnk exists : PASS 
+Watchdog PS1 process running : PASS 
+  PIDs: 13464
+Startup: DG-STOK-Services.lnk exists : FAIL 
 Autostart: dgstok-autostart.vbs exists : PASS 
 PM2 dump: dg-stok saved : PASS 
 Backend :4000 yanit : PASS (HTTP 200)

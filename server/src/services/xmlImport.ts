@@ -5,7 +5,6 @@ import {reconcileProductGates, queueReconcileProductGates, queueReconcileProduct
 import { reconcileProductMarketplaceState, reconcileProductMarketplaceStateBulk } from './marketplaceReconcile.ts';
 import { isMarketplaceOperational } from './marketplaceTruth.ts';
 import { invalidateTitleIndex } from './titleSearchIndex.ts';
-import { detectVariantAttributes } from './readiness.ts';
 
 export type XmlImportResult = {
   ok: boolean;
@@ -54,6 +53,7 @@ export type XmlImportProduct = {
   // Gerçek varyant yapısı: yalnızca XML parent/group kayıtlarından tespit edilir.
   parentId: string | null;
   groupId: string | null;
+  purchasePrice: number | null;
 };
 
 function parseXmlDocument(xml: string) {
@@ -229,7 +229,38 @@ function extractTagValue(content: string, tagName: string): string | null {
   return normalizeText(value);
 }
 
-export function parseXmlImportPayload(xml: string): XmlImportProduct[] {
+const DEFAULT_PURCHASE_PRICE_FIELDS = [
+  'purchasePrice',
+  'purchase_price',
+  'wholesalePrice',
+  'wholesale_price',
+  'costPrice',
+  'cost_price',
+  'supplierPrice',
+  'supplier_price',
+  'tedarikciFiyati',
+  'alisfiyati',
+  'alisfiyat',
+  'alisFiyati',
+  'alisFiyat',
+  'PurchasePrice',
+  'WholesalePrice',
+  'CostPrice',
+];
+
+function extractPurchasePrice(content: string, purchasePriceField?: string | null): number | null {
+  const fieldsToTry = purchasePriceField ? [purchasePriceField, ...DEFAULT_PURCHASE_PRICE_FIELDS] : DEFAULT_PURCHASE_PRICE_FIELDS;
+  for (const field of fieldsToTry) {
+    const value = extractTagValue(content, field);
+    if (value != null) {
+      const parsed = Number.parseFloat(value);
+      if (!Number.isNaN(parsed) && parsed >= 0) return parsed;
+    }
+  }
+  return null;
+}
+
+export function parseXmlImportPayload(xml: string, purchasePriceField?: string | null): XmlImportProduct[] {
   const parsed = parseXmlDocument(xml);
   if (!parsed.ok) {
     throw new Error(parsed.error);
@@ -288,6 +319,9 @@ export function parseXmlImportPayload(xml: string): XmlImportProduct[] {
       const link = extractTagValue(content, 'link');
       const unit = extractTagValue(content, 'unit');
       const activeValue = extractTagValue(content, 'active');
+
+      // Purchase price extraction — configurable field + common defaults
+      const purchasePrice = extractPurchasePrice(content, purchasePriceField);
 
       const images: string[] = [];
 
@@ -351,6 +385,7 @@ export function parseXmlImportPayload(xml: string): XmlImportProduct[] {
         active: activeValue === '1',
         parentId: parentId || null,
         groupId: groupId || null,
+        purchasePrice,
       } satisfies XmlImportProduct;
     })
     .filter((item): item is XmlImportProduct => item != null);
@@ -453,7 +488,15 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
     return { ok: false, error: { code: 'CANCELLED', message: 'Senkronizasyon iptal edildi' }, importedCount: 0, updatedCount: 0, items: [] } satisfies XmlImportResult;
   }
 
-  const items = parseXmlImportPayload(xml);
+  // Fetch sourceRecord early to get purchasePriceField for XML parsing
+  let sourceRecord = null as Awaited<ReturnType<typeof prisma.xmlSource.findFirst>> | null;
+  if (options?.sourceId) {
+    sourceRecord = await prisma.xmlSource.findUnique({ where: { id: options.sourceId } });
+  } else if (options?.sourceName) {
+    sourceRecord = await prisma.xmlSource.findFirst({ where: { name: options.sourceName } });
+  }
+
+  const items = parseXmlImportPayload(xml, sourceRecord?.purchasePriceField ?? null);
 
   if (items.length === 0) {
     return { ok: true, importedCount: 0, updatedCount: 0, skippedCount: 0, items: [] } satisfies XmlImportResult;
@@ -462,13 +505,6 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
   const { filtered: filteredItems, filteredCount } = applyImportFilter(items, options?.filter);
   if (filteredCount > 0) {
     console.log(`[Import] Filter applied: ${filteredCount} items filtered out, ${filteredItems.length} remaining`);
-  }
-
-  let sourceRecord = null as Awaited<ReturnType<typeof prisma.xmlSource.findFirst>> | null;
-  if (options?.sourceId) {
-    sourceRecord = await prisma.xmlSource.findUnique({ where: { id: options.sourceId } });
-  } else if (options?.sourceName) {
-    sourceRecord = await prisma.xmlSource.findFirst({ where: { name: options.sourceName } });
   }
 
   // VERİ KÖPRÜSÜ: kaynak garantile — ürünler asla xmlSourceId=null kalmaz
@@ -612,8 +648,6 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
           const brandId = brandName ? brandMap.get(brandName) || defaultBrand.id : defaultBrand.id;
           const groupKey = item.parentId || item.groupId;
           const hasVariants = !!groupKey && (groupCounts.get(groupKey) || 0) > 1;
-          const titleHasVariant = detectVariantAttributes(item.title || '').length > 0;
-          const shouldWaitForVariant = hasVariants || titleHasVariant;
 
           return {
             xmlKey: item.xmlKey,
@@ -622,6 +656,10 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
             barcode: item.barcode,
             stock: Number.isFinite(item.stock) ? item.stock : 0,
             minStock: Number.isFinite(item.minStock) ? item.minStock : 0,
+            // KANONİK MALİYET: XML PriceInclusiveVat = B2B toptan ALIŞ (KDV dahil).
+            // purchasePrice canonical maliyet alanıdır. salePrice yalnız geri-uyumluluk aynasıdır
+            // (maliyet olarak KULLANILMAZ; tüketiciler purchasePrice ?? salePrice okur).
+            purchasePrice: item.purchasePrice ?? item.price,
             salePrice: item.price,
             vatRate: item.tax,
             description: item.description,
@@ -692,8 +730,6 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
             const brandId = brandName ? brandMap.get(brandName) || defaultBrand.id : defaultBrand.id;
             const groupKey = item.parentId || item.groupId;
             const hasVariants = !!groupKey && (groupCounts.get(groupKey) || 0) > 1;
-            const titleHasVariant = detectVariantAttributes(item.title || '').length > 0;
-            const shouldWaitForVariant = hasVariants || titleHasVariant;
             const hasProtectedMatch = existing.categoryMatch && existing.matchedBy && protectedMatchedBys.includes(existing.matchedBy);
 
             await prisma.product.update({
@@ -704,6 +740,8 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
                 barcode: item.barcode,
                 stock: Number.isFinite(item.stock) ? item.stock : 0,
                 minStock: Number.isFinite(item.minStock) ? item.minStock : 0,
+                // KANONİK MALİYET (bkz. create yolu).
+                purchasePrice: item.purchasePrice ?? item.price,
                 salePrice: item.price,
                 vatRate: item.tax,
                 description: item.description,
@@ -725,7 +763,7 @@ export async function importXmlProducts(xml: string, options?: { actorUserId?: s
                 supplierCategory,
                 brandMatch: true,
                 variantMatch: hasProtectedMatch ? existing.variantMatch : false,
-                variantStatus: hasProtectedMatch ? existing.variantStatus : (shouldWaitForVariant ? 'WAITING_AI' : 'NOT_REQUIRED'),
+                variantStatus: hasProtectedMatch ? existing.variantStatus : (hasVariants ? 'WAITING_AI' : 'NOT_REQUIRED'),
                 templateMatch: true,
                 status: 'XML',
                 xmlSourceId: sourceId,

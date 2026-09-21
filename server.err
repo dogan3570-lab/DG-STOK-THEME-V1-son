@@ -1,0 +1,21 @@
+[products] send-to-prep error: PrismaClientKnownRequestError: 
+Invalid `prisma.product.findMany()` invocation in
+C:\PROJE 1\DG-STOK-THEME-V1\server\src\routes\products.ts:167:48
+
+  164 if (!Array.isArray(productIds) || productIds.length === 0) {
+  165   return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'En az bir ürün ID\'si gerekli' } });
+  166 }
+→ 167 const validProducts = await prisma.product.findMany(
+Query parameter limit exceeded error: Parameter limits for this database provider require this query to be split into multiple queries, but the negation filters used prevent the query from being split. Please reduce the used values in the query..
+    at $n.handleRequestError (C:\PROJE 1\DG-STOK-THEME-V1\server\node_modules\@prisma\client\runtime\library.js:121:7315)
+    at $n.handleAndLogRequestError (C:\PROJE 1\DG-STOK-THEME-V1\server\node_modules\@prisma\client\runtime\library.js:121:6623)
+    at $n.request (C:\PROJE 1\DG-STOK-THEME-V1\server\node_modules\@prisma\client\runtime\library.js:121:6307)
+    at async l (C:\PROJE 1\DG-STOK-THEME-V1\server\node_modules\@prisma\client\runtime\library.js:130:9633)
+    at async <anonymous> (C:\PROJE 1\DG-STOK-THEME-V1\server\src\routes\products.ts:167:27) {
+  code: 'P2029',
+  clientVersion: '5.22.0',
+  meta: {
+    modelName: 'Product',
+    message: 'Parameter limits for this database provider require this query to be split into multiple queries, but the negation filters used prevent the query from being split. Please reduce the used values in the query.'
+  }
+}
